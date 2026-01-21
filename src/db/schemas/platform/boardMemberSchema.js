@@ -1,0 +1,126 @@
+/**
+ * Board Member Schema (Tenant DB)
+ * 
+ * Responsible persons (directors, board members, trustees, etc.)
+ */
+
+import mongoose from 'mongoose';
+import mongooseEncryptPlugin from '../../../utils/mongooseEncryptPlugin.js';
+
+const boardMemberSchema = new mongoose.Schema({
+  org_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Organization',
+    required: true,
+    index: true
+  },
+  title: {
+    type: String,
+    enum: ['Mr', 'Mrs', 'Ms', 'Miss', 'Dr', 'Prof', 'Other'],
+    trim: true
+  },
+  given_names: {
+    type: String,
+    required: true,
+    trim: true,
+    encrypted: true
+  },
+  family_name: {
+    type: String,
+    required: true,
+    trim: true,
+    encrypted: true
+  },
+  date_of_birth: {
+    type: Date,
+    required: true,
+    encrypted: true
+  },
+  position: {
+    type: String,
+    required: true,
+    enum: [
+      'Chair',
+      'Deputy Chair',
+      'Treasurer',
+      'Secretary',
+      'Director',
+      'Trustee',
+      'Committee Member',
+      'Public Officer',
+      'Other'
+    ]
+  },
+  custom_position_title: {
+    type: String,
+    trim: true
+  },
+  appointment_date: {
+    type: Date,
+    required: true
+  },
+  term_end_date: {
+    type: Date
+  },
+  email: {
+    type: String,
+    required: true,
+    encrypted: true,
+    searchable: true
+  },
+  phone: {
+    type: String,
+    encrypted: true
+  },
+  residential_address: {
+    line1: {
+      type: String,
+      required: true,
+      encrypted: true
+    },
+    suburb: {
+      type: String,
+      required: true,
+      encrypted: true
+    },
+    state: {
+      type: String,
+      required: true,
+      enum: ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT']
+    },
+    postcode: {
+      type: String,
+      required: true,
+      encrypted: true
+    }
+  },
+  residential_address_changed_date: {
+    type: Date
+  },
+  // System user account link (if they have platform access)
+  user_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    sparse: true
+  },
+  is_active: {
+    type: Boolean,
+    default: true,
+    index: true
+  },
+  status: {
+    type: String,
+    enum: ['active', 'resigned', 'removed'],
+    default: 'active'
+  }
+}, {
+  timestamps: true,
+  collection: 'board_members'
+});
+
+boardMemberSchema.plugin(mongooseEncryptPlugin);
+
+boardMemberSchema.index({ org_id: 1, is_active: 1 });
+boardMemberSchema.index({ email: 1 });
+
+export default boardMemberSchema;

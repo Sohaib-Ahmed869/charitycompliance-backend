@@ -13,7 +13,9 @@
  */
 
 import { encrypt, decrypt, createBlindIndex, isEncrypted } from './encryption.js';
+import { logError } from './logger.js';
 import crypto from 'crypto';
+import config from '../config/index.js';
 
 /**
  * Mongoose plugin for transparent field encryption
@@ -53,7 +55,15 @@ export default function mongooseEncryptPlugin(schema) {
           // If field is searchable, create blind index hash
           if (fieldOptions.searchable) {
             const hashFieldName = `${path}_hash`;
-            this[hashFieldName] = createBlindIndex(String(value), orgKey);
+            // Email hash must use master key for cross-tenant search
+            // Other searchable fields use orgKey for tenant-specific isolation
+            const hashKey = path === 'email' ? config.encryption.masterKeyHex : orgKey;
+            
+            if (!hashKey || hashKey.length !== 64) {
+              return next(new Error(`FATAL: Invalid hash key for field ${path}. Key length: ${hashKey?.length || 0}`));
+            }
+            
+            this[hashFieldName] = createBlindIndex(String(value), hashKey);
           }
         }
       });
@@ -65,7 +75,7 @@ export default function mongooseEncryptPlugin(schema) {
   });
 
   // POST-FIND HOOK: Decrypt fields after fetching
-  schema.post(['find', 'findOne', 'findOneAndUpdate', 'findOneAndDelete'], function(docs) {
+  schema.post(['find', 'findOne', 'findById', 'findOneAndUpdate', 'findOneAndDelete'], function(docs) {
     try {
       // Handle single document or array of documents
       const docList = Array.isArray(docs) ? docs : (docs ? [docs] : []);
@@ -81,24 +91,39 @@ export default function mongooseEncryptPlugin(schema) {
       docList.forEach(doc => {
         if (!doc) return;
 
-        // Iterate through all schema paths
-        schema.eachPath((path, schemaType) => {
-          const fieldOptions = schemaType.options;
-          
-          // Check if field is marked for encryption and has encrypted value
-          if (fieldOptions.encrypted && doc[path] && isEncrypted(doc[path])) {
-            try {
-              doc[path] = decrypt(doc[path], orgKey);
-            } catch (error) {
-              console.error(`Failed to decrypt field ${path}:`, error.message);
-              // Keep encrypted value on error (don't break the app)
+        // Ensure document is a mongoose document (not plain object)
+        if (doc.constructor && doc.constructor.name === 'model') {
+          // Mongoose document - decrypt in place
+          schema.eachPath((path, schemaType) => {
+            const fieldOptions = schemaType.options;
+            
+            if (fieldOptions.encrypted && doc[path] && isEncrypted(doc[path])) {
+              try {
+                doc[path] = decrypt(doc[path], orgKey);
+                // Mark as modified to ensure changes persist
+                doc.markModified(path);
+              } catch (error) {
+                logError('Failed to decrypt field', error, { field: path });
+              }
             }
-          }
-        });
+          });
+        } else {
+          // Plain object - decrypt directly
+          schema.eachPath((path, schemaType) => {
+            const fieldOptions = schemaType.options;
+            
+            if (fieldOptions.encrypted && doc[path] && isEncrypted(doc[path])) {
+              try {
+                doc[path] = decrypt(doc[path], orgKey);
+              } catch (error) {
+                logError('Failed to decrypt field', error, { field: path });
+              }
+            }
+          });
+        }
       });
     } catch (error) {
-      console.error('Error in encryption plugin post-find hook:', error);
-      // Don't throw - allow query to complete
+      logError('Error in encryption plugin post-find hook', error);
     }
   });
 
@@ -119,12 +144,12 @@ export default function mongooseEncryptPlugin(schema) {
           try {
             this[path] = decrypt(this[path], orgKey);
           } catch (error) {
-            console.error(`Failed to decrypt field ${path} on init:`, error.message);
+            logError('Failed to decrypt field on init', error, { field: path });
           }
         }
       });
     } catch (error) {
-      console.error('Error in encryption plugin post-init hook:', error);
+      logError('Error in encryption plugin post-init hook', error);
     }
   });
 }

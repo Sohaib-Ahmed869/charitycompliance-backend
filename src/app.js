@@ -10,6 +10,7 @@ import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { connectRouterDB } from './config/database.js';
+import { logDebug } from './utils/logger.js';
 
 dotenv.config();
 
@@ -44,10 +45,10 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
-// Request Logging (Development)
+// Request Logging (Development only)
 if (process.env.NODE_ENV === 'development') {
   app.use((req, res, next) => {
-    console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+    logDebug('Request', { method: req.method, path: req.path });
     next();
   });
 }
@@ -66,12 +67,19 @@ app.get('/health', (req, res) => {
 // ROUTES
 // ============================================
 
-// API Routes will be added here
-// Example:
-// import authRoutes from './routes/platform/authRoutes.js';
-// app.use('/api/v1/auth', authRoutes);
+// Authentication routes (no auth required)
+import authRoutes from './routes/platform/authRoutes.js';
+app.use('/api/v1/auth', authRoutes);
 
-// Placeholder route
+// Platform routes (auth required)
+import organizationRoutes from './routes/platform/organizationRoutes.js';
+import roleRoutes from './routes/platform/roleRoutes.js';
+import onboardingRoutes from './routes/platform/onboardingRoutes.js';
+app.use('/api/v1/platform/organization', organizationRoutes);
+app.use('/api/v1/platform/roles', roleRoutes);
+app.use('/api/v1/platform/onboarding', onboardingRoutes);
+
+// API info route
 app.get('/api/v1', (req, res) => {
   res.json({
     success: true,
@@ -100,11 +108,8 @@ app.use(errorHandler);
  */
 export const initializeApp = async () => {
   try {
-    // Connect to Router Database
     await connectRouterDB();
-    console.log('✅ Application initialized successfully');
   } catch (error) {
-    console.error('❌ Failed to initialize application:', error);
     throw error;
   }
 };

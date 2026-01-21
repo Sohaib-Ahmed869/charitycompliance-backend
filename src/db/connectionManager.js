@@ -13,6 +13,7 @@
 
 import mongoose from 'mongoose';
 import { lookupTenant } from './router.js';
+import { logError, logWarn, logDebug } from '../utils/logger.js';
 
 // Configuration
 const IDLE_TIMEOUT = parseInt(process.env.CONNECTION_IDLE_TIMEOUT_MS) || 10 * 60 * 1000; // 10 minutes
@@ -53,9 +54,8 @@ export const getTenantConnection = async (orgId) => {
     let podConnection = connectionCache.get(clusterEndpoint);
 
     if (!podConnection || podConnection.readyState !== 1) {
-      console.log(`🔌 Opening NEW connection to Pod: ${clusterEndpoint}`);
+      logDebug('Opening new Pod connection', { clusterEndpoint: clusterEndpoint.replace(/\/\/.*@/, '//***@'), orgId });
       
-      // Create new connection to Pod cluster
       podConnection = await mongoose.createConnection(clusterEndpoint, {
         maxPoolSize: MAX_POOL_SIZE,
         minPoolSize: MIN_POOL_SIZE,
@@ -63,16 +63,20 @@ export const getTenantConnection = async (orgId) => {
         socketTimeoutMS: 45000,
       }).asPromise();
 
-      // Store connection in cache
       connectionCache.set(clusterEndpoint, podConnection);
 
-      // Handle connection events
       podConnection.on('error', (err) => {
-        console.error(`❌ Pod connection error (${clusterEndpoint}):`, err);
+        logError('Pod connection error', err, { 
+          clusterEndpoint: clusterEndpoint.replace(/\/\/.*@/, '//***@'),
+          orgId 
+        });
       });
 
       podConnection.on('disconnected', () => {
-        console.warn(`⚠️ Pod disconnected: ${clusterEndpoint}`);
+        logWarn('Pod disconnected', { 
+          clusterEndpoint: clusterEndpoint.replace(/\/\/.*@/, '//***@'),
+          orgId 
+        });
         connectionCache.delete(clusterEndpoint);
         if (idleTimers.has(clusterEndpoint)) {
           clearTimeout(idleTimers.get(clusterEndpoint));
@@ -86,13 +90,18 @@ export const getTenantConnection = async (orgId) => {
       clearTimeout(idleTimers.get(clusterEndpoint));
     }
 
-    // Set new idle timer
     idleTimers.set(clusterEndpoint, setTimeout(() => {
-      console.log(`💤 Closing idle Pod connection: ${clusterEndpoint}`);
+      logDebug('Closing idle Pod connection', { 
+        clusterEndpoint: clusterEndpoint.replace(/\/\/.*@/, '//***@'),
+        orgId 
+      });
       const conn = connectionCache.get(clusterEndpoint);
       if (conn) {
         conn.close().catch(err => {
-          console.error(`Error closing idle connection:`, err);
+          logError('Error closing idle connection', err, { 
+            clusterEndpoint: clusterEndpoint.replace(/\/\/.*@/, '//***@'),
+            orgId 
+          });
         });
         connectionCache.delete(clusterEndpoint);
       }

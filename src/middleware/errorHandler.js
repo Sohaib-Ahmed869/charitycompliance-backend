@@ -5,14 +5,17 @@
  * Catches all errors and returns consistent error responses.
  */
 
+import { logError } from '../utils/logger.js';
+
 /**
  * Custom Error Class
  */
 export class AppError extends Error {
-  constructor(message, statusCode = 500, code = null) {
+  constructor(message, statusCode = 500, code = null, details = null) {
     super(message);
     this.statusCode = statusCode;
     this.code = code;
+    this.details = details;
     this.isOperational = true;
     Error.captureStackTrace(this, this.constructor);
   }
@@ -27,16 +30,16 @@ export const errorHandler = (err, req, res, next) => {
   error.message = err.message;
   error.statusCode = err.statusCode || 500;
 
-  // Log error
-  console.error('Error:', {
-    message: error.message,
+  const errorContext = {
     statusCode: error.statusCode,
-    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined,
     path: req.path,
     method: req.method,
     orgId: req.orgId,
-    userId: req.user?.userId
-  });
+    userId: req.user?.userId,
+    code: error.code
+  };
+
+  logError('Request error', err, errorContext);
 
   // Mongoose bad ObjectId
   if (err.name === 'CastError') {
@@ -46,9 +49,30 @@ export const errorHandler = (err, req, res, next) => {
 
   // Mongoose duplicate key
   if (err.code === 11000) {
-    const field = Object.keys(err.keyPattern)[0];
-    const message = `${field} already exists`;
-    error = new AppError(message, 400, 'DUPLICATE_KEY');
+    const keyPattern = err.keyPattern || {};
+    const keyValue = err.keyValue || {};
+    
+    // Handle department duplicate errors specifically
+    if (keyPattern.org_id && keyPattern.code) {
+      const code = keyValue.code || 'this code';
+      const message = `A department with code "${code}" already exists. Please use a different code.`;
+      error = new AppError(message, 400, 'DUPLICATE_DEPARTMENT_CODE');
+    } else if (keyPattern.org_id && keyPattern.name) {
+      const name = keyValue.name || 'this name';
+      const message = `A department with name "${name}" already exists. Please use a different name.`;
+      error = new AppError(message, 400, 'DUPLICATE_DEPARTMENT_NAME');
+    } else {
+      // Generic duplicate key error
+      const field = Object.keys(keyPattern)[0] || 'field';
+      const message = `${field} already exists`;
+      error = new AppError(message, 400, 'DUPLICATE_KEY');
+    }
+    
+    // Add details about which field caused the duplicate
+    error.details = {
+      duplicateFields: Object.keys(keyPattern),
+      duplicateValues: keyValue
+    };
   }
 
   // Mongoose validation error
@@ -73,12 +97,23 @@ export const errorHandler = (err, req, res, next) => {
   }
 
   // Send error response
-  res.status(error.statusCode || 500).json({
+  const response = {
     success: false,
-    error: error.message || 'Internal server error',
-    code: error.code || 'INTERNAL_ERROR',
-    ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
-  });
+    error: {
+      message: error.message || 'Internal server error',
+      code: error.code || 'INTERNAL_ERROR'
+    }
+  };
+
+  if (error.details) {
+    response.error.details = error.details;
+  }
+
+  if (process.env.NODE_ENV === 'development' && err.stack) {
+    response.error.stack = err.stack;
+  }
+
+  res.status(error.statusCode || 500).json(response);
 };
 
 /**

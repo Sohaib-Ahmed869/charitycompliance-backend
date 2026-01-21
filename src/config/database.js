@@ -12,6 +12,7 @@
 
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
+import { logError, logInfo, logWarn } from '../utils/logger.js';
 
 dotenv.config();
 
@@ -41,20 +42,19 @@ export const connectRouterDB = async () => {
       socketTimeoutMS: 45000,
     }).asPromise();
 
-    console.log('✅ Router Database connected successfully');
+    logInfo('Router Database connected', { uri: ROUTER_DB_URI.replace(/\/\/.*@/, '//***@') });
     
-    // Handle connection events
     routerConnection.on('error', (err) => {
-      console.error('❌ Router Database connection error:', err);
+      logError('Router Database connection error', err, { uri: ROUTER_DB_URI.replace(/\/\/.*@/, '//***@') });
     });
 
     routerConnection.on('disconnected', () => {
-      console.warn('⚠️ Router Database disconnected');
+      logWarn('Router Database disconnected');
     });
 
     return routerConnection;
   } catch (error) {
-    console.error('❌ Failed to connect to Router Database:', error);
+    logError('Failed to connect to Router Database', error, { uri: ROUTER_DB_URI.replace(/\/\/.*@/, '//***@') });
     throw error;
   }
 };
@@ -77,7 +77,6 @@ export const closeRouterDB = async () => {
   if (routerConnection) {
     await routerConnection.close();
     routerConnection = null;
-    console.log('Router Database connection closed');
   }
 };
 
