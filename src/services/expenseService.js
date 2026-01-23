@@ -1,0 +1,194 @@
+/**
+ * Expense Service
+ * 
+ * Business logic for expense/invoice management
+ */
+
+import { getTenantConnection } from '../db/connectionManager.js';
+import { ExpenseRepository } from '../repositories/expenseRepository.js';
+import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
+import { ApprovalWorkflowService } from './approvalWorkflowService.js';
+import { AppError } from '../middleware/errorHandler.js';
+import { logError, logInfo } from '../utils/logger.js';
+
+export class ExpenseService {
+  constructor(orgId) {
+    this.orgId = orgId;
+  }
+
+  async getTenantDb() {
+    return await getTenantConnection(this.orgId);
+  }
+
+  /**
+   * Create a new expense
+   */
+  async createExpense(expenseData, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    const expenseRepo = new ExpenseRepository(tenantDb);
+
+    const expense = await expenseRepo.create({
+      org_id: this.orgId,
+      submitted_by: submittedBy,
+      amount: expenseData.amount,
+      category: expenseData.category,
+      description: expenseData.description,
+      invoice_file: expenseData.invoice_file,
+      invoice_file_name: expenseData.invoice_file_name,
+      invoice_date: expenseData.invoice_date,
+      vendor_name: expenseData.vendor_name,
+      vendor_email: expenseData.vendor_email,
+      status: expenseData.status || 'draft',
+      metadata: expenseData.metadata || {}
+    });
+
+    logInfo('Expense created', { expenseId: expense._id, submittedBy });
+
+    // If status is not draft, create approval request
+    if (expense.status !== 'draft') {
+      const workflowService = new ApprovalWorkflowService(this.orgId);
+      await workflowService.createExpenseApprovalRequest(expense._id, submittedBy);
+    }
+
+    return expense;
+  }
+
+  /**
+   * Submit expense for approval
+   */
+  async submitExpense(expenseId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    const expenseRepo = new ExpenseRepository(tenantDb);
+
+    const expense = await expenseRepo.findById(expenseId);
+    if (!expense) {
+      throw new AppError('Expense not found', 404, 'EXPENSE_NOT_FOUND');
+    }
+
+    if (expense.submitted_by.toString() !== submittedBy.toString()) {
+      throw new AppError('You can only submit your own expenses', 403, 'UNAUTHORIZED');
+    }
+
+    if (expense.status !== 'draft') {
+      throw new AppError(`Expense is already ${expense.status}`, 400, 'INVALID_STATUS');
+    }
+
+    // Update status to pending
+    await expenseRepo.updateStatus(expenseId, 'pending');
+
+    // Create approval request
+    const workflowService = new ApprovalWorkflowService(this.orgId);
+    const approvalRequest = await workflowService.createExpenseApprovalRequest(expenseId, submittedBy);
+
+    logInfo('Expense submitted for approval', { expenseId, approvalRequestId: approvalRequest._id });
+
+    return await expenseRepo.findById(expenseId);
+  }
+
+  /**
+   * Get expenses with filters
+   */
+  async getExpenses(filters = {}) {
+    const tenantDb = await this.getTenantDb();
+    const expenseRepo = new ExpenseRepository(tenantDb);
+
+    return await expenseRepo.findByOrgId(this.orgId, filters);
+  }
+
+  /**
+   * Get expense by ID
+   */
+  async getExpenseById(expenseId) {
+    const tenantDb = await this.getTenantDb();
+    const expenseRepo = new ExpenseRepository(tenantDb);
+
+    const expense = await expenseRepo.findById(expenseId);
+    if (!expense) {
+      throw new AppError('Expense not found', 404, 'EXPENSE_NOT_FOUND');
+    }
+
+    return expense;
+  }
+
+  /**
+   * Update expense
+   */
+  async updateExpense(expenseId, updateData, userId) {
+    const tenantDb = await this.getTenantDb();
+    const expenseRepo = new ExpenseRepository(tenantDb);
+
+    const expense = await expenseRepo.findById(expenseId);
+    if (!expense) {
+      throw new AppError('Expense not found', 404, 'EXPENSE_NOT_FOUND');
+    }
+
+    // Only allow updates if expense is draft or if user is the submitter
+    if (expense.status !== 'draft' && expense.submitted_by.toString() !== userId.toString()) {
+      throw new AppError('You can only update draft expenses or your own expenses', 403, 'UNAUTHORIZED');
+    }
+
+    // Don't allow status changes through update
+    delete updateData.status;
+    delete updateData.approval_request_id;
+    delete updateData.approval_matrix_id;
+
+    return await expenseRepo.update(expenseId, updateData);
+  }
+
+  /**
+   * Delete expense
+   */
+  async deleteExpense(expenseId, userId) {
+    const tenantDb = await this.getTenantDb();
+    const expenseRepo = new ExpenseRepository(tenantDb);
+
+    const expense = await expenseRepo.findById(expenseId);
+    if (!expense) {
+      throw new AppError('Expense not found', 404, 'EXPENSE_NOT_FOUND');
+    }
+
+    // Only allow deletion if expense is draft or if user is the submitter
+    if (expense.status !== 'draft' && expense.submitted_by.toString() !== userId.toString()) {
+      throw new AppError('You can only delete draft expenses or your own expenses', 403, 'UNAUTHORIZED');
+    }
+
+    await expenseRepo.delete(expenseId);
+    logInfo('Expense deleted', { expenseId, userId });
+  }
+
+  /**
+   * Cancel expense
+   */
+  async cancelExpense(expenseId, userId) {
+    const tenantDb = await this.getTenantDb();
+    const expenseRepo = new ExpenseRepository(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const expense = await expenseRepo.findById(expenseId);
+    if (!expense) {
+      throw new AppError('Expense not found', 404, 'EXPENSE_NOT_FOUND');
+    }
+
+    if (expense.submitted_by.toString() !== userId.toString()) {
+      throw new AppError('You can only cancel your own expenses', 403, 'UNAUTHORIZED');
+    }
+
+    if (expense.status === 'approved' || expense.status === 'paid') {
+      throw new AppError('Cannot cancel approved or paid expenses', 400, 'INVALID_STATUS');
+    }
+
+    // Cancel approval request if exists
+    if (expense.approval_request_id) {
+      await approvalRequestRepo.updateStatus(expense.approval_request_id, 'cancelled', {
+        cancelled_by: userId,
+        cancelled_at: new Date()
+      });
+    }
+
+    // Update expense status
+    await expenseRepo.updateStatus(expenseId, 'cancelled');
+
+    logInfo('Expense cancelled', { expenseId, userId });
+    return await expenseRepo.findById(expenseId);
+  }
+}

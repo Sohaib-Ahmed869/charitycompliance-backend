@@ -75,9 +75,17 @@ app.use('/api/v1/auth', authRoutes);
 import organizationRoutes from './routes/platform/organizationRoutes.js';
 import roleRoutes from './routes/platform/roleRoutes.js';
 import onboardingRoutes from './routes/platform/onboardingRoutes.js';
+import expenseRoutes from './routes/platform/expenseRoutes.js';
+import approvalRoutes from './routes/platform/approvalRoutes.js';
+import boardMemberRoutes from './routes/platform/boardMemberRoutes.js';
+import documentRoutes from './routes/platform/documentRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
+app.use('/api/v1/platform/expenses', expenseRoutes);
+app.use('/api/v1/platform/approvals', approvalRoutes);
+app.use('/api/v1/platform/board-members', boardMemberRoutes);
+app.use('/api/v1/platform/documents', documentRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

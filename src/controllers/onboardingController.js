@@ -75,10 +75,45 @@ export const completeOnboarding = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const onboardingService = new OnboardingService(orgId);
   
-  await onboardingService.updateStep(16, req.body);
+  // Step 5 (Review) already handles marking initial onboarding as complete
+  // This endpoint can be used as an alternative way to complete onboarding
+  await onboardingService.updateStep(5, req.body);
   
   res.json({
     success: true,
     message: 'Onboarding completed successfully'
+  });
+});
+
+export const updateProfileCompletionStep = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { stepKey, completed } = req.body;
+  
+  // Validate stepKey
+  const validSteps = [
+    'documents_complete',
+    'responsible_people_complete',
+    'activities_complete',
+    'finances_complete',
+    'governance_complete',
+    'declaration_complete'
+  ];
+  
+  if (!validSteps.includes(stepKey)) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'INVALID_STEP',
+        message: `Invalid step key. Must be one of: ${validSteps.join(', ')}`
+      }
+    });
+  }
+  
+  const onboardingService = new OnboardingService(orgId);
+  const result = await onboardingService.updateProfileCompletionStep(stepKey, completed);
+  
+  res.json({
+    success: true,
+    data: result
   });
 });

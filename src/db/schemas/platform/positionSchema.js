@@ -26,7 +26,7 @@ const positionSchema = new mongoose.Schema({
   department_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Department',
-    required: true
+    required: false // Can be set later
   },
   description: {
     type: String
@@ -53,6 +53,22 @@ const positionSchema = new mongoose.Schema({
     default: false
   },
   can_approve_expenses: {
+    type: Boolean,
+    default: false
+  },
+  can_approve_risks: {
+    type: Boolean,
+    default: false
+  },
+  can_approve_grants: {
+    type: Boolean,
+    default: false
+  },
+  can_approve_policies: {
+    type: Boolean,
+    default: false
+  },
+  can_approve_hr: {
     type: Boolean,
     default: false
   },

@@ -119,7 +119,7 @@ const onboardingProgressSchema = new mongoose.Schema({
     type: Number,
     default: 1,
     min: 1,
-    max: 4  // Changed to 4 for initial onboarding
+    max: 5  // Initial onboarding: 4 steps + 1 review step = 5 total
   },
   started_at: {
     type: Date,

@@ -140,4 +140,20 @@ export class OnboardingProgressRepository {
       { new: true }
     );
   }
+
+  async updateProfileStep(orgId, stepKey, completed) {
+    const update = {
+      [stepKey]: completed
+    };
+
+    const progress = await this.OnboardingProgress.findOneAndUpdate(
+      { org_id: orgId },
+      { $set: update },
+      { new: true, upsert: true }
+    );
+
+    // Recalculate completion percentages
+    await this.recalculateProgress(orgId);
+    return progress;
+  }
 }

@@ -46,4 +46,19 @@ router.put(
 // Complete onboarding
 router.post('/complete', onboardingController.completeOnboarding);
 
+// Update profile completion step (for dashboard)
+router.put(
+  '/profile-step',
+  [
+    body('stepKey')
+      .isIn(['documents_complete', 'responsible_people_complete', 'activities_complete', 'finances_complete', 'governance_complete', 'declaration_complete'])
+      .withMessage('Invalid step key'),
+    body('completed')
+      .isBoolean()
+      .withMessage('Completed must be a boolean')
+  ],
+  validate,
+  onboardingController.updateProfileCompletionStep
+);
+
 export default router;
