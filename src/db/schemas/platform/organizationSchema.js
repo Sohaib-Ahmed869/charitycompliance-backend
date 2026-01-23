@@ -183,6 +183,11 @@ const organizationSchema = new mongoose.Schema({
       onboarding_declared_by: null
     }
   },
+  // Additional metadata for onboarding data and custom fields
+  metadata: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
+  },
   status: {
     type: String,
     enum: ['pending_setup', 'active', 'suspended', 'inactive'],

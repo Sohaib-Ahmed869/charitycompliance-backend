@@ -18,6 +18,12 @@ export class DepartmentRepository {
       .sort({ name: 1 });
   }
 
+  async findAllByOrgId(orgId) {
+    // Returns ALL departments including inactive ones
+    return await this.Department.find({ org_id: orgId })
+      .sort({ name: 1 });
+  }
+
   async findById(id) {
     return await this.Department.findById(id);
   }

@@ -12,7 +12,7 @@ import { OrganizationRepository } from '../repositories/organizationRepository.j
 import { ApprovalMatrixRepository } from '../repositories/approvalMatrixRepository.js';
 import { DepartmentRepository } from '../repositories/departmentRepository.js';
 import { PositionRepository } from '../repositories/positionRepository.js';
-import { logError, logInfo } from '../utils/logger.js';
+import { logError, logInfo, logWarn } from '../utils/logger.js';
 
 export class OnboardingService {
   constructor(orgId) {
@@ -48,6 +48,62 @@ export class OnboardingService {
     }
     
     return progress;
+  }
+
+  async getDepartments() {
+    const tenantDb = await this.getTenantDb();
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    
+    logInfo('getDepartments - org lookup', { 
+      orgId: this.orgId, 
+      foundOrg: !!org, 
+      orgDbId: org?._id?.toString(),
+      orgName: org?.name
+    });
+    
+    if (!org) {
+      return [];
+    }
+    
+    const departmentRepo = new DepartmentRepository(tenantDb);
+    
+    // Debug: Get ALL departments for this specific org_id (including inactive)
+    const allDepartmentsInDb = await departmentRepo.findAllByOrgId(org._id);
+    logInfo('getDepartments - ALL departments for this org_id (incl inactive)', {
+      orgId: org._id?.toString(),
+      count: allDepartmentsInDb.length,
+      departments: allDepartmentsInDb.map(d => ({ 
+        name: d.name, 
+        orgId: d.org_id?.toString(), 
+        isActive: d.is_active,
+        _id: d._id?.toString()
+      }))
+    });
+    
+    // Now get only active departments
+    const departments = await departmentRepo.findByOrgId(org._id);
+    
+    // If we have inactive departments but no active ones, something is wrong
+    if (allDepartmentsInDb.length > 0 && departments.length === 0) {
+      logError('getDepartments - WARNING: Found departments but all are inactive!', null, {
+        orgId: org._id?.toString(),
+        totalCount: allDepartmentsInDb.length,
+        inactiveCount: allDepartmentsInDb.filter(d => !d.is_active).length
+      });
+    }
+    
+    logInfo('getDepartments - ACTIVE departments', { 
+      orgId: org._id?.toString(),
+      count: departments.length,
+      names: departments.map(d => d.name)
+    });
+    
+    return departments.map(dept => ({
+      name: dept.name,
+      code: dept.code || '',
+      description: dept.description || ''
+    }));
   }
 
   async updateStep(stepNumber, stepData = {}) {
@@ -101,7 +157,7 @@ export class OnboardingService {
     return result;
   }
 
-  // Step 1: Organization Details (Simplified: name, size, turnover)
+  // Step 1: Organization Details (name, organizationType, size, turnover)
   async handleStep1(orgId, stepData) {
     const tenantDb = await this.getTenantDb();
     const orgRepo = new OrganizationRepository(tenantDb);
@@ -118,9 +174,10 @@ export class OnboardingService {
     await orgRepo.update({
       name: stepData.name,
       employee_count: sizeMapping[stepData.size] || 0,
-      // Store size and turnover as metadata for later use
+      // Store all onboarding data in metadata for later use
       metadata: {
         size: stepData.size,
+        organizationType: stepData.organizationType,
         turnover: stepData.turnover
       }
     });
@@ -133,28 +190,100 @@ export class OnboardingService {
     const tenantDb = await this.getTenantDb();
     const departmentRepo = new DepartmentRepository(tenantDb);
     
-    // Check for existing departments to avoid duplicates
-    const existingDepartments = await departmentRepo.findByOrgId(orgId);
+    logInfo('handleStep2 - starting', { 
+      orgId: orgId?.toString(), 
+      incomingDepartments: stepData.departments?.map(d => d.name) 
+    });
+    
+    // Check for existing ACTIVE departments - verify org_id matches exactly
+    const existingActiveDepartments = await departmentRepo.findByOrgId(orgId);
+    // Double-check that all returned departments actually belong to this org
+    const verifiedActiveDepartments = existingActiveDepartments.filter(d => 
+      d.org_id?.toString() === orgId?.toString()
+    );
+    const existingActiveNames = new Set(verifiedActiveDepartments.map(d => d.name.toLowerCase()));
+    const existingActiveCodes = new Set(verifiedActiveDepartments.map(d => d.code?.toUpperCase()).filter(Boolean));
+    
+    logInfo('handleStep2 - existing active departments', { 
+      queryCount: existingActiveDepartments.length,
+      verifiedCount: verifiedActiveDepartments.length,
+      orgId: orgId?.toString(),
+      names: Array.from(existingActiveNames),
+      departments: verifiedActiveDepartments.map(d => ({
+        name: d.name,
+        orgId: d.org_id?.toString(),
+        _id: d._id?.toString()
+      }))
+    });
+    
+    // Also check for ALL departments (including inactive) to reactivate them if needed
+    const allDepartments = await departmentRepo.findAllByOrgId(orgId);
+    // Double-check org_id matches
+    const verifiedAllDepartments = allDepartments.filter(d => 
+      d.org_id?.toString() === orgId?.toString()
+    );
+    const allDepartmentsByName = new Map(verifiedAllDepartments.map(d => [d.name.toLowerCase(), d]));
+    
+    logInfo('handleStep2 - all departments (incl inactive)', { 
+      queryCount: allDepartments.length,
+      verifiedCount: verifiedAllDepartments.length,
+      orgId: orgId?.toString(),
+      names: verifiedAllDepartments.map(d => `${d.name} (active: ${d.is_active}, orgId: ${d.org_id?.toString()})`)
+    });
     
     // Create departments from stepData.departments array
+    // Skip departments that already exist instead of erroring
     const departments = [];
+    const skipped = [];
+    const reactivated = [];
+    
     for (const dept of stepData.departments || []) {
-      // Check for duplicate name
-      const duplicateName = existingDepartments.find(d => 
-        d.name.toLowerCase() === dept.name.toLowerCase()
-      );
-      if (duplicateName) {
-        throw new Error(`A department with name "${dept.name}" already exists. Please use a different name.`);
+      const deptNameLower = dept.name.toLowerCase();
+      
+      // Check if department already exists (active or inactive)
+      const existingDept = allDepartmentsByName.get(deptNameLower);
+      
+      if (existingDept) {
+        // Verify the department belongs to the correct organization
+        const deptOrgId = existingDept.org_id?.toString();
+        const targetOrgId = orgId?.toString();
+        
+        if (deptOrgId !== targetOrgId) {
+          logError('handleStep2 - Department exists but with different org_id!', null, {
+            deptName: dept.name,
+            deptOrgId,
+            targetOrgId,
+            deptId: existingDept._id?.toString()
+          });
+          // Don't skip - create a new one with correct org_id
+          // (fall through to create logic below)
+        } else {
+          // Department exists with correct org_id - ensure it's active
+          if (!existingDept.is_active) {
+            await departmentRepo.update(existingDept._id, { is_active: true });
+            reactivated.push(dept.name);
+            logInfo('handleStep2 - reactivated department', { 
+              name: dept.name, 
+              deptId: existingDept._id?.toString(),
+              orgId: existingDept.org_id?.toString()
+            });
+          } else {
+            skipped.push(dept.name);
+            logInfo('handleStep2 - skipped existing active department', { 
+              name: dept.name, 
+              deptId: existingDept._id?.toString(),
+              orgId: existingDept.org_id?.toString()
+            });
+          }
+          continue;
+        }
       }
       
       // Check for duplicate code (if code is provided)
-      if (dept.code) {
-        const duplicateCode = existingDepartments.find(d => 
-          d.code && d.code.toUpperCase() === dept.code.toUpperCase()
-        );
-        if (duplicateCode) {
-          throw new Error(`A department with code "${dept.code}" already exists. Please use a different code.`);
-        }
+      const duplicateCode = dept.code && existingActiveCodes.has(dept.code.toUpperCase());
+      if (duplicateCode) {
+        skipped.push(dept.name);
+        continue;
       }
       
       try {
@@ -165,21 +294,109 @@ export class OnboardingService {
           description: dept.description,
           is_active: true
         });
+        
+        // Verify the department was actually created with correct org_id
+        if (department.org_id?.toString() !== orgId?.toString()) {
+          logError('handleStep2 - Created department has wrong org_id!', null, {
+            deptName: dept.name,
+            createdOrgId: department.org_id?.toString(),
+            expectedOrgId: orgId?.toString()
+          });
+        }
+        
         departments.push(department);
+        logInfo('handleStep2 - created new department', {
+          name: dept.name,
+          deptId: department._id?.toString(),
+          orgId: department.org_id?.toString()
+        });
       } catch (error) {
-        // Catch MongoDB duplicate key errors and provide better messages
+        // Catch MongoDB duplicate key errors - try to reactivate
         if (error.code === 11000) {
-          if (error.keyPattern?.code) {
-            throw new Error(`A department with code "${dept.code}" already exists. Please use a different code.`);
-          } else if (error.keyPattern?.name) {
-            throw new Error(`A department with name "${dept.name}" already exists. Please use a different name.`);
+          logInfo('handleStep2 - duplicate key error, searching for existing department', {
+            deptName: dept.name,
+            errorMessage: error.message
+          });
+          
+          // Query database directly to find the existing department
+          const existing = await departmentRepo.findAllByOrgId(orgId);
+          const foundDept = existing.find(d => d.name.toLowerCase() === deptNameLower);
+          
+          if (foundDept && foundDept.org_id?.toString() === orgId?.toString()) {
+            await departmentRepo.update(foundDept._id, { is_active: true });
+            reactivated.push(dept.name);
+            logInfo('handleStep2 - reactivated department from duplicate key error', {
+              name: dept.name,
+              deptId: foundDept._id?.toString()
+            });
+          } else {
+            skipped.push(dept.name);
+            logWarn('handleStep2 - duplicate key but department not found in query', {
+              name: dept.name,
+              foundDept: foundDept ? {
+                name: foundDept.name,
+                orgId: foundDept.org_id?.toString(),
+                expectedOrgId: orgId?.toString()
+              } : null
+            });
           }
+          continue;
         }
         throw error;
       }
     }
     
-    return { success: true, data: { count: departments.length } };
+    const totalExisting = skipped.length + reactivated.length;
+    
+    // Final verification - query database again to see what's actually there
+    const finalActiveDepartments = await departmentRepo.findByOrgId(orgId);
+    const finalAllDepartments = await departmentRepo.findAllByOrgId(orgId);
+    
+    // Compare what was requested vs what's in the database
+    const requestedNames = (stepData.departments || []).map(d => d.name.toLowerCase());
+    const finalActiveNames = finalActiveDepartments.map(d => d.name.toLowerCase());
+    const missingDepartments = requestedNames.filter(name => !finalActiveNames.includes(name));
+    
+    logInfo('handleStep2 - final state verification', { 
+      orgId: orgId?.toString(),
+      requestedCount: stepData.departments?.length || 0,
+      requestedNames: requestedNames,
+      createdCount: departments.length,
+      skippedCount: skipped.length,
+      skippedNames: skipped,
+      reactivatedCount: reactivated.length,
+      reactivatedNames: reactivated,
+      finalActiveCount: finalActiveDepartments.length,
+      finalActiveNames: finalActiveNames,
+      finalAllCount: finalAllDepartments.length,
+      missingDepartments: missingDepartments,
+      allFinalDepartments: finalAllDepartments.map(d => ({
+        name: d.name,
+        orgId: d.org_id?.toString(),
+        isActive: d.is_active,
+        _id: d._id?.toString()
+      }))
+    });
+    
+    // Warn if there's a mismatch
+    if (missingDepartments.length > 0) {
+      logWarn('handleStep2 - WARNING: Some requested departments are missing from database!', {
+        missing: missingDepartments,
+        orgId: orgId?.toString()
+      });
+    }
+    
+    return { 
+      success: true, 
+      data: { 
+        count: departments.length,
+        skipped: skipped.length,
+        reactivated: reactivated.length,
+        message: totalExisting > 0 
+          ? `${totalExisting} department(s) already exist and were ${reactivated.length > 0 ? 'reactivated' : 'skipped'}.`
+          : undefined
+      } 
+    };
   }
 
   // Step 3: Positions (with permissions - link to departments created in step 2)

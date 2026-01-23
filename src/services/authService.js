@@ -64,9 +64,11 @@ export class AuthService {
       // For now, we'll create orgId from organization name
       const orgId = this.generateOrgId(organizationName);
       
-      // Check if tenant already exists
-      const existingTenant = await routerModels.Tenant.findOne({ orgId });
-      if (existingTenant) {
+      logInfo('Starting registration', { orgId, organizationName });
+      
+      // Check if tenant already exists (using normalized/lowercase orgId)
+      const existingTenant = await routerModels.Tenant.findOne({ orgId: orgId.toLowerCase() });
+      if (existingTenant && existingTenant.status === 'active') {
         throw new AppError('Organization already exists', 409, 'ORG_EXISTS');
       }
 
@@ -77,13 +79,21 @@ export class AuthService {
       const clusterEndpoint = process.env.POD_CLUSTER_ENDPOINT || process.env.ROUTER_DB_URI.replace('/router_db', '');
       const dbName = `org_${orgId}_v1`;
 
+      logInfo('Registering tenant', { orgId, dbName });
+
       // Register tenant in Router DB
-      await registerTenant({
-        orgId,
-        clusterEndpoint,
-        dbName,
-        orgKey
-      });
+      try {
+        await registerTenant({
+          orgId,
+          clusterEndpoint,
+          dbName,
+          orgKey
+        });
+        logInfo('Tenant registered successfully', { orgId });
+      } catch (tenantError) {
+        logError('Failed to register tenant', tenantError, { orgId });
+        throw new AppError('Failed to create organization. Please try again.', 500, 'TENANT_CREATION_FAILED');
+      }
 
       // Get tenant database connection
       const tenantDb = await getTenantConnection(orgId);
@@ -135,12 +145,15 @@ export class AuthService {
       // Manually decrypt if plugin didn't work
       const userObj = decryptUserFields(decryptedUser, orgKey);
       
-      logInfo('User registered', { userId: userObj._id, orgId });
+      // Normalize orgId to lowercase for consistency
+      const normalizedOrgId = orgId.toLowerCase().trim();
+      
+      logInfo('User registered', { userId: userObj._id, orgId: normalizedOrgId });
 
-      // Generate tokens
+      // Generate tokens with normalized orgId
       const token = generateToken({
         userId: userObj._id.toString(),
-        orgId,
+        orgId: normalizedOrgId,
         email: userObj.email || email,
         roles: ['admin'],
         permissions: ['*:*']
@@ -154,7 +167,7 @@ export class AuthService {
           lastName: userObj.last_name || lastName
         },
         token,
-        orgId
+        orgId: normalizedOrgId
       };
     } catch (error) {
       if (error instanceof AppError) {
@@ -243,16 +256,19 @@ export class AuthService {
       // Manually decrypt if plugin didn't work
       const userObj = decryptUserFields(decryptedUser, orgKey);
 
+      // Normalize orgId to lowercase for consistency
+      const normalizedOrgId = orgId.toLowerCase().trim();
+
       // Generate token
       const token = generateToken({
         userId: userObj._id.toString(),
-        orgId,
+        orgId: normalizedOrgId,
         email: userObj.email || email,
         roles: ['admin'], // TODO: Get from user_roles
         permissions: ['*:*'] // TODO: Get from roles
       });
 
-      logInfo('User logged in', { userId: userObj._id, orgId });
+      logInfo('User logged in', { userId: userObj._id, orgId: normalizedOrgId });
 
       return {
         user: {
@@ -262,7 +278,7 @@ export class AuthService {
           lastName: userObj.last_name || ''
         },
         token,
-        orgId
+        orgId: normalizedOrgId
       };
     } catch (error) {
       if (error instanceof AppError) {

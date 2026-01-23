@@ -31,6 +31,25 @@ export class OrganizationService {
 
   async updateOrganization(updateData) {
     try {
+      // Get existing org to merge settings and metadata
+      const existingOrg = await this.orgRepo.findOne();
+      
+      // Merge settings if provided
+      if (updateData.settings && existingOrg?.settings) {
+        updateData.settings = {
+          ...existingOrg.settings,
+          ...updateData.settings
+        };
+      }
+      
+      // Merge metadata if provided
+      if (updateData.metadata && existingOrg?.metadata) {
+        updateData.metadata = {
+          ...existingOrg.metadata,
+          ...updateData.metadata
+        };
+      }
+      
       const org = await this.orgRepo.update(updateData);
       return org;
     } catch (error) {

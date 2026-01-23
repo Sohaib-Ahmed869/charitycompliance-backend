@@ -20,6 +20,18 @@ export const getProgress = asyncHandler(async (req, res) => {
   });
 });
 
+export const getDepartments = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const onboardingService = new OnboardingService(orgId);
+  
+  const departments = await onboardingService.getDepartments();
+  
+  res.json({
+    success: true,
+    data: departments
+  });
+});
+
 export const updateStep = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {

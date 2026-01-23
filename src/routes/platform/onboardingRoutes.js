@@ -18,6 +18,9 @@ router.use(authAndResolveTenant);
 // Get onboarding progress
 router.get('/progress', onboardingController.getProgress);
 
+// Get departments (for Step 2)
+router.get('/departments', onboardingController.getDepartments);
+
 // Verify ABN (Step 1)
 router.post(
   '/verify-abn',

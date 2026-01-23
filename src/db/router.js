@@ -9,6 +9,7 @@
 import { getRouterConnection } from '../config/database.js';
 import { decrypt, encrypt } from '../utils/encryption.js';
 import { getMasterKey } from '../config/encryption.js';
+import { logError, logInfo } from '../utils/logger.js';
 import NodeCache from 'node-cache';
 
 // Cache tenant lookups to reduce Router DB queries
@@ -39,8 +40,11 @@ export const lookupTenant = async (orgId) => {
     throw new Error('Organization ID is required');
   }
 
+  // Normalize orgId to lowercase (matching schema transformation)
+  const normalizedOrgId = orgId.toLowerCase().trim();
+
   // Check cache first
-  const cacheKey = `tenant:${orgId}`;
+  const cacheKey = `tenant:${normalizedOrgId}`;
   const cached = tenantCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -50,14 +54,15 @@ export const lookupTenant = async (orgId) => {
     const routerDB = getRouterConnection();
     const tenantsCollection = routerDB.collection('tenants');
 
-    // Query Router DB for tenant
+    // Query Router DB for tenant (use normalized orgId)
     const tenantRecord = await tenantsCollection.findOne({ 
-      orgId: orgId,
+      orgId: normalizedOrgId,
       status: 'active' // Only return active tenants
     });
 
     if (!tenantRecord) {
-      throw new Error(`Tenant not found or inactive: ${orgId}`);
+      logError('Tenant lookup failed', null, { orgId: normalizedOrgId, reason: 'not found or inactive' });
+      throw new Error(`Tenant not found or inactive: ${normalizedOrgId}`);
     }
 
     // Decrypt the organization key using master key
@@ -82,6 +87,7 @@ export const lookupTenant = async (orgId) => {
     if (error.message.includes('not found')) {
       throw error;
     }
+    logError('Tenant lookup error', error, { orgId: normalizedOrgId });
     throw new Error(`Failed to lookup tenant: ${error.message}`);
   }
 };
@@ -92,7 +98,7 @@ export const lookupTenant = async (orgId) => {
  */
 export const clearTenantCache = (orgId) => {
   if (orgId) {
-    tenantCache.del(`tenant:${orgId}`);
+    tenantCache.del(`tenant:${orgId.toLowerCase().trim()}`);
   } else {
     tenantCache.flushAll();
   }
@@ -111,8 +117,12 @@ export const registerTenant = async (tenantData) => {
   const { orgId, clusterEndpoint, dbName, orgKey } = tenantData;
 
   if (!orgId || !clusterEndpoint || !dbName || !orgKey) {
+    logError('Missing tenant registration fields', null, { orgId, hasCluster: !!clusterEndpoint, hasDb: !!dbName, hasKey: !!orgKey });
     throw new Error('Missing required tenant registration fields');
   }
+
+  // Normalize orgId to lowercase (matching schema transformation)
+  const normalizedOrgId = orgId.toLowerCase().trim();
 
   try {
     const routerDB = getRouterConnection();
@@ -123,14 +133,26 @@ export const registerTenant = async (tenantData) => {
     const encryptedDataKey = encrypt(orgKey, masterKey.toString('hex'));
 
     // Check if tenant already exists
-    const existing = await tenantsCollection.findOne({ orgId });
+    const existing = await tenantsCollection.findOne({ orgId: normalizedOrgId });
     if (existing) {
-      throw new Error(`Tenant already exists: ${orgId}`);
+      logInfo('Tenant already exists, reactivating if needed', { orgId: normalizedOrgId, existingStatus: existing.status });
+      
+      // If tenant exists but is inactive, reactivate it
+      if (existing.status !== 'active') {
+        await tenantsCollection.updateOne(
+          { orgId: normalizedOrgId },
+          { $set: { status: 'active', updatedAt: new Date() } }
+        );
+        logInfo('Tenant reactivated', { orgId: normalizedOrgId });
+        return { ...existing, status: 'active' };
+      }
+      
+      throw new Error(`Tenant already exists: ${normalizedOrgId}`);
     }
 
     // Insert tenant record
     const tenantRecord = {
-      orgId,
+      orgId: normalizedOrgId,
       clusterEndpoint,
       dbName,
       encryptedDataKey,
@@ -139,10 +161,18 @@ export const registerTenant = async (tenantData) => {
       updatedAt: new Date()
     };
 
-    await tenantsCollection.insertOne(tenantRecord);
+    const result = await tenantsCollection.insertOne(tenantRecord);
+    
+    if (!result.acknowledged) {
+      logError('Tenant insert not acknowledged', null, { orgId: normalizedOrgId });
+      throw new Error('Failed to insert tenant record');
+    }
 
+    logInfo('Tenant registered successfully', { orgId: normalizedOrgId, dbName });
+    
     return tenantRecord;
   } catch (error) {
+    logError('Failed to register tenant', error, { orgId: normalizedOrgId });
     throw new Error(`Failed to register tenant: ${error.message}`);
   }
 };
