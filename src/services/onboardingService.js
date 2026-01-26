@@ -218,27 +218,60 @@ export class OnboardingService {
     
     // Also check for ALL departments (including inactive) to reactivate them if needed
     const allDepartments = await departmentRepo.findAllByOrgId(orgId);
-    // Double-check org_id matches
-    const verifiedAllDepartments = allDepartments.filter(d => 
-      d.org_id?.toString() === orgId?.toString()
-    );
+    // Double-check org_id matches - use strict comparison
+    const orgIdString = orgId?.toString();
+    const verifiedAllDepartments = allDepartments.filter(d => {
+      const deptOrgIdString = d.org_id?.toString();
+      const matches = deptOrgIdString === orgIdString;
+      if (!matches) {
+        logWarn('handleStep2 - Filtering out department with mismatched orgId', {
+          deptName: d.name,
+          deptOrgId: deptOrgIdString,
+          expectedOrgId: orgIdString,
+          deptId: d._id?.toString()
+        });
+      }
+      return matches;
+    });
     const allDepartmentsByName = new Map(verifiedAllDepartments.map(d => [d.name.toLowerCase(), d]));
     
     logInfo('handleStep2 - all departments (incl inactive)', { 
       queryCount: allDepartments.length,
       verifiedCount: verifiedAllDepartments.length,
       orgId: orgId?.toString(),
-      names: verifiedAllDepartments.map(d => `${d.name} (active: ${d.is_active}, orgId: ${d.org_id?.toString()})`)
+      names: verifiedAllDepartments.map(d => `${d.name} (active: ${d.is_active}, orgId: ${d.org_id?.toString()})`),
+      mapKeys: Array.from(allDepartmentsByName.keys()),
+      mapEntries: Array.from(allDepartmentsByName.entries()).map(([key, dept]) => ({
+        key,
+        name: dept.name,
+        orgId: dept.org_id?.toString(),
+        isActive: dept.is_active,
+        _id: dept._id?.toString()
+      }))
     });
     
     // Create departments from stepData.departments array
     // Skip departments that already exist instead of erroring
     const departments = [];
-    const skipped = [];
+    let skipped = []; // Use let instead of const to allow correction if incorrectly marked as skipped
     const reactivated = [];
+    
+    logInfo('handleStep2 - processing requested departments', {
+      requestedCount: stepData.departments?.length || 0,
+      requestedNames: (stepData.departments || []).map(d => d.name),
+      requestedNamesLower: (stepData.departments || []).map(d => d.name.toLowerCase()),
+      orgId: orgId?.toString()
+    });
     
     for (const dept of stepData.departments || []) {
       const deptNameLower = dept.name.toLowerCase();
+      
+      logInfo('handleStep2 - checking department', {
+        name: dept.name,
+        nameLower: deptNameLower,
+        mapHasKey: allDepartmentsByName.has(deptNameLower),
+        orgId: orgId?.toString()
+      });
       
       // Check if department already exists (active or inactive)
       const existingDept = allDepartmentsByName.get(deptNameLower);
@@ -248,12 +281,18 @@ export class OnboardingService {
         const deptOrgId = existingDept.org_id?.toString();
         const targetOrgId = orgId?.toString();
         
+        // CRITICAL: Verify orgId matches exactly (using strict comparison)
         if (deptOrgId !== targetOrgId) {
           logError('handleStep2 - Department exists but with different org_id!', null, {
             deptName: dept.name,
             deptOrgId,
             targetOrgId,
-            deptId: existingDept._id?.toString()
+            deptId: existingDept._id?.toString(),
+            mapEntry: {
+              name: existingDept.name,
+              orgId: existingDept.org_id?.toString(),
+              isActive: existingDept.is_active
+            }
           });
           // Don't skip - create a new one with correct org_id
           // (fall through to create logic below)
@@ -272,7 +311,13 @@ export class OnboardingService {
             logInfo('handleStep2 - skipped existing active department', { 
               name: dept.name, 
               deptId: existingDept._id?.toString(),
-              orgId: existingDept.org_id?.toString()
+              orgId: existingDept.org_id?.toString(),
+              mapEntry: {
+                name: existingDept.name,
+                orgId: existingDept.org_id?.toString(),
+                isActive: existingDept.is_active,
+                _id: existingDept._id?.toString()
+              }
             });
           }
           continue;
@@ -346,8 +391,6 @@ export class OnboardingService {
       }
     }
     
-    const totalExisting = skipped.length + reactivated.length;
-    
     // Final verification - query database again to see what's actually there
     const finalActiveDepartments = await departmentRepo.findByOrgId(orgId);
     const finalAllDepartments = await departmentRepo.findAllByOrgId(orgId);
@@ -378,13 +421,37 @@ export class OnboardingService {
       }))
     });
     
-    // Warn if there's a mismatch
+    // Warn if there's a mismatch - this indicates departments were incorrectly skipped
     if (missingDepartments.length > 0) {
       logWarn('handleStep2 - WARNING: Some requested departments are missing from database!', {
         missing: missingDepartments,
-        orgId: orgId?.toString()
+        orgId: orgId?.toString(),
+        skippedNames: skipped,
+        reactivatedNames: reactivated,
+        createdNames: departments.map(d => d.name)
       });
+      
+      // Correct the skipped count - remove departments that don't actually exist
+      const actuallySkipped = skipped.filter(name => {
+        const nameLower = name.toLowerCase();
+        return finalActiveNames.includes(nameLower);
+      });
+      const incorrectlySkipped = skipped.filter(name => {
+        const nameLower = name.toLowerCase();
+        return !finalActiveNames.includes(nameLower);
+      });
+      
+      if (incorrectlySkipped.length > 0) {
+        logError('handleStep2 - ERROR: Departments were incorrectly marked as skipped!', null, {
+          incorrectlySkipped,
+          orgId: orgId?.toString()
+        });
+        // Don't include incorrectly skipped departments in the response
+        skipped = actuallySkipped;
+      }
     }
+    
+    const totalExisting = skipped.length + reactivated.length;
     
     return { 
       success: true, 
