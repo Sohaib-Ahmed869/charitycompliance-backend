@@ -192,276 +192,162 @@ export class OnboardingService {
     
     logInfo('handleStep2 - starting', { 
       orgId: orgId?.toString(), 
-      incomingDepartments: stepData.departments?.map(d => d.name) 
+      incomingDepartments: stepData.departments?.map(d => d.name),
+      count: stepData.departments?.length || 0
     });
     
-    // Check for existing ACTIVE departments - verify org_id matches exactly
-    const existingActiveDepartments = await departmentRepo.findByOrgId(orgId);
-    // Double-check that all returned departments actually belong to this org
-    const verifiedActiveDepartments = existingActiveDepartments.filter(d => 
-      d.org_id?.toString() === orgId?.toString()
-    );
-    const existingActiveNames = new Set(verifiedActiveDepartments.map(d => d.name.toLowerCase()));
-    const existingActiveCodes = new Set(verifiedActiveDepartments.map(d => d.code?.toUpperCase()).filter(Boolean));
-    
-    logInfo('handleStep2 - existing active departments', { 
-      queryCount: existingActiveDepartments.length,
-      verifiedCount: verifiedActiveDepartments.length,
-      orgId: orgId?.toString(),
-      names: Array.from(existingActiveNames),
-      departments: verifiedActiveDepartments.map(d => ({
-        name: d.name,
-        orgId: d.org_id?.toString(),
-        _id: d._id?.toString()
-      }))
-    });
-    
-    // Also check for ALL departments (including inactive) to reactivate them if needed
-    const allDepartments = await departmentRepo.findAllByOrgId(orgId);
-    // Double-check org_id matches - use strict comparison
-    const orgIdString = orgId?.toString();
-    const verifiedAllDepartments = allDepartments.filter(d => {
-      const deptOrgIdString = d.org_id?.toString();
-      const matches = deptOrgIdString === orgIdString;
-      if (!matches) {
-        logWarn('handleStep2 - Filtering out department with mismatched orgId', {
-          deptName: d.name,
-          deptOrgId: deptOrgIdString,
-          expectedOrgId: orgIdString,
-          deptId: d._id?.toString()
-        });
-      }
-      return matches;
-    });
-    const allDepartmentsByName = new Map(verifiedAllDepartments.map(d => [d.name.toLowerCase(), d]));
-    
-    logInfo('handleStep2 - all departments (incl inactive)', { 
-      queryCount: allDepartments.length,
-      verifiedCount: verifiedAllDepartments.length,
-      orgId: orgId?.toString(),
-      names: verifiedAllDepartments.map(d => `${d.name} (active: ${d.is_active}, orgId: ${d.org_id?.toString()})`),
-      mapKeys: Array.from(allDepartmentsByName.keys()),
-      mapEntries: Array.from(allDepartmentsByName.entries()).map(([key, dept]) => ({
-        key,
-        name: dept.name,
-        orgId: dept.org_id?.toString(),
-        isActive: dept.is_active,
-        _id: dept._id?.toString()
-      }))
-    });
-    
-    // Create departments from stepData.departments array
-    // Skip departments that already exist instead of erroring
+    // Simply create all departments that are sent - generate unique codes to avoid conflicts
     const departments = [];
-    let skipped = []; // Use let instead of const to allow correction if incorrectly marked as skipped
-    const reactivated = [];
+    const updated = [];
+    const errors = [];
     
-    logInfo('handleStep2 - processing requested departments', {
-      requestedCount: stepData.departments?.length || 0,
-      requestedNames: (stepData.departments || []).map(d => d.name),
-      requestedNamesLower: (stepData.departments || []).map(d => d.name.toLowerCase()),
-      orgId: orgId?.toString()
-    });
+    // Get existing departments to check for code conflicts
+    const existingDepts = await departmentRepo.findAllByOrgId(orgId);
+    const existingCodes = new Set(existingDepts.map(d => d.code?.toUpperCase()).filter(Boolean));
+    
+    // Generate unique code from department name if no code provided
+    const generateCode = (name, existingCodes) => {
+      // Try to create a code from the name (first 3-4 letters, uppercase)
+      const baseCode = name
+        .replace(/[^a-zA-Z0-9]/g, '') // Remove special characters
+        .substring(0, 4)
+        .toUpperCase();
+      
+      let code = baseCode;
+      let counter = 1;
+      
+      // If code already exists, append a number
+      while (existingCodes.has(code)) {
+        code = `${baseCode}${counter}`;
+        counter++;
+      }
+      
+      existingCodes.add(code);
+      return code;
+    };
     
     for (const dept of stepData.departments || []) {
-      const deptNameLower = dept.name.toLowerCase();
-      
-      logInfo('handleStep2 - checking department', {
-        name: dept.name,
-        nameLower: deptNameLower,
-        mapHasKey: allDepartmentsByName.has(deptNameLower),
-        orgId: orgId?.toString()
-      });
-      
-      // Check if department already exists (active or inactive)
-      const existingDept = allDepartmentsByName.get(deptNameLower);
-      
-      if (existingDept) {
-        // Verify the department belongs to the correct organization
-        const deptOrgId = existingDept.org_id?.toString();
-        const targetOrgId = orgId?.toString();
-        
-        // CRITICAL: Verify orgId matches exactly (using strict comparison)
-        if (deptOrgId !== targetOrgId) {
-          logError('handleStep2 - Department exists but with different org_id!', null, {
-            deptName: dept.name,
-            deptOrgId,
-            targetOrgId,
-            deptId: existingDept._id?.toString(),
-            mapEntry: {
-              name: existingDept.name,
-              orgId: existingDept.org_id?.toString(),
-              isActive: existingDept.is_active
-            }
-          });
-          // Don't skip - create a new one with correct org_id
-          // (fall through to create logic below)
-        } else {
-          // Department exists with correct org_id - ensure it's active
-          if (!existingDept.is_active) {
-            await departmentRepo.update(existingDept._id, { is_active: true });
-            reactivated.push(dept.name);
-            logInfo('handleStep2 - reactivated department', { 
-              name: dept.name, 
-              deptId: existingDept._id?.toString(),
-              orgId: existingDept.org_id?.toString()
-            });
-          } else {
-            skipped.push(dept.name);
-            logInfo('handleStep2 - skipped existing active department', { 
-              name: dept.name, 
-              deptId: existingDept._id?.toString(),
-              orgId: existingDept.org_id?.toString(),
-              mapEntry: {
-                name: existingDept.name,
-                orgId: existingDept.org_id?.toString(),
-                isActive: existingDept.is_active,
-                _id: existingDept._id?.toString()
-              }
-            });
-          }
-          continue;
-        }
-      }
-      
-      // Check for duplicate code (if code is provided)
-      const duplicateCode = dept.code && existingActiveCodes.has(dept.code.toUpperCase());
-      if (duplicateCode) {
-        skipped.push(dept.name);
-        continue;
-      }
-      
       try {
-        const department = await departmentRepo.create({
+        // Build department data
+        const departmentData = {
           org_id: orgId,
           name: dept.name,
-          code: dept.code ? dept.code.toUpperCase() : undefined,
-          description: dept.description,
+          description: dept.description || undefined,
           is_active: true
-        });
+        };
         
-        // Verify the department was actually created with correct org_id
-        if (department.org_id?.toString() !== orgId?.toString()) {
-          logError('handleStep2 - Created department has wrong org_id!', null, {
-            deptName: dept.name,
-            createdOrgId: department.org_id?.toString(),
-            expectedOrgId: orgId?.toString()
-          });
+        // Generate or use provided code to avoid sparse index conflicts
+        if (dept.code && dept.code.trim()) {
+          departmentData.code = dept.code.trim().toUpperCase();
+        } else {
+          // Generate a unique code to avoid duplicate key errors on org_id + code
+          departmentData.code = generateCode(dept.name, existingCodes);
         }
         
+        logInfo('handleStep2 - creating department', {
+          name: dept.name,
+          orgId: orgId?.toString(),
+          code: departmentData.code
+        });
+        
+        const department = await departmentRepo.create(departmentData);
+        
         departments.push(department);
-        logInfo('handleStep2 - created new department', {
+        logInfo('handleStep2 - successfully created department', {
           name: dept.name,
           deptId: department._id?.toString(),
-          orgId: department.org_id?.toString()
+          orgId: department.org_id?.toString(),
+          code: department.code
         });
       } catch (error) {
-        // Catch MongoDB duplicate key errors - try to reactivate
+        // Handle duplicate key errors - find and update existing department
         if (error.code === 11000) {
-          logInfo('handleStep2 - duplicate key error, searching for existing department', {
+          logInfo('handleStep2 - duplicate key error, finding and updating existing department', {
             deptName: dept.name,
             errorMessage: error.message
           });
           
-          // Query database directly to find the existing department
-          const existing = await departmentRepo.findAllByOrgId(orgId);
-          const foundDept = existing.find(d => d.name.toLowerCase() === deptNameLower);
+          // Find existing department by name
+          const foundDept = existingDepts.find(d => 
+            d.org_id?.toString() === orgId?.toString() &&
+            d.name.toLowerCase() === dept.name.toLowerCase()
+          );
           
-          if (foundDept && foundDept.org_id?.toString() === orgId?.toString()) {
-            await departmentRepo.update(foundDept._id, { is_active: true });
-            reactivated.push(dept.name);
-            logInfo('handleStep2 - reactivated department from duplicate key error', {
+          if (foundDept) {
+            // Update existing department with new data
+            const updateData = {
+              description: dept.description || foundDept.description,
+              is_active: true
+            };
+            
+            // Generate or use provided code
+            if (dept.code && dept.code.trim()) {
+              updateData.code = dept.code.trim().toUpperCase();
+            } else if (!foundDept.code) {
+              // If existing dept has no code, generate one to avoid future conflicts
+              updateData.code = generateCode(dept.name, existingCodes);
+            }
+            
+            const updatedDept = await departmentRepo.update(foundDept._id, updateData);
+            departments.push(updatedDept);
+            updated.push(dept.name);
+            logInfo('handleStep2 - updated existing department', {
               name: dept.name,
-              deptId: foundDept._id?.toString()
+              deptId: updatedDept._id?.toString(),
+              orgId: updatedDept.org_id?.toString(),
+              code: updatedDept.code
             });
           } else {
-            skipped.push(dept.name);
-            logWarn('handleStep2 - duplicate key but department not found in query', {
-              name: dept.name,
-              foundDept: foundDept ? {
-                name: foundDept.name,
-                orgId: foundDept.org_id?.toString(),
-                expectedOrgId: orgId?.toString()
-              } : null
-            });
+            // Department not found by name - might be a code conflict, try with generated code
+            try {
+              const retryData = {
+                org_id: orgId,
+                name: dept.name,
+                description: dept.description || undefined,
+                is_active: true,
+                code: generateCode(dept.name, existingCodes)
+              };
+              
+              const retryDept = await departmentRepo.create(retryData);
+              departments.push(retryDept);
+              logInfo('handleStep2 - created department with generated code on retry', {
+                name: dept.name,
+                code: retryDept.code
+              });
+            } catch (retryError) {
+              logError('handleStep2 - Error on retry with generated code', retryError, {
+                deptName: dept.name
+              });
+              errors.push({ name: dept.name, error: retryError.message });
+            }
           }
-          continue;
+        } else {
+          logError('handleStep2 - Error creating department', error, {
+            deptName: dept.name,
+            errorCode: error.code,
+            errorMessage: error.message
+          });
+          errors.push({ name: dept.name, error: error.message });
         }
-        throw error;
       }
     }
     
-    // Final verification - query database again to see what's actually there
-    const finalActiveDepartments = await departmentRepo.findByOrgId(orgId);
-    const finalAllDepartments = await departmentRepo.findAllByOrgId(orgId);
-    
-    // Compare what was requested vs what's in the database
-    const requestedNames = (stepData.departments || []).map(d => d.name.toLowerCase());
-    const finalActiveNames = finalActiveDepartments.map(d => d.name.toLowerCase());
-    const missingDepartments = requestedNames.filter(name => !finalActiveNames.includes(name));
-    
-    logInfo('handleStep2 - final state verification', { 
-      orgId: orgId?.toString(),
+    logInfo('handleStep2 - finished', {
       requestedCount: stepData.departments?.length || 0,
-      requestedNames: requestedNames,
       createdCount: departments.length,
-      skippedCount: skipped.length,
-      skippedNames: skipped,
-      reactivatedCount: reactivated.length,
-      reactivatedNames: reactivated,
-      finalActiveCount: finalActiveDepartments.length,
-      finalActiveNames: finalActiveNames,
-      finalAllCount: finalAllDepartments.length,
-      missingDepartments: missingDepartments,
-      allFinalDepartments: finalAllDepartments.map(d => ({
-        name: d.name,
-        orgId: d.org_id?.toString(),
-        isActive: d.is_active,
-        _id: d._id?.toString()
-      }))
+      updatedCount: updated.length,
+      errorCount: errors.length,
+      createdNames: departments.map(d => d.name),
+      updatedNames: updated,
+      errors: errors
     });
-    
-    // Warn if there's a mismatch - this indicates departments were incorrectly skipped
-    if (missingDepartments.length > 0) {
-      logWarn('handleStep2 - WARNING: Some requested departments are missing from database!', {
-        missing: missingDepartments,
-        orgId: orgId?.toString(),
-        skippedNames: skipped,
-        reactivatedNames: reactivated,
-        createdNames: departments.map(d => d.name)
-      });
-      
-      // Correct the skipped count - remove departments that don't actually exist
-      const actuallySkipped = skipped.filter(name => {
-        const nameLower = name.toLowerCase();
-        return finalActiveNames.includes(nameLower);
-      });
-      const incorrectlySkipped = skipped.filter(name => {
-        const nameLower = name.toLowerCase();
-        return !finalActiveNames.includes(nameLower);
-      });
-      
-      if (incorrectlySkipped.length > 0) {
-        logError('handleStep2 - ERROR: Departments were incorrectly marked as skipped!', null, {
-          incorrectlySkipped,
-          orgId: orgId?.toString()
-        });
-        // Don't include incorrectly skipped departments in the response
-        skipped = actuallySkipped;
-      }
-    }
-    
-    const totalExisting = skipped.length + reactivated.length;
     
     return { 
       success: true, 
       data: { 
         count: departments.length,
-        skipped: skipped.length,
-        reactivated: reactivated.length,
-        message: totalExisting > 0 
-          ? `${totalExisting} department(s) already exist and were ${reactivated.length > 0 ? 'reactivated' : 'skipped'}.`
-          : undefined
+        updated: updated.length,
+        errors: errors.length > 0 ? errors : undefined
       } 
     };
   }
@@ -477,6 +363,9 @@ export class OnboardingService {
     
     // Create positions and link to departments
     const positions = [];
+    const skipped = [];
+    const reactivated = [];
+    
     for (const pos of stepData.positions || []) {
       let departmentId = null;
       
@@ -490,10 +379,11 @@ export class OnboardingService {
         }
       }
       
-      const position = await positionRepo.create({
+      // Build position data - only include code if it has a value
+      // This prevents duplicate key errors with the sparse unique index on org_id + code
+      const positionData = {
         org_id: orgId,
         title: pos.name, // Frontend sends 'name', backend expects 'title'
-        code: pos.code || undefined,
         description: pos.description || undefined,
         level: pos.level || 1,
         is_management: false, // Can be determined from level if needed
@@ -505,12 +395,80 @@ export class OnboardingService {
         max_approval_amount: 0, // Can be configured later
         department_id: departmentId,
         is_active: true
-      });
+      };
       
-      positions.push(position);
+      // Only include code if it has a non-empty value to avoid sparse index conflicts
+      if (pos.code && pos.code.trim()) {
+        positionData.code = pos.code.trim().toUpperCase();
+      }
+      
+      try {
+        const position = await positionRepo.create(positionData);
+        positions.push(position);
+        logInfo('handleStep3 - created position', {
+          title: pos.name,
+          positionId: position._id?.toString(),
+          departmentId: departmentId?.toString()
+        });
+      } catch (error) {
+        // Handle duplicate key errors (for org_id + code unique index)
+        if (error.code === 11000) {
+          logInfo('handleStep3 - duplicate key error, searching for existing position', {
+            positionName: pos.name,
+            errorMessage: error.message
+          });
+          
+          // Try to find existing position by title and department
+          const existingPositions = await positionRepo.findByOrgId(orgId);
+          const foundPos = existingPositions.find(p => 
+            p.title === pos.name &&
+            (departmentId ? p.department_id?.toString() === departmentId.toString() : !p.department_id)
+          );
+          
+          if (foundPos) {
+            // Reactivate if inactive
+            if (!foundPos.is_active) {
+              await positionRepo.update(foundPos._id, { is_active: true });
+              reactivated.push(pos.name);
+              logInfo('handleStep3 - reactivated position', {
+                title: pos.name,
+                positionId: foundPos._id?.toString()
+              });
+            } else {
+              skipped.push(pos.name);
+              logInfo('handleStep3 - skipped existing active position', {
+                title: pos.name,
+                positionId: foundPos._id?.toString()
+              });
+            }
+          } else {
+            // Position not found - this shouldn't happen with duplicate key error
+            logWarn('handleStep3 - duplicate key but position not found', {
+              positionName: pos.name,
+              departmentId: departmentId?.toString()
+            });
+            skipped.push(pos.name);
+          }
+        } else {
+          // Other errors - log and skip
+          logError('handleStep3 - Error creating position', error, {
+            positionName: pos.name,
+            errorCode: error.code,
+            errorMessage: error.message
+          });
+          skipped.push(pos.name);
+        }
+      }
     }
     
-    return { success: true, data: { count: positions.length } };
+    return { 
+      success: true, 
+      data: { 
+        count: positions.length,
+        skipped: skipped.length,
+        reactivated: reactivated.length
+      } 
+    };
   }
 
   // Step 4: Approval Matrix
