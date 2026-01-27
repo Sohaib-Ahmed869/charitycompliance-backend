@@ -15,6 +15,9 @@ const router = express.Router();
 // All approval routes require authentication and tenant resolution
 router.use(authAndResolveTenant);
 
+// Get approval matrices (workflows)
+router.get('/matrices', approvalController.getApprovalMatrices);
+
 // Get pending approvals for current user
 router.get('/pending', approvalController.getPendingApprovals);
 

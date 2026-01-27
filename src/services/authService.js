@@ -296,6 +296,178 @@ export class AuthService {
       .replace(/^_+|_+$/g, '')
       .substring(0, 50);
   }
+
+  async verifyInvitationToken(token) {
+    try {
+      const routerModels = getRouterModels();
+      const tenants = await routerModels.Tenant.find({ status: 'active' });
+
+      // Search each tenant DB for the invitation token
+      for (const tenant of tenants) {
+        try {
+          const tenantDb = await getTenantConnection(tenant.orgId);
+          const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+          const boardMemberRepo = new BoardMemberRepository(tenantDb);
+
+          const boardMember = await boardMemberRepo.findByInvitationToken(token);
+
+          if (boardMember) {
+            // Check if token is expired
+            if (boardMember.invitation_expires_at && new Date() > boardMember.invitation_expires_at) {
+              await boardMemberRepo.updateInvitationStatus(boardMember._id, 'expired');
+              throw new AppError('Invitation has expired', 410, 'INVITATION_EXPIRED');
+            }
+
+            // Check if already accepted
+            if (boardMember.invitation_status === 'accepted') {
+              throw new AppError('Invitation has already been accepted', 409, 'INVITATION_ALREADY_ACCEPTED');
+            }
+
+            // Get organization name
+            const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+            const orgRepo = new OrganizationRepository(tenantDb);
+            const org = await orgRepo.findOne();
+
+            return {
+              valid: true,
+              boardMember: {
+                id: boardMember._id.toString(),
+                email: boardMember.email,
+                givenNames: boardMember.given_names,
+                familyName: boardMember.family_name,
+                position: boardMember.custom_position_title || boardMember.position
+              },
+              organization: {
+                id: org?._id?.toString(),
+                name: org?.name || 'Organization'
+              },
+              orgId: tenant.orgId
+            };
+          }
+        } catch (error) {
+          if (error instanceof AppError) {
+            throw error;
+          }
+          logError('Failed to search tenant for invitation token', error, { orgId: tenant.orgId });
+          continue;
+        }
+      }
+
+      throw new AppError('Invalid invitation token', 404, 'INVALID_TOKEN');
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      logError('Failed to verify invitation token', error);
+      throw new AppError('Failed to verify invitation', 500, 'VERIFICATION_ERROR');
+    }
+  }
+
+  async acceptInvitation(token, password) {
+    try {
+      // First verify the token
+      const tokenInfo = await this.verifyInvitationToken(token);
+
+      const tenantDb = await getTenantConnection(tokenInfo.orgId);
+      const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+      const boardMemberRepo = new BoardMemberRepository(tenantDb);
+      const userRepo = new UserRepository(tenantDb);
+
+      const boardMember = await boardMemberRepo.findByInvitationToken(token);
+      if (!boardMember) {
+        throw new AppError('Invalid invitation token', 404, 'INVALID_TOKEN');
+      }
+
+      // Check if user with this email already exists
+      const existingUser = await userRepo.findByEmail(boardMember.email);
+      if (existingUser) {
+        // Link existing user to board member
+        await boardMemberRepo.update(boardMember._id, {
+          user_id: existingUser._id,
+          invitation_status: 'accepted',
+          invitation_accepted_at: new Date(),
+          invitation_token: null
+        });
+
+        logInfo('Board member linked to existing user', {
+          boardMemberId: boardMember._id,
+          userId: existingUser._id,
+          orgId: tokenInfo.orgId
+        });
+
+        const normalizedOrgId = tokenInfo.orgId.toLowerCase().trim();
+        const token = generateToken({
+          userId: existingUser._id.toString(),
+          orgId: normalizedOrgId,
+          email: boardMember.email,
+          roles: ['board_member'],
+          permissions: ['read:own', 'write:own']
+        });
+
+        return {
+          user: {
+            id: existingUser._id.toString(),
+            email: boardMember.email,
+            firstName: boardMember.given_names,
+            lastName: boardMember.family_name
+          },
+          token,
+          orgId: normalizedOrgId
+        };
+      }
+
+      // Create new user
+      const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
+
+      const newUser = await userRepo.create({
+        email: boardMember.email,
+        password_hash,
+        first_name: boardMember.given_names,
+        last_name: boardMember.family_name,
+        status: 'active'
+      });
+
+      // Link user to board member and mark invitation as accepted
+      await boardMemberRepo.update(boardMember._id, {
+        user_id: newUser._id,
+        invitation_status: 'accepted',
+        invitation_accepted_at: new Date(),
+        invitation_token: null
+      });
+
+      logInfo('Board member invitation accepted', {
+        boardMemberId: boardMember._id,
+        userId: newUser._id,
+        orgId: tokenInfo.orgId
+      });
+
+      const normalizedOrgId = tokenInfo.orgId.toLowerCase().trim();
+      const authToken = generateToken({
+        userId: newUser._id.toString(),
+        orgId: normalizedOrgId,
+        email: boardMember.email,
+        roles: ['board_member'],
+        permissions: ['read:own', 'write:own']
+      });
+
+      return {
+        user: {
+          id: newUser._id.toString(),
+          email: boardMember.email,
+          firstName: boardMember.given_names,
+          lastName: boardMember.family_name
+        },
+        token: authToken,
+        orgId: normalizedOrgId
+      };
+    } catch (error) {
+      if (error instanceof AppError) {
+        throw error;
+      }
+      logError('Failed to accept invitation', error);
+      throw new AppError('Failed to accept invitation', 500, 'ACCEPT_INVITATION_ERROR');
+    }
+  }
 }
 
 export default new AuthService();

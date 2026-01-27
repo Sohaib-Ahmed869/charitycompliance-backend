@@ -79,6 +79,9 @@ import expenseRoutes from './routes/platform/expenseRoutes.js';
 import approvalRoutes from './routes/platform/approvalRoutes.js';
 import boardMemberRoutes from './routes/platform/boardMemberRoutes.js';
 import documentRoutes from './routes/platform/documentRoutes.js';
+import activityRoutes from './routes/platform/activityRoutes.js';
+import financialControlsRoutes from './routes/platform/financialControlsRoutes.js';
+import governanceStructureRoutes from './routes/platform/governanceStructureRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -86,6 +89,9 @@ app.use('/api/v1/platform/expenses', expenseRoutes);
 app.use('/api/v1/platform/approvals', approvalRoutes);
 app.use('/api/v1/platform/board-members', boardMemberRoutes);
 app.use('/api/v1/platform/documents', documentRoutes);
+app.use('/api/v1/platform/activities', activityRoutes);
+app.use('/api/v1/platform/financial-controls', financialControlsRoutes);
+app.use('/api/v1/platform/governance-structure', governanceStructureRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

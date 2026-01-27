@@ -68,62 +68,77 @@ async function getBucketRegion(bucketName, accessKeyId, secretAccessKey) {
 async function getS3Client() {
   if (!s3Client || !s3Config) {
     try {
-      const credentials = await getS3Credentials();
+      // Use process.env directly to match the working code pattern exactly
+      // This avoids any potential issues with getS3Credentials() modifying the credentials
+      const accessKeyId = (process.env.AWS_ACCESS_KEY_ID || '').trim();
+      const secretAccessKey = (process.env.AWS_SECRET_ACCESS_KEY || '').trim();
+      const region = (process.env.AWS_REGION || 'us-east-1').trim();
+      const bucketName = (process.env.S3_BUCKET_NAME || process.env.AWS_S3_BUCKET || '').trim();
       
+      // Debug logging to catch issues
+      console.log('=== S3 Client Initialization Debug ===');
+      console.log('accessKeyId:', accessKeyId, 'length:', accessKeyId.length);
+      console.log('secretAccessKey:', secretAccessKey ? `${secretAccessKey.substring(0, 4)}...${secretAccessKey.substring(secretAccessKey.length - 4)}` : 'MISSING', 'length:', secretAccessKey.length);
+      console.log('region:', region);
+      console.log('bucketName:', bucketName);
+      console.log('=====================================');
       // Validate required credentials
-      if (!credentials.accessKeyId || !credentials.secretAccessKey) {
+      if (!accessKeyId || !secretAccessKey) {
         throw new AppError(
-          'AWS credentials not configured. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables or configure Secrets Manager.',
+          'AWS credentials not configured. Please set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables.',
           500,
           'S3_CREDENTIALS_MISSING'
         );
       }
 
-      if (!credentials.bucketName) {
+      if (!bucketName) {
         throw new AppError(
-          'S3 bucket name not configured. Please set S3_BUCKET_NAME environment variable or configure in Secrets Manager.',
+          'S3 bucket name not configured. Please set S3_BUCKET_NAME or AWS_S3_BUCKET environment variable.',
           500,
           'S3_BUCKET_MISSING'
         );
       }
       
-      // Create initial client with configured region
-      const configuredRegion = (credentials.region || 'us-east-1').toLowerCase().trim();
+      // Log credential info (without exposing secrets)
+      logInfo(`S3 credentials loaded - Access Key: ${accessKeyId.substring(0, 8)}...${accessKeyId.substring(accessKeyId.length - 4)}, Bucket: ${bucketName}, Configured Region: ${region}`);
       
-      // Try to get the actual bucket region first
-      const actualRegion = await getBucketRegion(
-        credentials.bucketName,
-        credentials.accessKeyId,
-        credentials.secretAccessKey
-      );
-      
-      // Use actual region if detected, otherwise use configured region
-      const finalRegion = actualRegion ? actualRegion.toLowerCase().trim() : configuredRegion;
-      
-      // Log if there's a mismatch
-      if (actualRegion && actualRegion.toLowerCase().trim() !== configuredRegion) {
-        logInfo(`Bucket region mismatch detected. Configured: ${configuredRegion}, Actual: ${actualRegion}. Using actual region: ${finalRegion}`);
-      } else if (!actualRegion) {
-        logInfo(`Using configured region: ${finalRegion} (could not detect bucket region)`);
-      } else {
-        logInfo(`Region matches: ${finalRegion}`);
+      // Try to detect actual bucket region to avoid signature mismatches
+      let actualRegion = region;
+      try {
+        console.log('Attempting to detect actual bucket region...');
+        const detectedRegion = await getBucketRegion(bucketName, accessKeyId, secretAccessKey);
+        if (detectedRegion) {
+          if (detectedRegion !== region) {
+            console.log(`⚠️  Region mismatch detected! Configured: ${region}, Actual: ${detectedRegion}. Using actual region.`);
+            actualRegion = detectedRegion;
+          } else {
+            console.log(`✅ Region matches: ${detectedRegion}`);
+            actualRegion = detectedRegion;
+          }
+        } else {
+          console.log(`⚠️  Could not detect region, using configured: ${region}`);
+        }
+      } catch (regionError) {
+        console.log(`⚠️  Region detection failed (${regionError.name}): ${regionError.message}`);
+        console.log(`⚠️  Using configured region: ${region}`);
+        // Continue with configured region - don't fail if detection doesn't work
       }
       
-      // Create client with the correct region
+      // Create client with the correct region (detected or configured)
       s3Client = new S3Client({
-        region: finalRegion,
+        region: actualRegion,
         credentials: {
-          accessKeyId: credentials.accessKeyId,
-          secretAccessKey: credentials.secretAccessKey
+          accessKeyId: accessKeyId,
+          secretAccessKey: secretAccessKey
         }
       });
 
       s3Config = {
-        bucketName: credentials.bucketName,
-        region: finalRegion
+        bucketName: bucketName,
+        region: actualRegion
       };
 
-      logInfo(`S3 client initialized successfully for bucket: ${credentials.bucketName} in region: ${s3Config.region}`);
+      logInfo(`S3 client initialized successfully for bucket: ${bucketName} in region: ${actualRegion}`);
     } catch (error) {
       logError('Error initializing S3 client:', error);
       if (error instanceof AppError) {
@@ -165,41 +180,51 @@ function generateS3Key(orgId, category, originalFileName) {
  * @returns {Promise<Object>} - Upload result with key and URL
  */
 export async function uploadToS3(fileBuffer, fileName, mimeType, orgId, category) {
-  let config = null;
-  let retryCount = 0;
-  const maxRetries = 1; // Only retry once for region mismatch
-  
-  while (retryCount <= maxRetries) {
-    try {
-      const { client, config: s3Config } = await getS3Client();
-      config = s3Config; // Store config for error handling
-    
-    if (!config.bucketName) {
-      throw new AppError('S3 bucket name not configured', 500, 'S3_CONFIG_ERROR');
+  // Create fresh client each time to match working pattern exactly
+  // No caching, no region detection - just use what's in env
+  const accessKeyId = (process.env.AWS_ACCESS_KEY_ID || '').trim();
+  const secretAccessKey = (process.env.AWS_SECRET_ACCESS_KEY || '').trim();
+  const region = (process.env.AWS_REGION || 'us-east-1').trim();
+  const bucketName = (process.env.S3_BUCKET_NAME || process.env.AWS_S3_BUCKET || '').trim();
+
+  if (!accessKeyId || !secretAccessKey) {
+    throw new AppError('AWS credentials not configured', 500, 'S3_CREDENTIALS_MISSING');
+  }
+
+  if (!bucketName) {
+    throw new AppError('S3 bucket name not configured', 500, 'S3_BUCKET_MISSING');
+  }
+
+  // Create client exactly like working code - fresh each time
+  const client = new S3Client({
+    region: region,
+    credentials: {
+      accessKeyId: accessKeyId,
+      secretAccessKey: secretAccessKey
     }
+  });
 
-    const key = generateS3Key(orgId, category, fileName);
+  const key = generateS3Key(orgId, category, fileName);
 
+  console.log(`[Upload] Bucket: ${bucketName}, Region: ${region}, Key: ${key}`);
+
+  try {
+    // Minimal command - exactly like working code
     const command = new PutObjectCommand({
-      Bucket: config.bucketName,
+      Bucket: bucketName,
       Key: key,
       Body: fileBuffer,
-      ContentType: mimeType,
-      Metadata: {
-        'original-filename': fileName,
-        'org-id': orgId,
-        'category': category,
-        'uploaded-at': new Date().toISOString()
-      }
+      ContentType: mimeType
     });
 
     await client.send(command);
+    console.log(`[Upload] ✅ Success!`);
 
-    // Generate presigned URL for access (valid for 7 days)
+    // Generate presigned URL
     const url = await getSignedUrl(
       client,
       new GetObjectCommand({
-        Bucket: config.bucketName,
+        Bucket: bucketName,
         Key: key
       }),
       { expiresIn: 604800 } // 7 days
@@ -207,108 +232,89 @@ export async function uploadToS3(fileBuffer, fileName, mimeType, orgId, category
 
     logInfo(`File uploaded to S3: ${key}`);
 
-      return {
-        key,
-        url,
-        bucket: config.bucketName,
-        region: config.region
-      };
-    } catch (error) {
-      logError('Error uploading file to S3:', error);
+    return {
+      key,
+      url,
+      bucket: bucketName,
+      region: region
+    };
+  } catch (error) {
+    logError('Error uploading file to S3:', error);
+    
+    // Check for region mismatch
+    if (error.name === 'PermanentRedirect' || (error.message && error.message.includes('must be addressed using the specified endpoint'))) {
+      // Try to extract region from error
+      let detectedRegion = null;
+      if (error.$metadata?.httpHeaders?.['x-amz-bucket-region']) {
+        detectedRegion = error.$metadata.httpHeaders['x-amz-bucket-region'];
+      } else if (error.$response?.headers?.['x-amz-bucket-region']) {
+        detectedRegion = error.$response.headers['x-amz-bucket-region'];
+      }
       
-      // Check if this is a region mismatch error (PermanentRedirect) and we haven't retried yet
-      const isRegionMismatch = error.name === 'PermanentRedirect' || 
-                               (error.message && error.message.includes('must be addressed using the specified endpoint'));
-      
-      if (isRegionMismatch && retryCount < maxRetries) {
-        logInfo('Region mismatch detected during upload. Attempting to extract correct region from error...');
-        
-        // Try to extract region from PermanentRedirect error
-        let detectedRegion = null;
-        
-        // Method 1: Check error metadata headers
-        if (error.$metadata?.httpHeaders?.['x-amz-bucket-region']) {
-          detectedRegion = error.$metadata.httpHeaders['x-amz-bucket-region'];
-        } else if (error.$response?.headers?.['x-amz-bucket-region']) {
-          detectedRegion = error.$response.headers['x-amz-bucket-region'];
-        }
-        
-        // Method 2: Try to parse from endpoint URL in error message
-        if (!detectedRegion && error.message) {
-          const endpointMatch = error.message.match(/https?:\/\/([^.]+)\.s3\.([^.]+)\.amazonaws\.com/);
-          if (endpointMatch && endpointMatch[2]) {
-            detectedRegion = endpointMatch[2];
+      if (detectedRegion && detectedRegion !== region) {
+        console.log(`⚠️  Region mismatch! Trying with detected region: ${detectedRegion}`);
+        // Retry with correct region
+        const retryClient = new S3Client({
+          region: detectedRegion,
+          credentials: {
+            accessKeyId: accessKeyId,
+            secretAccessKey: secretAccessKey
           }
-        }
+        });
         
-        if (detectedRegion) {
-          logInfo(`Extracted region from PermanentRedirect: ${detectedRegion}. Updating client and retrying...`);
-          clearS3ClientCache();
-          
-          // Update credentials with detected region and recreate client
-          const credentials = await getS3Credentials();
-          s3Client = new S3Client({
-            region: detectedRegion,
-            credentials: {
-              accessKeyId: credentials.accessKeyId,
-              secretAccessKey: credentials.secretAccessKey
-            }
-          });
-          
-          s3Config = {
-            bucketName: credentials.bucketName,
-            region: detectedRegion
-          };
-          
-          retryCount++;
-          continue; // Retry the upload with correct region
-        } else {
-          logInfo('Could not extract region from error. Clearing cache and retrying...');
-          clearS3ClientCache();
-          retryCount++;
-          continue; // Retry anyway (might work if region detection succeeds this time)
-        }
+        const retryCommand = new PutObjectCommand({
+          Bucket: bucketName,
+          Key: key,
+          Body: fileBuffer,
+          ContentType: mimeType
+        });
+        
+        await retryClient.send(retryCommand);
+        
+        const url = await getSignedUrl(
+          retryClient,
+          new GetObjectCommand({
+            Bucket: bucketName,
+            Key: key
+          }),
+          { expiresIn: 604800 }
+        );
+        
+        logInfo(`File uploaded to S3 (with corrected region): ${key}`);
+        
+        return {
+          key,
+          url,
+          bucket: bucketName,
+          region: detectedRegion
+        };
       }
-      
-      // Extract meaningful error message
-      let errorMessage = 'Failed to upload file to S3';
-      if (error.message) {
-        errorMessage += `: ${error.message}`;
-      }
-      
-      // Get bucket name and region for error messages (try to get from config or env)
-      const bucketName = config?.bucketName || process.env.S3_BUCKET_NAME || 'unknown';
-      const region = config?.region || process.env.AWS_REGION || 'unknown';
-      
-      // Check for specific AWS errors
-      if (error.name === 'CredentialsProviderError' || error.code === 'CredentialsError') {
-        errorMessage = 'AWS credentials are invalid or missing. Please check your AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY.';
-      } else if (error.name === 'NoSuchBucket' || error.code === 'NoSuchBucket') {
-        errorMessage = `S3 bucket "${bucketName}" does not exist. Please check your S3_BUCKET_NAME configuration.`;
-      } else if (error.name === 'AccessDenied' || error.code === 'AccessDenied') {
-        errorMessage = 'Access denied to S3 bucket. Please check your AWS IAM permissions.';
-      } else if (error.name === 'InvalidAccessKeyId') {
-        errorMessage = 'Invalid AWS access key ID. Please check your AWS_ACCESS_KEY_ID.';
-      } else if (error.name === 'SignatureDoesNotMatch') {
-        errorMessage = 'Invalid AWS secret access key. Please check your AWS_SECRET_ACCESS_KEY.';
-      } else if (error.name === 'PermanentRedirect' || (error.message && error.message.includes('must be addressed using the specified endpoint'))) {
-        // PermanentRedirect error - provide helpful error message
-        // (Region extraction and retry already handled above)
-        errorMessage = `S3 region mismatch! Your bucket is in a different region than "${region}". Please check your bucket's region in the AWS S3 Console and update AWS_REGION accordingly. Note: Your IAM user needs s3:GetBucketLocation permission for automatic region detection.`;
-      }
-      
+    }
+    
+    // For signature errors, provide helpful message
+    if (error.name === 'SignatureDoesNotMatch') {
       throw new AppError(
-        errorMessage,
+        `Signature mismatch. Bucket "${bucketName}" might not be in region "${region}". Check AWS Console for actual region.`,
         500,
         'S3_UPLOAD_ERROR',
         { 
           originalError: error.message,
           errorName: error.name,
-          errorCode: error.code,
-          stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+          errorCode: error.code
         }
       );
     }
+    
+    throw new AppError(
+      `Failed to upload file to S3: ${error.message}`,
+      500,
+      'S3_UPLOAD_ERROR',
+      { 
+        originalError: error.message,
+        errorName: error.name,
+        errorCode: error.code
+      }
+    );
   }
 }
 

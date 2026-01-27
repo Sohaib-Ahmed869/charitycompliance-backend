@@ -54,7 +54,7 @@ router.put(
   '/profile-step',
   [
     body('stepKey')
-      .isIn(['documents_complete', 'responsible_people_complete', 'activities_complete', 'finances_complete', 'governance_complete', 'declaration_complete'])
+      .isIn(['documents_complete', 'responsible_people_complete', 'activities_complete', 'finances_complete', 'financial_controls_complete', 'governance_complete', 'declaration_complete'])
       .withMessage('Invalid step key'),
     body('completed')
       .isBoolean()

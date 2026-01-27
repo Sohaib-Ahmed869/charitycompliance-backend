@@ -74,6 +74,10 @@ const onboardingProgressSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  financial_controls_complete: {
+    type: Boolean,
+    default: false
+  },
   governance_complete: {
     type: Boolean,
     default: false

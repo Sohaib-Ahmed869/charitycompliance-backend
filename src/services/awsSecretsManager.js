@@ -83,11 +83,17 @@ export async function getS3Credentials() {
   // First, try to get from environment variables (for development/local)
   if (process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY) {
     logInfo('Using S3 credentials from environment variables');
+    // Trim whitespace from credentials to avoid signature issues
+    const accessKeyId = (process.env.AWS_ACCESS_KEY_ID || '').trim();
+    const secretAccessKey = (process.env.AWS_SECRET_ACCESS_KEY || '').trim();
+    const region = (process.env.AWS_REGION || 'us-east-1').trim();
+    const bucketName = (process.env.S3_BUCKET_NAME || process.env.AWS_S3_BUCKET || '').trim();
+    
     return {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-      region: process.env.AWS_REGION || 'us-east-1',
-      bucketName: process.env.S3_BUCKET_NAME
+      accessKeyId,
+      secretAccessKey,
+      region,
+      bucketName
     };
   }
 
@@ -97,21 +103,33 @@ export async function getS3Credentials() {
   try {
     const secret = await getSecret(secretName);
     
+    // Trim whitespace from credentials
+    const accessKeyId = (secret.AWS_ACCESS_KEY_ID || secret.accessKeyId || process.env.AWS_ACCESS_KEY_ID || '').trim();
+    const secretAccessKey = (secret.AWS_SECRET_ACCESS_KEY || secret.secretAccessKey || process.env.AWS_SECRET_ACCESS_KEY || '').trim();
+    const region = (secret.AWS_REGION || secret.region || process.env.AWS_REGION || 'us-east-1').trim();
+    const bucketName = (secret.S3_BUCKET_NAME || secret.bucketName || process.env.S3_BUCKET_NAME || process.env.AWS_S3_BUCKET || '').trim();
+    
     return {
-      accessKeyId: secret.AWS_ACCESS_KEY_ID || secret.accessKeyId,
-      secretAccessKey: secret.AWS_SECRET_ACCESS_KEY || secret.secretAccessKey,
-      region: secret.AWS_REGION || secret.region || process.env.AWS_REGION || 'us-east-1',
-      bucketName: secret.S3_BUCKET_NAME || secret.bucketName || process.env.S3_BUCKET_NAME
+      accessKeyId,
+      secretAccessKey,
+      region,
+      bucketName
     };
   } catch (error) {
     logError('Failed to get credentials from Secrets Manager, falling back to environment variables:', error);
     
     // Final fallback - return empty credentials (will fail with clear error)
+    // Trim whitespace from credentials
+    const accessKeyId = (process.env.AWS_ACCESS_KEY_ID || '').trim();
+    const secretAccessKey = (process.env.AWS_SECRET_ACCESS_KEY || '').trim();
+    const region = (process.env.AWS_REGION || 'us-east-1').trim();
+    const bucketName = (process.env.S3_BUCKET_NAME || process.env.AWS_S3_BUCKET || '').trim();
+    
     return {
-      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-      region: process.env.AWS_REGION || 'us-east-1',
-      bucketName: process.env.S3_BUCKET_NAME
+      accessKeyId,
+      secretAccessKey,
+      region,
+      bucketName
     };
   }
 }

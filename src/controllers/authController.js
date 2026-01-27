@@ -5,7 +5,7 @@
  */
 
 import authService from '../services/authService.js';
-import { asyncHandler } from '../middleware/errorHandler.js';
+import { asyncHandler, AppError } from '../middleware/errorHandler.js';
 
 export const register = asyncHandler(async (req, res) => {
   const result = await authService.register(req.body);
@@ -29,4 +29,25 @@ export const login = asyncHandler(async (req, res) => {
 export const refreshToken = asyncHandler(async (req, res) => {
   // TODO: Implement refresh token logic
   throw new AppError('Not implemented', 501, 'NOT_IMPLEMENTED');
+});
+
+export const verifyInvitationToken = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+  const result = await authService.verifyInvitationToken(token);
+
+  res.json({
+    success: true,
+    data: result
+  });
+});
+
+export const acceptInvitation = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+  const { password } = req.body;
+  const result = await authService.acceptInvitation(token, password);
+
+  res.json({
+    success: true,
+    data: result
+  });
 });

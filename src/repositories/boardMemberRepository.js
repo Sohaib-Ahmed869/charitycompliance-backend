@@ -68,4 +68,24 @@ export class BoardMemberRepository {
       is_active: true
     });
   }
+
+  async findByInvitationToken(token) {
+    return await this.BoardMember.findOne({
+      invitation_token: token,
+      is_active: true
+    });
+  }
+
+  async updateInvitationStatus(id, status, additionalData = {}) {
+    return await this.BoardMember.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          invitation_status: status,
+          ...additionalData
+        }
+      },
+      { new: true }
+    );
+  }
 }

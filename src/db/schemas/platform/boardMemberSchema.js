@@ -103,6 +103,31 @@ const boardMemberSchema = new mongoose.Schema({
     ref: 'User',
     sparse: true
   },
+  // Invitation fields
+  invitation_token: {
+    type: String,
+    sparse: true,
+    index: true
+  },
+  invitation_sent_at: {
+    type: Date
+  },
+  invitation_expires_at: {
+    type: Date
+  },
+  invitation_accepted_at: {
+    type: Date
+  },
+  invitation_status: {
+    type: String,
+    enum: ['pending', 'sent', 'accepted', 'expired', 'not_invited'],
+    default: 'not_invited'
+  },
+  // Whether this member should have system access
+  has_system_access: {
+    type: Boolean,
+    default: true
+  },
   is_active: {
     type: Boolean,
     default: true,
@@ -122,5 +147,6 @@ boardMemberSchema.plugin(mongooseEncryptPlugin);
 
 boardMemberSchema.index({ org_id: 1, is_active: 1 });
 boardMemberSchema.index({ email: 1 });
+boardMemberSchema.index({ invitation_token: 1 });
 
 export default boardMemberSchema;

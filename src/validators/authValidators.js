@@ -57,3 +57,17 @@ export const refreshTokenValidator = [
     .notEmpty()
     .withMessage('Refresh token is required')
 ];
+
+export const acceptInvitationValidator = [
+  body('password')
+    .isLength({ min: config.password.minLength })
+    .withMessage(`Password must be at least ${config.password.minLength} characters`)
+    .matches(/[A-Z]/)
+    .withMessage('Password must contain at least one uppercase letter')
+    .matches(/[a-z]/)
+    .withMessage('Password must contain at least one lowercase letter')
+    .matches(/[0-9]/)
+    .withMessage('Password must contain at least one number')
+    .matches(/[^A-Za-z0-9]/)
+    .withMessage('Password must contain at least one special character')
+];

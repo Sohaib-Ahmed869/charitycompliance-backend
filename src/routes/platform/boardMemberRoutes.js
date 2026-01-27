@@ -15,6 +15,9 @@ const router = express.Router();
 // All routes require authentication and tenant resolution
 router.use(authAndResolveTenant);
 
+// Get departments and roles reference data
+router.get('/departments-roles', boardMemberController.getDepartmentsAndRoles);
+
 // Get all board members
 router.get(
   '/',

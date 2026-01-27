@@ -7,6 +7,8 @@
 import { ApprovalWorkflowService } from '../services/approvalWorkflowService.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
+import { getTenantConnection } from '../db/connectionManager.js';
+import { ApprovalMatrixRepository } from '../repositories/approvalMatrixRepository.js';
 
 export const getPendingApprovals = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -130,5 +132,92 @@ export const getApprovalRequestById = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: approvalRequest
+  });
+});
+
+export const getApprovalMatrices = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+  const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const orgRepo = new OrganizationRepository(tenantDb);
+  
+  // Get the organization to get the actual ObjectId
+  const org = await orgRepo.findOne();
+  if (!org) {
+    return res.status(404).json({
+      success: false,
+      error: {
+        code: 'ORG_NOT_FOUND',
+        message: 'Organization not found'
+      }
+    });
+  }
+  
+  // Get all active approval matrices, prefer default one first
+  const defaultMatrix = await approvalMatrixRepo.findDefault(org._id);
+  const allMatrices = await approvalMatrixRepo.findByOrgId(org._id);
+  
+  // Sort: default first, then by creation date
+  const sortedMatrices = allMatrices.sort((a, b) => {
+    if (a.is_default && !b.is_default) return -1;
+    if (!a.is_default && b.is_default) return 1;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
+
+  // Populate position and department references
+  const Position = tenantDb.models.Position || tenantDb.model('Position', (await import('../db/schemas/platform/positionSchema.js')).default);
+  const Department = tenantDb.models.Department || tenantDb.model('Department', (await import('../db/schemas/platform/departmentSchema.js')).default);
+
+  const matricesWithDetails = await Promise.all(
+    sortedMatrices.map(async (matrix) => {
+      const rulesWithDetails = await Promise.all(
+        matrix.rules.map(async (rule) => {
+          const approvalSteps = await Promise.all(
+            rule.requires_approval_from.map(async (step) => {
+              const stepDetails = { ...step.toObject() };
+              
+              if (step.position_id) {
+                const position = await Position.findById(step.position_id);
+                if (position) {
+                  stepDetails.position = {
+                    _id: position._id,
+                    name: position.title, // Position schema uses 'title' field
+                    level: position.level
+                  };
+                }
+              }
+              
+              if (step.department_id) {
+                const department = await Department.findById(step.department_id);
+                if (department) {
+                  stepDetails.department = {
+                    _id: department._id,
+                    name: department.name
+                  };
+                }
+              }
+              
+              return stepDetails;
+            })
+          );
+          
+          return {
+            ...rule.toObject(),
+            requires_approval_from: approvalSteps
+          };
+        })
+      );
+      
+      return {
+        ...matrix.toObject(),
+        rules: rulesWithDetails
+      };
+    })
+  );
+
+  res.json({
+    success: true,
+    data: matricesWithDetails
   });
 });
