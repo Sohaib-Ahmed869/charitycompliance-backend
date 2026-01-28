@@ -7,7 +7,7 @@
 import bcrypt from 'bcryptjs';
 import { generateToken } from '../middleware/auth.js';
 import { generateOrgKey } from '../config/encryption.js';
-import { registerTenant } from '../db/router.js';
+import { registerTenant, lookupTenant } from '../db/router.js';
 import { getTenantConnection } from '../db/connectionManager.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import getRouterModels from '../db/models/routerModels.js';
@@ -26,25 +26,53 @@ const decryptUserFields = (userDoc, orgKey) => {
   const userObj = userDoc.toObject ? userDoc.toObject() : userDoc;
   const decrypted = { ...userObj };
 
-  if (orgKey && userObj.email && isEncrypted(userObj.email)) {
+  logInfo('decryptUserFields called', {
+    hasOrgKey: !!orgKey,
+    orgKeyLength: orgKey?.length,
+    hasEmail: !!userObj.email,
+    hasFirstName: !!userObj.first_name,
+    hasLastName: !!userObj.last_name
+  });
+
+  if (!orgKey) {
+    logWarn('No orgKey provided for decryption, returning raw user data');
+    return decrypted;
+  }
+
+  // Decrypt email
+  const emailIsEncrypted = userObj.email && isEncrypted(userObj.email);
+  logInfo('Email encryption check', { emailIsEncrypted, emailValue: userObj.email?.substring(0, 30) });
+
+  if (emailIsEncrypted) {
     try {
       decrypted.email = decrypt(userObj.email, orgKey);
+      logInfo('Successfully decrypted email', { decryptedEmail: decrypted.email });
     } catch (error) {
-      logError('Failed to decrypt email', error);
+      logError('Failed to decrypt email', error, { emailValue: userObj.email?.substring(0, 30) });
     }
   }
 
-  if (orgKey && userObj.first_name && isEncrypted(userObj.first_name)) {
+  // Decrypt first_name
+  const firstNameIsEncrypted = userObj.first_name && isEncrypted(userObj.first_name);
+  logInfo('FirstName encryption check', { firstNameIsEncrypted });
+
+  if (firstNameIsEncrypted) {
     try {
       decrypted.first_name = decrypt(userObj.first_name, orgKey);
+      logInfo('Successfully decrypted first_name');
     } catch (error) {
       logError('Failed to decrypt first_name', error);
     }
   }
 
-  if (orgKey && userObj.last_name && isEncrypted(userObj.last_name)) {
+  // Decrypt last_name
+  const lastNameIsEncrypted = userObj.last_name && isEncrypted(userObj.last_name);
+  logInfo('LastName encryption check', { lastNameIsEncrypted });
+
+  if (lastNameIsEncrypted) {
     try {
       decrypted.last_name = decrypt(userObj.last_name, orgKey);
+      logInfo('Successfully decrypted last_name');
     } catch (error) {
       logError('Failed to decrypt last_name', error);
     }
@@ -249,12 +277,68 @@ export class AuthService {
 
       // Re-fetch user to ensure decryption via post-find hook
       const decryptedUser = await userRepo.findById(user._id);
-      
-      // Get org key from tenant DB connection
-      const orgKey = tenantDb.config.orgKey;
-      
-      // Manually decrypt if plugin didn't work
-      const userObj = decryptUserFields(decryptedUser, orgKey);
+
+      // Get org key directly from tenant lookup (more reliable than tenantDb.config)
+      const tenantInfo = await lookupTenant(orgId);
+      const orgKey = tenantInfo.orgKey;
+
+      // Convert mongoose doc to plain object
+      const rawUser = decryptedUser.toObject ? decryptedUser.toObject() : decryptedUser;
+
+      // Debug logging
+      logInfo('Decryption debug', {
+        orgId,
+        hasOrgKey: !!orgKey,
+        orgKeyLength: orgKey?.length,
+        orgKeyPreview: orgKey ? orgKey.substring(0, 8) + '...' : 'null',
+        rawEmailIsEncrypted: isEncrypted(rawUser.email),
+        rawEmailPreview: rawUser.email?.substring(0, 30) + '...'
+      });
+
+      if (!orgKey) {
+        logError('Failed to get orgKey for decryption', null, { orgId });
+        throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
+      }
+
+      // Directly decrypt fields here (bypassing helper function for debugging)
+      const userObj = { ...rawUser };
+
+      // Decrypt email
+      if (rawUser.email && isEncrypted(rawUser.email)) {
+        try {
+          userObj.email = decrypt(rawUser.email, orgKey);
+          logInfo('Email decrypted successfully');
+        } catch (decryptError) {
+          logError('Email decryption failed', decryptError, {
+            emailPreview: rawUser.email?.substring(0, 30),
+            orgKeyLength: orgKey?.length
+          });
+          // Use original email from login request as fallback
+          userObj.email = email;
+        }
+      }
+
+      // Decrypt first_name
+      if (rawUser.first_name && isEncrypted(rawUser.first_name)) {
+        try {
+          userObj.first_name = decrypt(rawUser.first_name, orgKey);
+          logInfo('first_name decrypted successfully');
+        } catch (decryptError) {
+          logError('first_name decryption failed', decryptError);
+          userObj.first_name = '';
+        }
+      }
+
+      // Decrypt last_name
+      if (rawUser.last_name && isEncrypted(rawUser.last_name)) {
+        try {
+          userObj.last_name = decrypt(rawUser.last_name, orgKey);
+          logInfo('last_name decrypted successfully');
+        } catch (decryptError) {
+          logError('last_name decryption failed', decryptError);
+          userObj.last_name = '';
+        }
+      }
 
       // Normalize orgId to lowercase for consistency
       const normalizedOrgId = orgId.toLowerCase().trim();

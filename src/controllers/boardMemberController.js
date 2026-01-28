@@ -189,54 +189,55 @@ export const deleteBoardMember = asyncHandler(async (req, res) => {
 
 /**
  * Get departments and roles reference data
- * Returns the list of departments and their associated roles
+ * Returns the list of departments and their associated positions from the database
  */
 export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
-  // Reference data for departments and roles
-  const departments = [
-    {
-      id: 'leadership',
-      name: 'Leadership',
-      roles: [
-        { id: 'chair', name: 'Chair' },
-        { id: 'deputy_chair', name: 'Deputy Chair' },
-        { id: 'director', name: 'Director' }
-      ]
-    },
-    {
-      id: 'finance',
-      name: 'Finance',
-      roles: [
-        { id: 'treasurer', name: 'Treasurer' },
-        { id: 'finance_committee_member', name: 'Finance Committee Member' }
-      ]
-    },
-    {
-      id: 'governance',
-      name: 'Governance',
-      roles: [
-        { id: 'secretary', name: 'Secretary' },
-        { id: 'trustee', name: 'Trustee' },
-        { id: 'committee_member', name: 'Committee Member' }
-      ]
-    },
-    {
-      id: 'operations',
-      name: 'Operations',
-      roles: [
-        { id: 'operations_manager', name: 'Operations Manager' },
-        { id: 'program_manager', name: 'Program Manager' }
-      ]
-    },
-    {
-      id: 'volunteer',
-      name: 'Volunteer',
-      roles: []
-    }
-  ];
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+
+  // Import repositories
+  const { DepartmentRepository } = await import('../repositories/departmentRepository.js');
+  const { PositionRepository } = await import('../repositories/positionRepository.js');
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const departmentRepo = new DepartmentRepository(tenantDb);
+  const positionRepo = new PositionRepository(tenantDb);
+
+  // Get organization
+  const org = await orgRepo.findOne();
+  if (!org) {
+    throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+  }
+
+  // Get all active departments
+  const departments = await departmentRepo.findByOrgId(org._id);
+
+  // Get all active positions
+  const positions = await positionRepo.findByOrgId(org._id);
+
+  // Group positions by department
+  const departmentsWithRoles = departments.map(dept => {
+    const deptPositions = positions.filter(
+      pos => pos.department_id?.toString() === dept._id.toString()
+    );
+
+    return {
+      id: dept._id.toString(),
+      name: dept.name,
+      code: dept.code,
+      description: dept.description,
+      roles: deptPositions.map(pos => ({
+        id: pos._id.toString(),
+        name: pos.title,
+        level: pos.level,
+        isManagement: pos.is_management
+      }))
+    };
+  });
 
   res.json({
     success: true,
-    data: departments
+    data: departmentsWithRoles
   });
 });
