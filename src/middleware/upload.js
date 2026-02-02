@@ -61,6 +61,51 @@ const upload = multer({
  */
 export const uploadSingle = upload.single('file');
 
+// Training resources: PDF, images, video
+const trainingFileFilter = (req, file, cb) => {
+  const allowedMimeTypes = [
+    'application/pdf',
+    'image/jpeg',
+    'image/jpg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+    'video/mp4',
+    'video/webm',
+    'video/quicktime',
+    'video/x-msvideo'
+  ];
+  const allowedExtensions = ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp', '.mp4', '.webm', '.mov', '.avi'];
+  if (allowedMimeTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    const fileExtension = '.' + file.originalname.split('.').pop().toLowerCase();
+    if (allowedExtensions.includes(fileExtension)) {
+      cb(null, true);
+    } else {
+      cb(new AppError(
+        `File type not allowed. Allowed: PDF, images, video (${allowedExtensions.join(', ')})`,
+        400,
+        'INVALID_FILE_TYPE'
+      ), false);
+    }
+  }
+};
+
+const uploadTraining = multer({
+  storage: storage,
+  fileFilter: trainingFileFilter,
+  limits: {
+    fileSize: 100 * 1024 * 1024, // 100MB for video
+    files: 1
+  }
+});
+
+/**
+ * Single file upload for training resources (PDF, image, video)
+ */
+export const uploadTrainingSingle = uploadTraining.single('file');
+
 /**
  * Middleware for multiple file uploads
  * Attaches files to req.files
@@ -78,6 +123,51 @@ export const handleUploadError = (err, req, res, next) => {
         error: {
           code: 'FILE_TOO_LARGE',
           message: 'File size exceeds the maximum limit of 10MB'
+        }
+      });
+    }
+    if (err.code === 'LIMIT_FILE_COUNT') {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'TOO_MANY_FILES',
+          message: 'Too many files uploaded. Maximum is 5 files.'
+        }
+      });
+    }
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'UPLOAD_ERROR',
+        message: err.message
+      }
+    });
+  }
+
+  if (err) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: err.code || 'UPLOAD_ERROR',
+        message: err.message || 'File upload failed'
+      }
+    });
+  }
+
+  next();
+};
+
+/**
+ * Error handler for training uploads (100MB limit)
+ */
+export const handleTrainingUploadError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'FILE_TOO_LARGE',
+          message: 'File size exceeds the maximum limit of 100MB'
         }
       });
     }

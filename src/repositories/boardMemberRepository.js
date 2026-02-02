@@ -69,6 +69,14 @@ export class BoardMemberRepository {
     });
   }
 
+  async findByUserId(userId, orgId) {
+    return await this.BoardMember.findOne({
+      user_id: userId,
+      org_id: orgId,
+      is_active: true
+    });
+  }
+
   async findByInvitationToken(token) {
     return await this.BoardMember.findOne({
       invitation_token: token,

@@ -76,6 +76,11 @@ const positionSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  /** Permissions granted to users in this position (e.g. training:create, training:assign). Org-defined. */
+  granted_permissions: {
+    type: [String],
+    default: []
+  },
   is_active: {
     type: Boolean,
     default: true

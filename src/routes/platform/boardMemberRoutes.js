@@ -18,6 +18,40 @@ router.use(authAndResolveTenant);
 // Get departments and roles reference data
 router.get('/departments-roles', boardMemberController.getDepartmentsAndRoles);
 
+// Create department at runtime (from Add Responsible Person)
+router.post(
+  '/departments',
+  [
+    body('name').trim().notEmpty().withMessage('Department name is required'),
+    body('code').optional().trim()
+  ],
+  validate,
+  boardMemberController.createDepartment
+);
+
+// Create position/role at runtime (from Add Responsible Person)
+router.post(
+  '/positions',
+  [
+    body('title').trim().notEmpty().withMessage('Position/role title is required'),
+    body('department_id').isMongoId().withMessage('Valid department is required'),
+    body('granted_permissions').optional().isArray().withMessage('granted_permissions must be an array')
+  ],
+  validate,
+  boardMemberController.createPosition
+);
+
+// Update position (e.g. set granted_permissions for training, etc.)
+router.put(
+  '/positions/:positionId',
+  [
+    param('positionId').isMongoId().withMessage('Valid position ID is required'),
+    body('granted_permissions').optional().isArray().withMessage('granted_permissions must be an array')
+  ],
+  validate,
+  boardMemberController.updatePosition
+);
+
 // Get all board members
 router.get(
   '/',
@@ -43,7 +77,7 @@ router.get(
   boardMemberController.getBoardMemberById
 );
 
-// Create board member
+// Create responsible person (stored in board_members collection)
 router.post(
   '/',
   [
@@ -57,13 +91,50 @@ router.post(
       .withMessage('Family name is required'),
     body('date_of_birth')
       .isISO8601()
-      .withMessage('Valid date of birth is required'),
+      .withMessage('Valid date of birth is required')
+      .custom((value) => {
+        const dob = new Date(value);
+        const today = new Date();
+        if (dob > today) {
+          throw new Error('Date of birth cannot be in the future');
+        }
+        return true;
+      }),
     body('position')
-      .isIn(['Chair', 'Deputy Chair', 'Treasurer', 'Secretary', 'Director', 'Trustee', 'Committee Member', 'Public Officer', 'Other'])
-      .withMessage('Invalid position'),
+      .trim()
+      .notEmpty()
+      .withMessage('Position is required'),
     body('appointment_date')
       .isISO8601()
-      .withMessage('Valid appointment date is required'),
+      .withMessage('Valid appointment date is required')
+      .custom((value, { req }) => {
+        const appointment = new Date(value);
+        const today = new Date();
+        if (appointment > today) {
+          throw new Error('Appointment date cannot be in the future');
+        }
+        if (req.body.date_of_birth) {
+          const dob = new Date(req.body.date_of_birth);
+          if (appointment <= dob) {
+            throw new Error('Appointment date must be after date of birth');
+          }
+        }
+        return true;
+      }),
+    body('term_end_date')
+      .optional()
+      .isISO8601()
+      .withMessage('Valid term end date is required')
+      .custom((value, { req }) => {
+        const termEnd = new Date(value);
+        if (req.body.appointment_date) {
+          const appointment = new Date(req.body.appointment_date);
+          if (termEnd <= appointment) {
+            throw new Error('Term end date must be after appointment date');
+          }
+        }
+        return true;
+      }),
     body('email')
       .isEmail()
       .withMessage('Valid email is required'),

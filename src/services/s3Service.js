@@ -99,9 +99,7 @@ async function getS3Client() {
         );
       }
       
-      // Log credential info (without exposing secrets)
-      logInfo(`S3 credentials loaded - Access Key: ${accessKeyId.substring(0, 8)}...${accessKeyId.substring(accessKeyId.length - 4)}, Bucket: ${bucketName}, Configured Region: ${region}`);
-      
+  
       // Try to detect actual bucket region to avoid signature mismatches
       let actualRegion = region;
       try {
@@ -343,6 +341,33 @@ export async function getFileUrl(s3Key, expiresIn = 3600) {
     logError('Error generating file URL:', error);
     throw new AppError('Failed to generate file URL', 500, 'S3_URL_ERROR');
   }
+}
+
+/**
+ * Get file stream from S3 (for in-app PDF streaming).
+ * Supports optional Range for 206 Partial Content (reduces transfer for large PDFs).
+ * @param {string} s3Key - S3 object key
+ * @param {string} [rangeHeader] - Optional Range header (e.g. "bytes=0-65535")
+ * @returns {Promise<{ Body: import('stream').Readable, ContentType?: string, ContentLength?: number, ContentRange?: string, IsPartial?: boolean }>}
+ */
+export async function getFileStream(s3Key, rangeHeader = null) {
+  const { client, config } = await getS3Client();
+  if (!config.bucketName) {
+    throw new AppError('S3 bucket name not configured', 500, 'S3_CONFIG_ERROR');
+  }
+  const params = { Bucket: config.bucketName, Key: s3Key };
+  if (rangeHeader && /^bytes=\d*-\d*$/.test(rangeHeader.trim())) {
+    params.Range = rangeHeader.trim();
+  }
+  const command = new GetObjectCommand(params);
+  const response = await client.send(command);
+  return {
+    Body: response.Body,
+    ContentType: response.ContentType,
+    ContentLength: response.ContentLength,
+    ContentRange: response.ContentRange ?? undefined,
+    IsPartial: response.ContentRange != null
+  };
 }
 
 /**

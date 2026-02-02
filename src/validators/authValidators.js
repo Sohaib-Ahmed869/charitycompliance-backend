@@ -27,8 +27,8 @@ export const registerValidator = [
   
   body('organizationName')
     .trim()
-    .isLength({ min: 2, max: 100 })
-    .withMessage('Organization name must be between 2 and 100 characters'),
+    .isLength({ min: 2, max: 80 })
+    .withMessage('Organisation name must be between 2 and 80 characters (used for your account identifier)'),
   
   body('firstName')
     .trim()

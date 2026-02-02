@@ -36,20 +36,19 @@ const boardMemberSchema = new mongoose.Schema({
     required: true,
     encrypted: true
   },
+  // Governance/responsible person role title (not limited to board positions)
   position: {
     type: String,
     required: true,
-    enum: [
-      'Chair',
-      'Deputy Chair',
-      'Treasurer',
-      'Secretary',
-      'Director',
-      'Trustee',
-      'Committee Member',
-      'Public Officer',
-      'Other'
-    ]
+    trim: true,
+    maxlength: 100
+  },
+  /** Link to Position document so we can load granted_permissions at login */
+  position_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Position',
+    default: null,
+    sparse: true
   },
   custom_position_title: {
     type: String,
@@ -137,6 +136,12 @@ const boardMemberSchema = new mongoose.Schema({
     type: String,
     enum: ['active', 'resigned', 'removed'],
     default: 'active'
+  },
+  /** S3 key for profile/avatar image (shown in header and user lists) */
+  profile_picture_key: {
+    type: String,
+    default: null,
+    trim: true
   }
 }, {
   timestamps: true,

@@ -82,6 +82,8 @@ import documentRoutes from './routes/platform/documentRoutes.js';
 import activityRoutes from './routes/platform/activityRoutes.js';
 import financialControlsRoutes from './routes/platform/financialControlsRoutes.js';
 import governanceStructureRoutes from './routes/platform/governanceStructureRoutes.js';
+import trainingRoutes from './routes/platform/trainingRoutes.js';
+import meRoutes from './routes/platform/meRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -92,6 +94,8 @@ app.use('/api/v1/platform/documents', documentRoutes);
 app.use('/api/v1/platform/activities', activityRoutes);
 app.use('/api/v1/platform/financial-controls', financialControlsRoutes);
 app.use('/api/v1/platform/governance-structure', governanceStructureRoutes);
+app.use('/api/v1/platform/training', trainingRoutes);
+app.use('/api/v1/platform/me', meRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

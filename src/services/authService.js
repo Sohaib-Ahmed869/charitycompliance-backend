@@ -20,6 +20,33 @@ const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
 /**
+ * Load permissions granted by the user's position (if they are a board member with position_id).
+ * @param {Object} tenantDb - Tenant DB connection
+ * @param {string} userId - User _id
+ * @param {string} orgId - Organization _id
+ * @returns {Promise<string[]>} granted_permissions from Position, or []
+ */
+const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => {
+  try {
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const { PositionRepository } = await import('../repositories/positionRepository.js');
+    const boardMemberRepo = new BoardMemberRepository(tenantDb);
+    const positionRepo = new PositionRepository(tenantDb);
+
+    const boardMember = await boardMemberRepo.findByUserId(userId, orgId);
+    if (!boardMember?.position_id) return [];
+
+    const position = await positionRepo.findById(boardMember.position_id);
+    if (!position?.granted_permissions?.length) return [];
+
+    return position.granted_permissions.filter(p => typeof p === 'string' && p.trim());
+  } catch (err) {
+    logError('Failed to load position permissions for user', err, { userId, orgId });
+    return [];
+  }
+};
+
+/**
  * Helper to decrypt user fields manually if plugin didn't work
  */
 const decryptUserFields = (userDoc, orgKey) => {
@@ -87,17 +114,40 @@ export class AuthService {
 
     try {
       const routerModels = getRouterModels();
-      
-      // Check if email already exists (check all tenant DBs via Router DB)
-      // For now, we'll create orgId from organization name
+
+      // Validate organisation name produces a valid identifier (used for DB name; max 50 chars)
       const orgId = this.generateOrgId(organizationName);
-      
-      logInfo('Starting registration', { orgId, organizationName });
-      
-      // Check if tenant already exists (using normalized/lowercase orgId)
+      if (!orgId || orgId.length === 0) {
+        throw new AppError(
+          'Organisation name must contain at least one letter or number.',
+          400,
+          'INVALID_ORG_NAME'
+        );
+      }
+
+      logInfo('Starting registration', { orgId, organizationName, organizationNameLength: organizationName?.length });
+
+      // Check if this email is already registered in any tenant (one email = one account globally)
+      const tenants = await routerModels.Tenant.find({ status: 'active' });
+      for (const tenant of tenants) {
+        try {
+          const tenantDb = await getTenantConnection(tenant.orgId);
+          const userRepo = new UserRepository(tenantDb);
+          const existingUser = await userRepo.findByEmail(email);
+          if (existingUser) {
+            throw new AppError('This email is already registered. Please log in or use a different email.', 409, 'EMAIL_EXISTS');
+          }
+        } catch (err) {
+          if (err instanceof AppError) throw err;
+          logError('Failed to check email in tenant during registration', err, { orgId: tenant.orgId });
+          continue;
+        }
+      }
+
+      // Check if tenant (organisation) already exists by name (same orgId)
       const existingTenant = await routerModels.Tenant.findOne({ orgId: orgId.toLowerCase() });
       if (existingTenant && existingTenant.status === 'active') {
-        throw new AppError('Organization already exists', 409, 'ORG_EXISTS');
+        throw new AppError('An organisation with this name already exists.', 409, 'ORG_EXISTS');
       }
 
       // Generate organization encryption key
@@ -149,12 +199,14 @@ export class AuthService {
       const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
 
       // Create user - email_hash will be set by mongoose plugin during save
+      // This is the initial organisation owner, so mark as such
       const user = await userRepo.create({
         email,
         password_hash,
         first_name: firstName,
         last_name: lastName,
-        status: 'active'
+        status: 'active',
+        is_org_owner: true
       });
       
       // Verify email_hash was created
@@ -192,7 +244,9 @@ export class AuthService {
           id: userObj._id.toString(),
           email: userObj.email || email,
           firstName: userObj.first_name || firstName,
-          lastName: userObj.last_name || lastName
+          lastName: userObj.last_name || lastName,
+          role: 'admin',
+          permissions: ['*:*']
         },
         token,
         orgId: normalizedOrgId
@@ -201,8 +255,25 @@ export class AuthService {
       if (error instanceof AppError) {
         throw error;
       }
-      logError('Registration failed', error, { email, organizationName });
-      throw new AppError('Registration failed', 500, 'REGISTRATION_ERROR');
+      const orgId = this.generateOrgId(organizationName);
+      logError('Registration failed', error, {
+        email,
+        organizationName: organizationName?.substring(0, 50),
+        organizationNameLength: organizationName?.length,
+        orgId: orgId || '(empty)',
+        orgIdLength: orgId?.length ?? 0,
+        cause: error?.message
+      });
+      const details =
+        process.env.NODE_ENV === 'development' && error?.message
+          ? { cause: error.message }
+          : undefined;
+      throw new AppError(
+        'Registration failed. Please check organisation name (2–80 characters, must include a letter or number) and try again.',
+        500,
+        'REGISTRATION_ERROR',
+        details
+      );
     }
   }
 
@@ -343,24 +414,78 @@ export class AuthService {
       // Normalize orgId to lowercase for consistency
       const normalizedOrgId = orgId.toLowerCase().trim();
 
-      // Generate token
+      const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+      const orgRepo = new OrganizationRepository(tenantDb);
+      const org = await orgRepo.findOne();
+
+      // Load permissions from user's position (if they are a board member with position_id)
+      const positionPermissions = org ? await getPositionPermissionsForUser(tenantDb, userObj._id, org._id) : [];
+
+      // Determine roles & permissions:
+      // - Org owner (is_org_owner) => full admin, *:*
+      // - Board/committee members with a position => board_member + their granted permissions
+      // - Other users (no position) => basic board_member with read/write own only
+      let baseRoles;
+      let basePermissions;
+
+      if (userObj.is_org_owner) {
+        baseRoles = ['admin'];
+        basePermissions = ['*:*'];
+      } else if (positionPermissions.length > 0) {
+        baseRoles = ['board_member'];
+        basePermissions = ['read:own', 'write:own', ...positionPermissions];
+      } else {
+        baseRoles = ['board_member'];
+        basePermissions = ['read:own', 'write:own'];
+      }
+
       const token = generateToken({
         userId: userObj._id.toString(),
         orgId: normalizedOrgId,
         email: userObj.email || email,
-        roles: ['admin'], // TODO: Get from user_roles
-        permissions: ['*:*'] // TODO: Get from roles
+        roles: baseRoles,
+        permissions: basePermissions
       });
 
       logInfo('User logged in', { userId: userObj._id, orgId: normalizedOrgId });
 
+      const responseUser = {
+        id: userObj._id.toString(),
+        email: userObj.email || email,
+        firstName: userObj.first_name || '',
+        lastName: userObj.last_name || '',
+        role: baseRoles[0] || 'board_member',
+        permissions: basePermissions
+      };
+
+      const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+      const boardMemberRepo = new BoardMemberRepository(tenantDb);
+      const boardMember = await boardMemberRepo.findByUserId(userObj._id, org._id);
+      if (boardMember) {
+        responseUser.position = boardMember.custom_position_title || boardMember.position || null;
+        if (boardMember.profile_picture_key) {
+          try {
+            const { getFileUrl } = await import('../services/s3Service.js');
+            responseUser.profile_picture_url = await getFileUrl(boardMember.profile_picture_key, 604800);
+          } catch (err) {
+            logError('Failed to resolve profile picture URL', err, { userId: userObj._id });
+          }
+        }
+      } else if (userObj.is_org_owner) {
+        responseUser.position = 'Admin';
+        const userProfileKey = rawUser.profile_picture_key;
+        if (userProfileKey) {
+          try {
+            const { getFileUrl } = await import('../services/s3Service.js');
+            responseUser.profile_picture_url = await getFileUrl(userProfileKey, 604800);
+          } catch (err) {
+            logError('Failed to resolve profile picture URL for org owner', err, { userId: userObj._id });
+          }
+        }
+      }
+
       return {
-        user: {
-          id: userObj._id.toString(),
-          email: userObj.email || email,
-          firstName: userObj.first_name || '',
-          lastName: userObj.last_name || ''
-        },
+        user: responseUser,
         token,
         orgId: normalizedOrgId
       };
@@ -480,24 +605,35 @@ export class AuthService {
         });
 
         const normalizedOrgId = tokenInfo.orgId.toLowerCase().trim();
+        const positionPermissions = await getPositionPermissionsForUser(tenantDb, existingUser._id, boardMember.org_id);
+        const permissions = ['read:own', 'write:own', ...positionPermissions];
+
         const token = generateToken({
           userId: existingUser._id.toString(),
           orgId: normalizedOrgId,
           email: boardMember.email,
           roles: ['board_member'],
-          permissions: ['read:own', 'write:own']
+          permissions
         });
 
-        return {
-          user: {
-            id: existingUser._id.toString(),
-            email: boardMember.email,
-            firstName: boardMember.given_names,
-            lastName: boardMember.family_name
-          },
-          token,
-          orgId: normalizedOrgId
+        const user = {
+          id: existingUser._id.toString(),
+          email: boardMember.email,
+          firstName: boardMember.given_names,
+          lastName: boardMember.family_name,
+          role: 'board_member',
+          permissions
         };
+        user.position = boardMember.custom_position_title || boardMember.position || null;
+        if (boardMember.profile_picture_key) {
+          try {
+            const { getFileUrl } = await import('../services/s3Service.js');
+            user.profile_picture_url = await getFileUrl(boardMember.profile_picture_key, 604800);
+          } catch (err) {
+            logError('Failed to resolve profile picture URL', err, { userId: existingUser._id });
+          }
+        }
+        return { user, token, orgId: normalizedOrgId };
       }
 
       // Create new user
@@ -526,24 +662,35 @@ export class AuthService {
       });
 
       const normalizedOrgId = tokenInfo.orgId.toLowerCase().trim();
+      const positionPermissions = await getPositionPermissionsForUser(tenantDb, newUser._id, boardMember.org_id);
+      const permissions = ['read:own', 'write:own', ...positionPermissions];
+
       const authToken = generateToken({
         userId: newUser._id.toString(),
         orgId: normalizedOrgId,
         email: boardMember.email,
         roles: ['board_member'],
-        permissions: ['read:own', 'write:own']
+        permissions
       });
 
-      return {
-        user: {
-          id: newUser._id.toString(),
-          email: boardMember.email,
-          firstName: boardMember.given_names,
-          lastName: boardMember.family_name
-        },
-        token: authToken,
-        orgId: normalizedOrgId
+      const user = {
+        id: newUser._id.toString(),
+        email: boardMember.email,
+        firstName: boardMember.given_names,
+        lastName: boardMember.family_name,
+        role: 'board_member',
+        permissions
       };
+      user.position = boardMember.custom_position_title || boardMember.position || null;
+      if (boardMember.profile_picture_key) {
+        try {
+          const { getFileUrl } = await import('../services/s3Service.js');
+          user.profile_picture_url = await getFileUrl(boardMember.profile_picture_key, 604800);
+        } catch (err) {
+          logError('Failed to resolve profile picture URL', err, { userId: newUser._id });
+        }
+      }
+      return { user, token: authToken, orgId: normalizedOrgId };
     } catch (error) {
       if (error instanceof AppError) {
         throw error;

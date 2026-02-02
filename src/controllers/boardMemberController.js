@@ -12,6 +12,7 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
 import { AppError } from '../middleware/errorHandler.js';
 import emailService from '../services/emailService.js';
+import { getFileUrl } from '../services/s3Service.js';
 import { logInfo, logError } from '../utils/logger.js';
 
 export const getBoardMembers = asyncHandler(async (req, res) => {
@@ -19,7 +20,7 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
   const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
-  
+
   const org = await orgRepo.findOne();
   if (!org) {
     throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
@@ -28,9 +29,23 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
   const includeInactive = req.query.includeInactive === 'true';
   const boardMembers = await boardMemberRepo.findByOrgId(org._id, includeInactive);
 
+  const list = await Promise.all(
+    boardMembers.map(async (bm) => {
+      const obj = bm.toObject ? bm.toObject() : { ...bm };
+      if (bm.profile_picture_key) {
+        try {
+          obj.profile_picture_url = await getFileUrl(bm.profile_picture_key, 604800);
+        } catch (err) {
+          logError('Failed to resolve profile picture URL for list', err, { boardMemberId: bm._id });
+        }
+      }
+      return obj;
+    })
+  );
+
   res.json({
     success: true,
-    data: boardMembers
+    data: list
   });
 });
 
@@ -231,7 +246,8 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
         id: pos._id.toString(),
         name: pos.title,
         level: pos.level,
-        isManagement: pos.is_management
+        isManagement: pos.is_management,
+        granted_permissions: pos.granted_permissions || []
       }))
     };
   });
@@ -239,5 +255,155 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: departmentsWithRoles
+  });
+});
+
+/**
+ * Create a department at runtime (from Add Responsible Person form)
+ */
+export const createDepartment = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+  const { DepartmentRepository } = await import('../repositories/departmentRepository.js');
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const departmentRepo = new DepartmentRepository(tenantDb);
+
+  const org = await orgRepo.findOne();
+  if (!org) {
+    throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+  }
+
+  const { name, code } = req.body;
+  if (!name || !String(name).trim()) {
+    throw new AppError('Department name is required', 400, 'VALIDATION_ERROR');
+  }
+
+  const trimmedName = String(name).trim();
+  const existing = await departmentRepo.findByOrgId(org._id);
+  if (existing.some(d => d.name.toLowerCase() === trimmedName.toLowerCase())) {
+    throw new AppError('A department with this name already exists', 400, 'DUPLICATE_DEPARTMENT');
+  }
+
+  const codeValue = code && String(code).trim() ? String(code).trim().toUpperCase().substring(0, 20) : trimmedName.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, '') || 'D';
+  const department = await departmentRepo.create({
+    org_id: org._id,
+    name: trimmedName,
+    code: codeValue,
+    is_active: true
+  });
+
+  res.status(201).json({
+    success: true,
+    data: {
+      id: department._id.toString(),
+      name: department.name,
+      code: department.code
+    }
+  });
+});
+
+/**
+ * Create a position/role at runtime (from Add Responsible Person form)
+ */
+export const createPosition = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+  const { PositionRepository } = await import('../repositories/positionRepository.js');
+  const { DepartmentRepository } = await import('../repositories/departmentRepository.js');
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const departmentRepo = new DepartmentRepository(tenantDb);
+  const positionRepo = new PositionRepository(tenantDb);
+
+  const org = await orgRepo.findOne();
+  if (!org) {
+    throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+  }
+
+  const { title, department_id } = req.body;
+  if (!title || !String(title).trim()) {
+    throw new AppError('Position/role title is required', 400, 'VALIDATION_ERROR');
+  }
+  if (!department_id) {
+    throw new AppError('Department is required to create a role', 400, 'VALIDATION_ERROR');
+  }
+
+  const trimmedTitle = String(title).trim();
+  const department = await departmentRepo.findById(department_id);
+  if (!department || department.org_id.toString() !== org._id.toString()) {
+    throw new AppError('Department not found', 404, 'DEPARTMENT_NOT_FOUND');
+  }
+
+  const existingPositions = await positionRepo.findByDepartment(org._id, department_id);
+  if (existingPositions.some(p => p.title.toLowerCase() === trimmedTitle.toLowerCase())) {
+    throw new AppError('A role with this name already exists in this department', 400, 'DUPLICATE_POSITION');
+  }
+
+  const granted_permissions = Array.isArray(req.body.granted_permissions)
+    ? req.body.granted_permissions.filter(p => typeof p === 'string' && p.trim())
+    : [];
+
+  const position = await positionRepo.create({
+    org_id: org._id,
+    title: trimmedTitle,
+    department_id: department._id,
+    level: 1,
+    is_active: true,
+    granted_permissions
+  });
+
+  res.status(201).json({
+    success: true,
+    data: {
+      id: position._id.toString(),
+      name: position.title,
+      title: position.title,
+      department_id: position.department_id?.toString(),
+      granted_permissions: position.granted_permissions || []
+    }
+  });
+});
+
+/**
+ * Update a position (e.g. set granted_permissions so this position can create/assign training)
+ */
+export const updatePosition = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { positionId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+  const { PositionRepository } = await import('../repositories/positionRepository.js');
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const positionRepo = new PositionRepository(tenantDb);
+
+  const org = await orgRepo.findOne();
+  if (!org) {
+    throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+  }
+
+  const position = await positionRepo.findById(positionId);
+  if (!position || position.org_id.toString() !== org._id.toString()) {
+    throw new AppError('Position not found', 404, 'POSITION_NOT_FOUND');
+  }
+
+  const granted_permissions = Array.isArray(req.body.granted_permissions)
+    ? req.body.granted_permissions.filter(p => typeof p === 'string' && p.trim())
+    : position.granted_permissions || [];
+
+  const updated = await positionRepo.update(positionId, { granted_permissions });
+
+  res.json({
+    success: true,
+    data: {
+      id: updated._id.toString(),
+      name: updated.title,
+      title: updated.title,
+      department_id: updated.department_id?.toString(),
+      granted_permissions: updated.granted_permissions || []
+    }
   });
 });

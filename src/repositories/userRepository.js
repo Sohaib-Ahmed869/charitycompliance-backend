@@ -63,6 +63,17 @@ const createUserSchema = () => {
         type: String,
         enum: ['active', 'inactive', 'suspended'],
         default: 'active'
+      },
+      // Marks the original organisation owner (first registered user) – used to grant admin/*:* safely
+      is_org_owner: {
+        type: Boolean,
+        default: false
+      },
+      // S3 key for profile/avatar (used when org owner has no BoardMember record)
+      profile_picture_key: {
+        type: String,
+        default: null,
+        trim: true
       }
     }, {
       timestamps: true
