@@ -5,6 +5,7 @@
  */
 
 import { getTenantConnection } from '../db/connectionManager.js';
+import { getMasterKeyHex } from '../config/encryption.js';
 import { TrainingRepository } from '../repositories/trainingRepository.js';
 import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
@@ -14,6 +15,7 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
 import { AppError } from '../middleware/errorHandler.js';
 import { uploadToS3, getFileUrl, getFileStream } from '../services/s3Service.js';
+import { decryptBoardMemberFields } from '../utils/decryptBoardMember.js';
 
 const getOrgId = (req) => req.orgId;
 
@@ -422,13 +424,23 @@ export const deleteResource = asyncHandler(async (req, res) => {
 
 // --- Register list: people with training stats ---
 export const getRegisterList = asyncHandler(async (req, res) => {
-  const { trainingRepo, boardMemberRepo, positionRepo, org } = await getTenantAndRepos(req);
+  const { trainingRepo, boardMemberRepo, positionRepo, org, tenantDb } = await getTenantAndRepos(req);
   const category = req.query.category; // 'staff' | 'volunteer' | 'board_member' | omit = all
   const search = req.query.search; // name or email
   let boardMembers = await boardMemberRepo.findByOrgId(org._id, false);
+  const keyHex = getMasterKeyHex();
+  if (!keyHex) {
+    throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
+  }
+  const decryptedBMs = boardMembers.map((bm) => {
+    const obj = bm.toObject ? bm.toObject() : { ...bm };
+    decryptBoardMemberFields(obj, keyHex);
+    return obj;
+  });
+  let filtered = decryptedBMs;
   if (category) {
     const cat = category.toLowerCase();
-    boardMembers = boardMembers.filter((bm) => {
+    filtered = filtered.filter((bm) => {
       const pos = (bm.position || '').toLowerCase();
       if (cat === 'staff') return pos.includes('staff') || pos.includes('manager') || pos.includes('officer') || pos.includes('coordinator') || !pos.includes('volunteer') && !pos.includes('board');
       if (cat === 'volunteer') return pos.includes('volunteer');
@@ -438,7 +450,7 @@ export const getRegisterList = asyncHandler(async (req, res) => {
   }
   if (search && search.trim()) {
     const q = search.trim().toLowerCase();
-    boardMembers = boardMembers.filter(
+    filtered = filtered.filter(
       (bm) =>
         (bm.given_names && bm.given_names.toLowerCase().includes(q)) ||
         (bm.family_name && bm.family_name.toLowerCase().includes(q)) ||
@@ -453,7 +465,7 @@ export const getRegisterList = asyncHandler(async (req, res) => {
     if (t) positionIdByTitle[t] = pos._id.toString();
   }
   const result = await Promise.all(
-    boardMembers.map(async (bm) => {
+    filtered.map(async (bm) => {
       const bmPositionId = (bm.position_id?.toString?.()) ||
         (positionIdByTitle[(bm.position || bm.custom_position_title || '').trim().toLowerCase()]);
       // Required programs = published programs assigned to this person's position
@@ -679,12 +691,18 @@ export const updateResourceProgress = asyncHandler(async (req, res) => {
 
 // --- One person's training & competency record ---
 export const getPersonTrainingRecord = asyncHandler(async (req, res) => {
-  const { trainingRepo, boardMemberRepo, org } = await getTenantAndRepos(req);
+  const { trainingRepo, boardMemberRepo, org, tenantDb } = await getTenantAndRepos(req);
   const { boardMemberId } = req.params;
   const boardMember = await boardMemberRepo.findById(boardMemberId);
   if (!boardMember || boardMember.org_id.toString() !== org._id.toString()) {
     throw new AppError('Person not found', 404, 'NOT_FOUND');
   }
+  const bmObj = boardMember.toObject ? boardMember.toObject() : { ...boardMember };
+  const keyHex = getMasterKeyHex();
+  if (!keyHex) {
+    throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
+  }
+  decryptBoardMemberFields(bmObj, keyHex);
   const enrollments = await trainingRepo.findEnrollmentsByPerson(boardMemberId);
   const programs = await trainingRepo.findProgramsByOrg(org._id, { includeDraft: false });
   const programIds = new Set(programs.map((p) => p._id.toString()));
@@ -721,19 +739,19 @@ export const getPersonTrainingRecord = asyncHandler(async (req, res) => {
       })
   );
   const categoryLabel =
-    (boardMember.position || '').toLowerCase().includes('volunteer')
+    (bmObj.position || '').toLowerCase().includes('volunteer')
       ? 'Volunteer'
-      : (boardMember.position || '').toLowerCase().match(/board|director|trustee/)
+      : (bmObj.position || '').toLowerCase().match(/board|director|trustee/)
         ? 'Board Member'
         : 'Staff';
   res.json({
     success: true,
     data: {
       person: {
-        _id: boardMember._id,
-        name: [boardMember.given_names, boardMember.family_name].filter(Boolean).join(' '),
-        email: boardMember.email,
-        role: boardMember.position || boardMember.custom_position_title || '—',
+        _id: bmObj._id,
+        name: [bmObj.given_names, bmObj.family_name].filter(Boolean).join(' '),
+        email: bmObj.email,
+        role: bmObj.position || bmObj.custom_position_title || '—',
         category: categoryLabel
       },
       trainingStatus: records.length,

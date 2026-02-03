@@ -8,7 +8,7 @@
  * Features:
  * - Lazy connection: Only connects when needed
  * - LRU cache: Closes idle connections after timeout
- * - Context attachment: Attaches orgKey to connection for encryption plugin
+ * - Field encryption uses master key globally (no per-connection key)
  */
 
 import mongoose from 'mongoose';
@@ -33,9 +33,8 @@ const idleTimers = new Map();
  * 1. Lookup tenant in Router DB (cached)
  * 2. Check if Pod connection exists in cache
  * 3. If not, create new connection to Pod cluster
- * 4. Attach decrypted orgKey to connection context
- * 5. Return tenant-specific database instance
- * 6. Reset idle timer
+ * 4. Return tenant-specific database instance (field encryption uses master key globally)
+ * 5. Reset idle timer
  * 
  * @param {string} orgId - Organization identifier
  * @returns {Promise<mongoose.Connection>} Tenant-specific database connection
@@ -48,7 +47,7 @@ export const getTenantConnection = async (orgId) => {
   try {
     // 1. LOOKUP: Get tenant routing information
     const tenantInfo = await lookupTenant(orgId);
-    const { clusterEndpoint, dbName, orgKey } = tenantInfo;
+    const { clusterEndpoint, dbName } = tenantInfo;
 
     // 2. CONNECT: Check if we already have a connection to this Pod
     let podConnection = connectionCache.get(clusterEndpoint);
@@ -108,13 +107,8 @@ export const getTenantConnection = async (orgId) => {
       idleTimers.delete(clusterEndpoint);
     }, IDLE_TIMEOUT));
 
-    // 4. CONTEXT: Get tenant-specific database and attach orgKey
+    // 4. Get tenant-specific database (encryption plugin uses master key)
     const tenantDb = podConnection.useDb(dbName, { useCache: true });
-    
-    // Attach organization key to connection context
-    // This is used by the mongoose encryption plugin
-    tenantDb.config = { orgKey };
-
     return tenantDb;
   } catch (error) {
     throw new Error(`Failed to get tenant connection: ${error.message}`);

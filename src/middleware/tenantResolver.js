@@ -25,9 +25,9 @@ import { getTenantConnection } from '../db/connectionManager.js';
 export const resolveTenant = async (req, res, next) => {
   try {
     // Extract orgId from various sources
-    let orgId = req.headers['x-org-id'] || 
-                req.user?.orgId || 
-                req.params.orgId || 
+    let orgId = req.headers['x-org-id'] ||
+                req.user?.orgId ||
+                req.params.orgId ||
                 req.body.orgId;
 
     // In development, allow skipping tenant validation
@@ -43,12 +43,15 @@ export const resolveTenant = async (req, res, next) => {
       });
     }
 
-    // Get tenant database connection
-    const tenantDb = await getTenantConnection(orgId);
+    // Normalize to string and lowercase so tenant lookup and decryption always use same key
+    const normalizedOrgId = String(orgId).toLowerCase().trim();
 
-    // Attach to request object
+    // Get tenant database connection
+    const tenantDb = await getTenantConnection(normalizedOrgId);
+
+    // Attach to request object (always use normalized id for consistency)
     req.tenantDb = tenantDb;
-    req.orgId = orgId;
+    req.orgId = normalizedOrgId;
 
     next();
   } catch (error) {

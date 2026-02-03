@@ -10,6 +10,7 @@
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import config from '../src/config/index.js';
+import { getMasterKeyHex } from '../src/config/encryption.js';
 import { connectRouterDB } from '../src/config/database.js';
 import { getTenantConnection } from '../src/db/connectionManager.js';
 import getRouterModels from '../src/db/models/routerModels.js';
@@ -55,16 +56,15 @@ async function migrateEmailHash() {
         console.log(`  Found ${users.length} users`);
 
         let updated = 0;
+        const keyHex = getMasterKeyHex();
+        const { decrypt, isEncrypted } = await import('../src/utils/encryption.js');
+
         for (const user of users) {
           try {
-            // Decrypt email to get plain text
-            const orgKey = tenantDb.config.orgKey;
-            const { decrypt, isEncrypted } = await import('../src/utils/encryption.js');
-            
             let plainEmail = null;
             if (user.email) {
               if (isEncrypted(user.email)) {
-                plainEmail = decrypt(user.email, orgKey);
+                plainEmail = decrypt(user.email, keyHex);
               } else {
                 plainEmail = user.email;
               }

@@ -7,7 +7,7 @@
  */
 
 import { getRouterConnection } from '../config/database.js';
-import { decrypt, encrypt } from '../utils/encryption.js';
+import { encrypt } from '../utils/encryption.js';
 import { getMasterKey } from '../config/encryption.js';
 import { logError, logInfo } from '../utils/logger.js';
 import NodeCache from 'node-cache';
@@ -31,33 +31,26 @@ const tenantCache = new NodeCache({
  */
 
 /**
- * Lookup tenant information from Router DB
+ * Lookup tenant information from Router DB (routing only; field encryption uses master key).
  * @param {string} orgId - Organization identifier
- * @returns {Promise<TenantRecord & { orgKey: string }>} Tenant record with decrypted org key
+ * @returns {Promise<{ orgId: string, clusterEndpoint: string, dbName: string, status: string }>}
  */
 export const lookupTenant = async (orgId) => {
   if (!orgId) {
     throw new Error('Organization ID is required');
   }
 
-  // Normalize orgId to lowercase (matching schema transformation)
   const normalizedOrgId = orgId.toLowerCase().trim();
-
-  // Check cache first
   const cacheKey = `tenant:${normalizedOrgId}`;
   const cached = tenantCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
+  if (cached) return cached;
 
   try {
     const routerDB = getRouterConnection();
     const tenantsCollection = routerDB.collection('tenants');
-
-    // Query Router DB for tenant (use normalized orgId)
-    const tenantRecord = await tenantsCollection.findOne({ 
+    const tenantRecord = await tenantsCollection.findOne({
       orgId: normalizedOrgId,
-      status: 'active' // Only return active tenants
+      status: 'active'
     });
 
     if (!tenantRecord) {
@@ -65,28 +58,16 @@ export const lookupTenant = async (orgId) => {
       throw new Error(`Tenant not found or inactive: ${normalizedOrgId}`);
     }
 
-    // Decrypt the organization key using master key
-    const masterKey = getMasterKey();
-    const orgKey = decrypt(tenantRecord.encryptedDataKey, masterKey.toString('hex'));
-
-    // Prepare result with decrypted key
     const result = {
       orgId: tenantRecord.orgId,
       clusterEndpoint: tenantRecord.clusterEndpoint,
       dbName: tenantRecord.dbName,
-      encryptedDataKey: tenantRecord.encryptedDataKey,
-      status: tenantRecord.status,
-      orgKey: orgKey // Decrypted key for use in connection manager
+      status: tenantRecord.status
     };
-
-    // Cache the result
     tenantCache.set(cacheKey, result);
-
     return result;
   } catch (error) {
-    if (error.message.includes('not found')) {
-      throw error;
-    }
+    if (error.message.includes('not found')) throw error;
     logError('Tenant lookup error', error, { orgId: normalizedOrgId });
     throw new Error(`Failed to lookup tenant: ${error.message}`);
   }

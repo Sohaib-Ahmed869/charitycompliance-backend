@@ -6,6 +6,7 @@
 
 import crypto from 'crypto';
 import { getTenantConnection } from '../db/connectionManager.js';
+import { getMasterKeyHex } from '../config/encryption.js';
 import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { OnboardingProgressRepository } from '../repositories/onboardingProgressRepository.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
@@ -14,6 +15,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import emailService from '../services/emailService.js';
 import { getFileUrl } from '../services/s3Service.js';
 import { logInfo, logError } from '../utils/logger.js';
+import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 
 export const getBoardMembers = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -29,9 +31,14 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
   const includeInactive = req.query.includeInactive === 'true';
   const boardMembers = await boardMemberRepo.findByOrgId(org._id, includeInactive);
 
+  const keyHex = getMasterKeyHex();
+  if (!keyHex) {
+    throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
+  }
   const list = await Promise.all(
     boardMembers.map(async (bm) => {
       const obj = bm.toObject ? bm.toObject() : { ...bm };
+      decryptBoardMemberFields(obj, keyHex);
       if (bm.profile_picture_key) {
         try {
           obj.profile_picture_url = await getFileUrl(bm.profile_picture_key, 604800);
@@ -60,9 +67,16 @@ export const getBoardMemberById = asyncHandler(async (req, res) => {
     throw new AppError('Board member not found', 404, 'NOT_FOUND');
   }
 
+  const obj = boardMember.toObject ? boardMember.toObject() : { ...boardMember };
+  const keyHex = getMasterKeyHex();
+  if (!keyHex) {
+    throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
+  }
+  decryptBoardMemberFields(obj, keyHex);
+
   res.json({
     success: true,
-    data: boardMember
+    data: obj
   });
 });
 
@@ -153,9 +167,15 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     await progressRepo.updateProfileStep(org._id, 'responsible_people_complete', true);
   }
 
+  const createObj = boardMember.toObject ? boardMember.toObject() : { ...boardMember };
+  const keyHex = getMasterKeyHex();
+  if (!keyHex) {
+    throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
+  }
+  decryptBoardMemberFields(createObj, keyHex);
   res.status(201).json({
     success: true,
-    data: boardMember
+    data: createObj
   });
 });
 
@@ -182,9 +202,15 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
     throw new AppError('Board member not found', 404, 'NOT_FOUND');
   }
 
+  const obj = boardMember.toObject ? boardMember.toObject() : { ...boardMember };
+  const keyHex = getMasterKeyHex();
+  if (!keyHex) {
+    throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
+  }
+  decryptBoardMemberFields(obj, keyHex);
   res.json({
     success: true,
-    data: boardMember
+    data: obj
   });
 });
 

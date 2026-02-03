@@ -13,9 +13,8 @@
  */
 
 import { encrypt, decrypt, createBlindIndex, isEncrypted } from './encryption.js';
+import { getMasterKeyHex } from '../config/encryption.js';
 import { logError } from './logger.js';
-import crypto from 'crypto';
-import config from '../config/index.js';
 
 /**
  * Mongoose plugin for transparent field encryption
@@ -23,47 +22,23 @@ import config from '../config/index.js';
  */
 export default function mongooseEncryptPlugin(schema) {
   
-  // PRE-SAVE HOOK: Encrypt fields before saving
+  // PRE-SAVE HOOK: Encrypt fields before saving (single master key for all tenants)
   schema.pre('save', function(next) {
     try {
-      // Get the organization key from the database connection context
-      // This is set by the connection manager
-      const db = this.constructor.db;
-      
-      if (!db || !db.config || !db.config.orgKey) {
-        return next(new Error('FATAL: No encryption key found in database context. Ensure tenantResolver middleware is applied.'));
+      const keyHex = getMasterKeyHex();
+      if (!keyHex || keyHex.length !== 64) {
+        return next(new Error('FATAL: Master encryption key not available. Check MASTER_KEY_HEX.'));
       }
 
-      const orgKey = db.config.orgKey;
-
-      // Iterate through all schema paths
       schema.eachPath((path, schemaType) => {
         const fieldOptions = schemaType.options;
-        
-        // Check if field is marked for encryption
         if (fieldOptions.encrypted && this[path]) {
           const value = this[path];
-          
-          // Skip if already encrypted (prevents double encryption)
-          if (isEncrypted(value)) {
-            return;
-          }
-
-          // Encrypt the field value
-          this[path] = encrypt(String(value), orgKey);
-
-          // If field is searchable, create blind index hash
+          if (isEncrypted(value)) return;
+          this[path] = encrypt(String(value), keyHex);
           if (fieldOptions.searchable) {
             const hashFieldName = `${path}_hash`;
-            // Email hash must use master key for cross-tenant search
-            // Other searchable fields use orgKey for tenant-specific isolation
-            const hashKey = path === 'email' ? config.encryption.masterKeyHex : orgKey;
-            
-            if (!hashKey || hashKey.length !== 64) {
-              return next(new Error(`FATAL: Invalid hash key for field ${path}. Key length: ${hashKey?.length || 0}`));
-            }
-            
-            this[hashFieldName] = createBlindIndex(String(value), hashKey);
+            this[hashFieldName] = createBlindIndex(String(value), keyHex);
           }
         }
       });
@@ -74,49 +49,38 @@ export default function mongooseEncryptPlugin(schema) {
     }
   });
 
-  // POST-FIND HOOK: Decrypt fields after fetching
+  // POST-FIND HOOK: Decrypt fields after fetching (single master key)
   schema.post(['find', 'findOne', 'findById', 'findOneAndUpdate', 'findOneAndDelete'], function(docs) {
     try {
-      // Handle single document or array of documents
+      const keyHex = getMasterKeyHex();
+      if (!keyHex || keyHex.length !== 64) return;
+
       const docList = Array.isArray(docs) ? docs : (docs ? [docs] : []);
-      
-      const db = this.model.db;
-      if (!db || !db.config || !db.config.orgKey) {
-        // No key available, skip decryption (might be router DB query)
-        return;
-      }
-
-      const orgKey = db.config.orgKey;
-
       docList.forEach(doc => {
         if (!doc) return;
-
-        // Ensure document is a mongoose document (not plain object)
         if (doc.constructor && doc.constructor.name === 'model') {
-          // Mongoose document - decrypt in place
           schema.eachPath((path, schemaType) => {
             const fieldOptions = schemaType.options;
-            
             if (fieldOptions.encrypted && doc[path] && isEncrypted(doc[path])) {
               try {
-                doc[path] = decrypt(doc[path], orgKey);
-                // Mark as modified to ensure changes persist
+                doc[path] = decrypt(doc[path], keyHex);
                 doc.markModified(path);
               } catch (error) {
                 logError('Failed to decrypt field', error, { field: path });
+                doc[path] = '';
+                doc.markModified(path);
               }
             }
           });
         } else {
-          // Plain object - decrypt directly
           schema.eachPath((path, schemaType) => {
             const fieldOptions = schemaType.options;
-            
             if (fieldOptions.encrypted && doc[path] && isEncrypted(doc[path])) {
               try {
-                doc[path] = decrypt(doc[path], orgKey);
+                doc[path] = decrypt(doc[path], keyHex);
               } catch (error) {
                 logError('Failed to decrypt field', error, { field: path });
+                doc[path] = '';
               }
             }
           });
@@ -127,24 +91,19 @@ export default function mongooseEncryptPlugin(schema) {
     }
   });
 
-  // POST-INIT HOOK: Decrypt fields when document is initialized (e.g., from JSON)
+  // POST-INIT HOOK: Decrypt when document is initialized (single master key)
   schema.post('init', function() {
     try {
-      const db = this.constructor.db;
-      if (!db || !db.config || !db.config.orgKey) {
-        return;
-      }
-
-      const orgKey = db.config.orgKey;
-
+      const keyHex = getMasterKeyHex();
+      if (!keyHex || keyHex.length !== 64) return;
       schema.eachPath((path, schemaType) => {
         const fieldOptions = schemaType.options;
-        
         if (fieldOptions.encrypted && this[path] && isEncrypted(this[path])) {
           try {
-            this[path] = decrypt(this[path], orgKey);
+            this[path] = decrypt(this[path], keyHex);
           } catch (error) {
             logError('Failed to decrypt field on init', error, { field: path });
+            this[path] = '';
           }
         }
       });

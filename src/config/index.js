@@ -26,9 +26,9 @@ export const db = {
   tenantCacheTtl: parseInt(process.env.TENANT_CACHE_TTL) || 3600
 };
 
-// Encryption Configuration
+// Encryption Configuration (trim to avoid .env newline breaking decryption)
 export const encryption = {
-  masterKeyHex: process.env.MASTER_KEY_HEX
+  masterKeyHex: (process.env.MASTER_KEY_HEX || '').trim()
 };
 
 // Authentication Configuration

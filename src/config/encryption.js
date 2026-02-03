@@ -10,14 +10,15 @@ import crypto from 'crypto';
 
 dotenv.config();
 
-const MASTER_KEY_HEX = process.env.MASTER_KEY_HEX;
+// Trim to avoid .env newline/whitespace breaking decryption (critical on Windows)
+const MASTER_KEY_HEX = (process.env.MASTER_KEY_HEX || '').trim();
 
 if (!MASTER_KEY_HEX) {
   throw new Error('MASTER_KEY_HEX environment variable is required');
 }
 
 if (MASTER_KEY_HEX.length !== 64) {
-  throw new Error('MASTER_KEY_HEX must be exactly 64 characters (32 bytes in hex)');
+  throw new Error('MASTER_KEY_HEX must be exactly 64 characters (32 bytes in hex). Got length: ' + MASTER_KEY_HEX.length);
 }
 
 /**
@@ -26,6 +27,14 @@ if (MASTER_KEY_HEX.length !== 64) {
  */
 export const getMasterKey = () => {
   return Buffer.from(MASTER_KEY_HEX, 'hex');
+};
+
+/**
+ * Get Master Key as 64-char hex string (for field encrypt/decrypt)
+ * @returns {string}
+ */
+export const getMasterKeyHex = () => {
+  return MASTER_KEY_HEX;
 };
 
 /**
@@ -56,6 +65,7 @@ if (!validateMasterKey()) {
 
 export default {
   getMasterKey,
+  getMasterKeyHex,
   validateMasterKey,
   generateOrgKey
 };
