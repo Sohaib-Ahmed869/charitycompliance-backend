@@ -10,7 +10,25 @@ const approvalRuleSchema = new mongoose.Schema({
   action_type: {
     type: String,
     required: true,
-    enum: ['expense', 'purchase', 'policy_approval', 'document_approval', 'budget_approval', 'other']
+    // IMPORTANT: keep this aligned with UI "tags" so workflows apply correctly.
+    // We keep legacy values for backwards compatibility.
+    enum: [
+      'expense',
+      'purchase',
+      'grant',
+      'contract',
+      'leave',
+      'hr',
+      'policy',
+      'risk',
+      // legacy
+      'policy_approval',
+      'document_approval',
+      'budget_approval',
+      'risk_management',
+      'grant_approval',
+      'other'
+    ]
   },
   min_amount: {
     type: Number,

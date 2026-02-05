@@ -15,7 +15,10 @@ const approvalStepSchema = new mongoose.Schema({
   approver_user_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    // Optional: when no user is currently assigned to the position,
+    // approver_user_id may be null while approver_position_id/approver_department_id
+    // still indicate who should approve once a user is assigned.
+    required: false
   },
   approver_position_id: {
     type: mongoose.Schema.Types.ObjectId,
@@ -64,7 +67,25 @@ const approvalRequestSchema = new mongoose.Schema({
   request_type: {
     type: String,
     required: true,
-    enum: ['expense', 'purchase', 'policy_approval', 'document_approval', 'budget_approval', 'other'],
+    // IMPORTANT: keep this aligned with ApprovalMatrix.rules.action_type (UI tags).
+    // Keep legacy values for backwards compatibility.
+    enum: [
+      'expense',
+      'purchase',
+      'grant',
+      'contract',
+      'leave',
+      'hr',
+      'policy',
+      'risk',
+      // legacy
+      'policy_approval',
+      'document_approval',
+      'budget_approval',
+      'risk_management',
+      'grant_approval',
+      'other'
+    ],
     index: true
   },
   entity_id: {
@@ -75,7 +96,7 @@ const approvalRequestSchema = new mongoose.Schema({
   entity_type: {
     type: String,
     required: true,
-    enum: ['expense', 'purchase', 'policy', 'document', 'budget', 'other']
+    enum: ['expense', 'purchase', 'policy', 'document', 'budget', 'risk', 'grant', 'other']
   },
   amount: {
     type: Number,

@@ -10,6 +10,9 @@ import { ApprovalMatrixRepository } from '../repositories/approvalMatrixReposito
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
 import { UserPositionRepository } from '../repositories/userPositionRepository.js';
 import { ExpenseRepository } from '../repositories/expenseRepository.js';
+import { RiskRepository } from '../repositories/riskRepository.js';
+import { UserRepository } from '../repositories/userRepository.js';
+import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
 
@@ -20,6 +23,32 @@ export class ApprovalWorkflowService {
 
   async getTenantDb() {
     return await getTenantConnection(this.orgId);
+  }
+
+  /** Ensure User model (and other shared refs) are registered on this tenant connection. */
+  _ensureTenantModels(tenantDb) {
+    // Registers User schema for this connection if not already present
+    void new UserRepository(tenantDb);
+  }
+
+  /** Resolve tenant slug to Organization ObjectId (org_id fields require ObjectId). */
+  async _getOrgObjectId() {
+    const tenantDb = await this.getTenantDb();
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (!org) {
+      throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+    }
+    return org._id;
+  }
+
+  /** Normalize legacy action types to current UI tags. */
+  _normalizeActionType(actionType) {
+    const t = String(actionType || '').toLowerCase().trim();
+    if (t === 'risk_management') return 'risk';
+    if (t === 'grant_approval') return 'grant';
+    if (t === 'policy_approval') return 'policy';
+    return t;
   }
 
   /**
@@ -81,43 +110,50 @@ export class ApprovalWorkflowService {
    */
   async findMatchingRule(actionType, amount, orgId) {
     const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
     const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
+    const normalizedActionType = this._normalizeActionType(actionType);
 
-    // Get default or active approval matrix
-    let matrix = await approvalMatrixRepo.findDefault(orgId);
-    if (!matrix) {
-      const matrices = await approvalMatrixRepo.findByOrgId(orgId, { is_active: true });
-      if (matrices.length === 0) {
-        throw new AppError(
-          'No approval matrix configured. Please set up an approval matrix first.',
-          400,
-          'NO_APPROVAL_MATRIX'
-        );
-      }
-      matrix = matrices[0];
+    // Load all active matrices and search across ALL of them, since each
+    // workflow type (expense, grant, risk, etc.) may be stored in its own matrix.
+    const matrices = await approvalMatrixRepo.findByOrgId(orgId);
+    if (!matrices || matrices.length === 0) {
+      throw new AppError(
+        'No approval matrix configured. Please set up an approval matrix first.',
+        400,
+        'NO_APPROVAL_MATRIX'
+      );
     }
 
-    // Find matching rule
-    const matchingRule = matrix.rules.find(rule => {
-      if (rule.action_type !== actionType || !rule.is_active) {
-        return false;
+    let selectedMatrix = null;
+    let selectedRule = null;
+
+    for (const matrix of matrices) {
+      for (const rule of matrix.rules) {
+        if (!rule.is_active) continue;
+        if (this._normalizeActionType(rule.action_type) !== normalizedActionType) continue;
+
+        const minMatch = rule.min_amount === undefined || amount >= rule.min_amount;
+        const maxMatch = rule.max_amount === undefined || amount <= rule.max_amount;
+
+        if (minMatch && maxMatch) {
+          selectedMatrix = matrix;
+          selectedRule = rule;
+          break;
+        }
       }
+      if (selectedRule) break;
+    }
 
-      const minMatch = rule.min_amount === undefined || amount >= rule.min_amount;
-      const maxMatch = rule.max_amount === undefined || amount <= rule.max_amount;
-
-      return minMatch && maxMatch;
-    });
-
-    if (!matchingRule) {
+    if (!selectedRule) {
       throw new AppError(
-        `No approval rule found for ${actionType} with amount ${amount}. Please configure an approval rule.`,
+        `No approval rule found for ${normalizedActionType} with amount ${amount}. Please configure an approval rule.`,
         400,
         'NO_MATCHING_RULE'
       );
     }
 
-    return { matrix, rule: matchingRule };
+    return { matrix: selectedMatrix, rule: selectedRule };
   }
 
   /**
@@ -125,6 +161,8 @@ export class ApprovalWorkflowService {
    */
   async createExpenseApprovalRequest(expenseId, submittedBy) {
     const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
     const expenseRepo = new ExpenseRepository(tenantDb);
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
 
@@ -135,10 +173,10 @@ export class ApprovalWorkflowService {
     }
 
     // Find matching approval rule
-    const { matrix, rule } = await this.findMatchingRule('expense', expense.amount, this.orgId);
-
+    const { matrix, rule } = await this.findMatchingRule('expense', expense.amount, orgObjectId);
+    
     // Resolve approvers
-    const approvers = await this.resolveApprovers(rule, this.orgId);
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
 
     // Create approval steps
     const approvalSteps = approvers.map(approver => ({
@@ -151,7 +189,7 @@ export class ApprovalWorkflowService {
 
     // Create approval request
     const approvalRequest = await approvalRequestRepo.create({
-      org_id: this.orgId,
+      org_id: orgObjectId,
       request_type: 'expense',
       entity_id: expenseId,
       entity_type: 'expense',
@@ -182,12 +220,114 @@ export class ApprovalWorkflowService {
   }
 
   /**
+   * Create approval request for a risk (action_type: risk_management)
+   * Uses amount 0 to match risk_management rules (min_amount 0, no max).
+   */
+  async createRiskApprovalRequest(riskId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const riskRepo = new RiskRepository(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const userPositionRepo = new UserPositionRepository(tenantDb);
+
+    const risk = await riskRepo.findById(riskId);
+    if (!risk) {
+      throw new AppError('Risk not found', 404, 'RISK_NOT_FOUND');
+    }
+
+    // Make sure we always have a valid submitting user id
+    const submittingUserId =
+      submittedBy ||
+      (risk.submitted_by && typeof risk.submitted_by === 'object'
+        ? risk.submitted_by._id
+        : risk.submitted_by);
+
+    // Risk workflow tag in UI is "risk"
+    const { matrix, rule } = await this.findMatchingRule('risk', 0, orgObjectId);
+
+    // Build approvers directly from the matrix rule so we always reflect
+    // the configured positions/departments, even when no users exist yet.
+    const approvers = [];
+    for (const approverConfig of rule.requires_approval_from) {
+      let userIds = [];
+
+      if (approverConfig.user_id) {
+        userIds = [approverConfig.user_id];
+      } else if (approverConfig.position_id) {
+        // Try to resolve users for this position; may be empty
+        userIds = await userPositionRepo.findUsersByPositionId(approverConfig.position_id);
+      }
+
+      if (userIds.length > 0) {
+        userIds.forEach((userId) => {
+          approvers.push({
+            user_id: userId,
+            position_id: approverConfig.position_id || null,
+            department_id: approverConfig.department_id || null,
+            level: approverConfig.approval_level
+          });
+        });
+      } else {
+        // No users yet – keep the position/department so UI can show who SHOULD approve.
+        approvers.push({
+          user_id: null,
+          position_id: approverConfig.position_id || null,
+          department_id: approverConfig.department_id || null,
+          level: approverConfig.approval_level
+        });
+      }
+    }
+
+    // Sort by approval level
+    approvers.sort((a, b) => a.level - b.level);
+
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id || undefined,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'risk',
+      entity_id: riskId,
+      entity_type: 'risk',
+      amount: 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittingUserId
+    });
+
+    await riskRepo.update(riskId, {
+      approval_matrix_id: matrix._id,
+      approval_request_id: approvalRequest._id,
+      status: 'pending',
+      submitted_by: submittingUserId
+    });
+
+    logInfo('Risk approval request created', {
+      riskId,
+      approvalRequestId: approvalRequest._id,
+      approversCount: approvers.length
+    });
+
+    return approvalRequest;
+  }
+
+  /**
    * Process approval (approve or reject)
    */
   async processApproval(approvalRequestId, stepIndex, userId, decision, comments = null, ipAddress = null, userAgent = null) {
     const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
     const expenseRepo = new ExpenseRepository(tenantDb);
+    const riskRepo = new RiskRepository(tenantDb);
 
     // Get approval request
     const request = await approvalRequestRepo.findById(approvalRequestId);
@@ -210,14 +350,16 @@ export class ApprovalWorkflowService {
       throw new AppError('Approval step not found', 404, 'STEP_NOT_FOUND');
     }
 
-    // Verify user is the approver for this step
-    if (step.approver_user_id.toString() !== userId.toString()) {
-      throw new AppError('You are not authorized to approve this step', 403, 'UNAUTHORIZED');
-    }
-
     // Check if step is already processed
     if (step.status !== 'pending') {
       throw new AppError(`This step is already ${step.status}`, 400, 'STEP_ALREADY_PROCESSED');
+    }
+
+    // Verify user is authorized to approve this step (by user_id or position)
+    const userPositionIds = await this._getUserPositionIds(userId);
+    const canApprove = this._canUserApproveStep(step, userId, userPositionIds);
+    if (!canApprove) {
+      throw new AppError('You are not authorized to approve this step', 403, 'UNAUTHORIZED');
     }
 
     // For sequential approval, check if previous steps are approved
@@ -239,6 +381,11 @@ export class ApprovalWorkflowService {
       comments: comments || null
     };
 
+    // If approving by position (approver_user_id was null), record who actually approved
+    if (!step.approver_user_id) {
+      updateData.approver_user_id = userId;
+    }
+
     if (decision === 'approved') {
       updateData.approved_at = new Date();
     } else if (decision === 'rejected') {
@@ -256,17 +403,18 @@ export class ApprovalWorkflowService {
     const allSteps = updatedRequest.approval_steps;
 
     if (decision === 'rejected') {
-      // Reject entire request
       await approvalRequestRepo.updateStatus(approvalRequestId, 'rejected');
-      
-      // Update expense
-      await expenseRepo.updateStatus(request.entity_id, 'rejected', {
-        rejection_reason: comments,
-        rejected_by: userId,
-        rejected_at: new Date()
-      });
 
-      // TODO: Send notifications
+      if (request.entity_type === 'expense') {
+        await expenseRepo.updateStatus(request.entity_id, 'rejected', {
+          rejection_reason: comments,
+          rejected_by: userId,
+          rejected_at: new Date()
+        });
+      } else if (request.entity_type === 'risk') {
+        await riskRepo.updateStatus(request.entity_id, 'rejected');
+      }
+
       return updatedRequest;
     }
 
@@ -282,31 +430,90 @@ export class ApprovalWorkflowService {
       // But if any is rejected, the whole thing is rejected
       if (allSteps.some(s => s.status === 'rejected')) {
         await approvalRequestRepo.updateStatus(approvalRequestId, 'rejected');
-        await expenseRepo.updateStatus(request.entity_id, 'rejected', {
-          rejection_reason: 'Rejected by one or more approvers',
-          rejected_by: userId
-        });
+        if (request.entity_type === 'expense') {
+          await expenseRepo.updateStatus(request.entity_id, 'rejected', {
+            rejection_reason: 'Rejected by one or more approvers',
+            rejected_by: userId
+          });
+        } else if (request.entity_type === 'risk') {
+          await riskRepo.updateStatus(request.entity_id, 'rejected');
+        }
         return updatedRequest;
       }
     } else if (request.approval_type === 'sequential') {
-      // All steps must be approved in order
       allApproved = allSteps.every(s => s.status === 'approved');
     }
 
     if (allApproved) {
-      // All approvals complete
       await approvalRequestRepo.updateStatus(approvalRequestId, 'approved');
-      
-      // Update expense
-      await expenseRepo.updateStatus(request.entity_id, 'approved', {
-        approved_at: new Date()
-      });
 
-      // TODO: Send notifications
-      logInfo('All approvals completed', { approvalRequestId, entityId: request.entity_id });
+      if (request.entity_type === 'expense') {
+        await expenseRepo.updateStatus(request.entity_id, 'approved', { approved_at: new Date() });
+      } else if (request.entity_type === 'risk') {
+        await riskRepo.updateStatus(request.entity_id, 'under_treatment');
+      }
+
+      logInfo('All approvals completed', { approvalRequestId, entityId: request.entity_id, entityType: request.entity_type });
     }
 
     return await approvalRequestRepo.findById(approvalRequestId);
+  }
+
+  /**
+   * Get the position IDs that a user holds (from board_members and UserPosition)
+   */
+  async _getUserPositionIds(userId) {
+    const tenantDb = await this.getTenantDb();
+    const userPositionRepo = new UserPositionRepository(tenantDb);
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const boardMemberRepo = new BoardMemberRepository(tenantDb);
+
+    const positionIds = new Set();
+
+    // Get positions from UserPosition collection
+    const userPositions = await userPositionRepo.findByUserId(userId, true);
+    userPositions.forEach(up => {
+      if (up.position_id) {
+        const posId = up.position_id._id || up.position_id;
+        if (posId) {
+          positionIds.add(String(posId));
+        }
+      }
+    });
+
+    // Get position from board_members collection
+    const orgObjectId = await this._getOrgObjectId();
+    const boardMember = await boardMemberRepo.findByUserId(userId, orgObjectId);
+
+    if (boardMember && boardMember.position_id) {
+      const bmPosId = boardMember.position_id._id || boardMember.position_id;
+      if (bmPosId) {
+        positionIds.add(String(bmPosId));
+      }
+    }
+
+    return [...positionIds];
+  }
+
+  /**
+   * Check if a user can approve a step (by user_id or position_id)
+   */
+  _canUserApproveStep(step, userId, userPositionIds) {
+    if (step.status !== 'pending') return false;
+
+    // Direct user match
+    if (step.approver_user_id && String(step.approver_user_id) === String(userId)) {
+      return true;
+    }
+
+    // Position match (when no specific user assigned or field doesn't exist)
+    const hasNoUserAssigned = !step.approver_user_id || step.approver_user_id === null;
+    if (hasNoUserAssigned && step.approver_position_id) {
+      const stepPosId = step.approver_position_id._id || step.approver_position_id;
+      return stepPosId ? userPositionIds.includes(String(stepPosId)) : false;
+    }
+
+    return false;
   }
 
   /**
@@ -314,29 +521,37 @@ export class ApprovalWorkflowService {
    */
   async getPendingApprovalsForUser(userId) {
     const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
 
-    const requests = await approvalRequestRepo.findPendingByApprover(userId);
-    
+    // Get all position IDs this user holds
+    const userPositionIds = await this._getUserPositionIds(userId);
+
+    // Query by both user_id and position_ids
+    const requests = await approvalRequestRepo.findPendingByApprover(userId, userPositionIds);
+
     // Filter to only show steps that are pending for this user
     return requests.map(request => {
-      const userSteps = request.approval_steps.filter(
-        step => step.approver_user_id.toString() === userId.toString() && step.status === 'pending'
+      const userSteps = request.approval_steps.filter(step =>
+        this._canUserApproveStep(step, userId, userPositionIds)
       );
-      
+
       // For sequential, only show the first pending step
       if (request.approval_type === 'sequential') {
         const firstPendingIndex = request.approval_steps.findIndex(s => s.status === 'pending');
-        if (firstPendingIndex >= 0 && request.approval_steps[firstPendingIndex].approver_user_id.toString() === userId.toString()) {
-          return {
-            ...request.toObject(),
-            current_step: firstPendingIndex,
-            can_approve: true
-          };
+        if (firstPendingIndex >= 0) {
+          const firstPendingStep = request.approval_steps[firstPendingIndex];
+          if (this._canUserApproveStep(firstPendingStep, userId, userPositionIds)) {
+            return {
+              ...request.toObject(),
+              current_step: firstPendingIndex,
+              can_approve: true
+            };
+          }
         }
         return null;
       }
-      
+
       return {
         ...request.toObject(),
         user_steps: userSteps,

@@ -6,10 +6,18 @@
 
 import mongoose from 'mongoose';
 import approvalRequestSchema from '../db/schemas/platform/approvalRequestSchema.js';
+import positionSchema from '../db/schemas/platform/positionSchema.js';
+import departmentSchema from '../db/schemas/platform/departmentSchema.js';
+import approvalMatrixSchema from '../db/schemas/platform/approvalMatrixSchema.js';
 
 export class ApprovalRequestRepository {
   constructor(tenantDb) {
-    this.ApprovalRequest = tenantDb.models.ApprovalRequest || 
+    // Ensure related models are registered on this tenant connection so populate() works
+    tenantDb.models.Position || tenantDb.model('Position', positionSchema);
+    tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
+    tenantDb.models.ApprovalMatrix || tenantDb.model('ApprovalMatrix', approvalMatrixSchema);
+
+    this.ApprovalRequest = tenantDb.models.ApprovalRequest ||
       tenantDb.model('ApprovalRequest', approvalRequestSchema);
   }
 
@@ -58,10 +66,38 @@ export class ApprovalRequestRepository {
       .populate('approval_steps.approver_department_id', 'name');
   }
 
-  async findPendingByApprover(userId) {
+  async findPendingByApprover(userId, positionIds = []) {
+    // Build query: match by user_id OR by position_id (when approver_user_id is null)
+    // Use $elemMatch to ensure all conditions apply to the SAME array element
+    const orConditions = [
+      {
+        approval_steps: {
+          $elemMatch: {
+            approver_user_id: userId,
+            status: 'pending'
+          }
+        }
+      }
+    ];
+
+    // Also match steps where position matches and no specific user assigned yet
+    if (positionIds && positionIds.length > 0) {
+      orConditions.push({
+        approval_steps: {
+          $elemMatch: {
+            approver_position_id: { $in: positionIds },
+            $or: [
+              { approver_user_id: null },
+              { approver_user_id: { $exists: false } }
+            ],
+            status: 'pending'
+          }
+        }
+      });
+    }
+
     return await this.ApprovalRequest.find({
-      'approval_steps.approver_user_id': userId,
-      'approval_steps.status': 'pending',
+      $or: orConditions,
       status: 'pending'
     })
       .populate('submitted_by', 'first_name last_name email')

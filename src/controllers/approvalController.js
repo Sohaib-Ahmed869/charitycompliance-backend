@@ -12,7 +12,7 @@ import { ApprovalMatrixRepository } from '../repositories/approvalMatrixReposito
 
 export const getPendingApprovals = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
-  const userId = req.user._id;
+  const userId = req.user.userId;
 
   const workflowService = new ApprovalWorkflowService(orgId);
   const approvals = await workflowService.getPendingApprovalsForUser(userId);
@@ -37,7 +37,7 @@ export const approveRequest = asyncHandler(async (req, res) => {
   }
 
   const orgId = req.orgId;
-  const userId = req.user._id;
+  const userId = req.user.userId;
   const { approvalRequestId } = req.params;
   const { stepIndex, comments } = req.body;
 
@@ -75,7 +75,7 @@ export const rejectRequest = asyncHandler(async (req, res) => {
   }
 
   const orgId = req.orgId;
-  const userId = req.user._id;
+  const userId = req.user.userId;
   const { approvalRequestId } = req.params;
   const { stepIndex, comments } = req.body;
 

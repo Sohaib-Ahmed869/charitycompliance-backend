@@ -33,7 +33,7 @@ export class OnboardingService {
     
     // If organization doesn't exist, create a basic one (shouldn't happen but handle gracefully)
     if (!org) {
-      logInfo('Organization not found in tenant DB, creating placeholder for onboarding.', { orgId: this.orgId });
+      //logInfo('Organization not found in tenant DB, creating placeholder for onboarding.', { orgId: this.orgId });
       org = await orgRepo.create({
         name: `Placeholder Org for ${this.orgId}`,
         orgId: this.orgId,
@@ -55,13 +55,7 @@ export class OnboardingService {
     const orgRepo = new OrganizationRepository(tenantDb);
     const org = await orgRepo.findOne();
     
-    logInfo('getDepartments - org lookup', { 
-      orgId: this.orgId, 
-      foundOrg: !!org, 
-      orgDbId: org?._id?.toString(),
-      orgName: org?.name
-    });
-    
+   
     if (!org) {
       return [];
     }
@@ -70,17 +64,7 @@ export class OnboardingService {
     
     // Debug: Get ALL departments for this specific org_id (including inactive)
     const allDepartmentsInDb = await departmentRepo.findAllByOrgId(org._id);
-    logInfo('getDepartments - ALL departments for this org_id (incl inactive)', {
-      orgId: org._id?.toString(),
-      count: allDepartmentsInDb.length,
-      departments: allDepartmentsInDb.map(d => ({ 
-        name: d.name, 
-        orgId: d.org_id?.toString(), 
-        isActive: d.is_active,
-        _id: d._id?.toString()
-      }))
-    });
-    
+  
     // Now get only active departments
     const departments = await departmentRepo.findByOrgId(org._id);
     
@@ -93,11 +77,7 @@ export class OnboardingService {
       });
     }
     
-    logInfo('getDepartments - ACTIVE departments', { 
-      orgId: org._id?.toString(),
-      count: departments.length,
-      names: departments.map(d => d.name)
-    });
+  
     
     return departments.map(dept => ({
       name: dept.name,
@@ -190,12 +170,7 @@ export class OnboardingService {
     const tenantDb = await this.getTenantDb();
     const departmentRepo = new DepartmentRepository(tenantDb);
     
-    logInfo('handleStep2 - starting', { 
-      orgId: orgId?.toString(), 
-      incomingDepartments: stepData.departments?.map(d => d.name),
-      count: stepData.departments?.length || 0
-    });
-    
+   
     // Simply create all departments that are sent - generate unique codes to avoid conflicts
     const departments = [];
     const updated = [];
@@ -244,28 +219,16 @@ export class OnboardingService {
           departmentData.code = generateCode(dept.name, existingCodes);
         }
         
-        logInfo('handleStep2 - creating department', {
-          name: dept.name,
-          orgId: orgId?.toString(),
-          code: departmentData.code
-        });
+      
         
         const department = await departmentRepo.create(departmentData);
         
         departments.push(department);
-        logInfo('handleStep2 - successfully created department', {
-          name: dept.name,
-          deptId: department._id?.toString(),
-          orgId: department.org_id?.toString(),
-          code: department.code
-        });
+       
       } catch (error) {
         // Handle duplicate key errors - find and update existing department
         if (error.code === 11000) {
-          logInfo('handleStep2 - duplicate key error, finding and updating existing department', {
-            deptName: dept.name,
-            errorMessage: error.message
-          });
+         
           
           // Find existing department by name
           const foundDept = existingDepts.find(d => 
@@ -291,12 +254,7 @@ export class OnboardingService {
             const updatedDept = await departmentRepo.update(foundDept._id, updateData);
             departments.push(updatedDept);
             updated.push(dept.name);
-            logInfo('handleStep2 - updated existing department', {
-              name: dept.name,
-              deptId: updatedDept._id?.toString(),
-              orgId: updatedDept.org_id?.toString(),
-              code: updatedDept.code
-            });
+           
           } else {
             // Department not found by name - might be a code conflict, try with generated code
             try {
@@ -310,37 +268,23 @@ export class OnboardingService {
               
               const retryDept = await departmentRepo.create(retryData);
               departments.push(retryDept);
-              logInfo('handleStep2 - created department with generated code on retry', {
+              Info('handleStep2 - created department with generated code on retry', {
                 name: dept.name,
                 code: retryDept.code
               });
             } catch (retryError) {
-              logError('handleStep2 - Error on retry with generated code', retryError, {
-                deptName: dept.name
-              });
+            
               errors.push({ name: dept.name, error: retryError.message });
             }
           }
         } else {
-          logError('handleStep2 - Error creating department', error, {
-            deptName: dept.name,
-            errorCode: error.code,
-            errorMessage: error.message
-          });
+         
           errors.push({ name: dept.name, error: error.message });
         }
       }
     }
     
-    logInfo('handleStep2 - finished', {
-      requestedCount: stepData.departments?.length || 0,
-      createdCount: departments.length,
-      updatedCount: updated.length,
-      errorCount: errors.length,
-      createdNames: departments.map(d => d.name),
-      updatedNames: updated,
-      errors: errors
-    });
+    
     
     return { 
       success: true, 
@@ -352,7 +296,7 @@ export class OnboardingService {
     };
   }
 
-  // Step 3: Positions (with permissions - link to departments created in step 2)
+  // Step 3: Posilogtions (with permissions - link to departments created in step 2)
   async handleStep3(orgId, stepData) {
     const tenantDb = await this.getTenantDb();
     const positionRepo = new PositionRepository(tenantDb);
@@ -405,19 +349,11 @@ export class OnboardingService {
       try {
         const position = await positionRepo.create(positionData);
         positions.push(position);
-        logInfo('handleStep3 - created position', {
-          title: pos.name,
-          positionId: position._id?.toString(),
-          departmentId: departmentId?.toString()
-        });
+       
       } catch (error) {
         // Handle duplicate key errors (for org_id + code unique index)
         if (error.code === 11000) {
-          logInfo('handleStep3 - duplicate key error, searching for existing position', {
-            positionName: pos.name,
-            errorMessage: error.message
-          });
-          
+         
           // Try to find existing position by title and department
           const existingPositions = await positionRepo.findByOrgId(orgId);
           const foundPos = existingPositions.find(p => 
@@ -430,10 +366,7 @@ export class OnboardingService {
             if (!foundPos.is_active) {
               await positionRepo.update(foundPos._id, { is_active: true });
               reactivated.push(pos.name);
-              logInfo('handleStep3 - reactivated position', {
-                title: pos.name,
-                positionId: foundPos._id?.toString()
-              });
+             
             } else {
               skipped.push(pos.name);
               logInfo('handleStep3 - skipped existing active position', {
@@ -478,17 +411,25 @@ export class OnboardingService {
     const positionRepo = new PositionRepository(tenantDb);
     const departmentRepo = new DepartmentRepository(tenantDb);
     
-    // Map frontend action types to backend enum values
+    // Map frontend action types to backend enum values.
+    // NOTE: We now store UI tags directly (risk/expense/grant/...) so workflows apply correctly.
+    // Legacy values are still supported for older data.
     const actionTypeMap = {
-      'risk': 'other',
-      'risks': 'other',
+      'risk': 'risk',
+      'risks': 'risk',
+      'risk_management': 'risk',
+      'risk_approval': 'risk',
       'expense': 'expense',
       'expenses': 'expense',
-      'grant': 'other',
-      'grants': 'other',
-      'policy': 'policy_approval',
-      'policies': 'policy_approval',
-      'hr': 'other',
+      'grant': 'grant',
+      'grants': 'grant',
+      'grant_approval': 'grant',
+      'contract': 'contract',
+      'contracts': 'contract',
+      'leave': 'leave',
+      'hr': 'hr',
+      'policy': 'policy',
+      'policies': 'policy',
       'purchase': 'purchase',
       'document_approval': 'document_approval',
       'budget_approval': 'budget_approval',
@@ -630,19 +571,43 @@ export class OnboardingService {
         is_active: true
       }];
     }
-    
-    const matrixData = {
-      org_id: orgId,
-      name: stepData.name || 'Default Approval Matrix',
-      description: stepData.description || '',
-      rules: rules,
-      is_default: true,
-      is_active: true
+
+    // Create ONE ApprovalMatrix document per rule/workflow instead of packing all
+    // rules into a single "Default Approval Matrix".
+    const friendlyNames = {
+      expense: 'Expense approvals',
+      grant: 'Grant approvals',
+      risk: 'Risk approvals',
+      hr: 'HR approvals',
+      policy: 'Policy approvals',
+      contract: 'Contract approvals',
+      other: 'Other approvals'
     };
-    
-    await approvalMatrixRepo.create(matrixData);
-    
-    return { success: true };
+
+    const createdMatrices = [];
+    for (let i = 0; i < rules.length; i++) {
+      const rule = rules[i];
+      const typeKey = rule.action_type || 'other';
+      const baseName = friendlyNames[typeKey] || 'Approval Matrix';
+      const name = stepData.name
+        ? `${stepData.name} - ${baseName}`
+        : baseName;
+
+      const matrixData = {
+        org_id: orgId,
+        name,
+        description: stepData.description || '',
+        rules: [rule],
+        // First created matrix is marked as default; others are additional workflows.
+        is_default: i === 0,
+        is_active: true
+      };
+
+      const matrix = await approvalMatrixRepo.create(matrixData);
+      createdMatrices.push(matrix._id);
+    }
+
+    return { success: true, matrices: createdMatrices };
   }
 
   // Step 5: Review - Mark initial onboarding as complete

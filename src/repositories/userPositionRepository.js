@@ -1,16 +1,19 @@
 /**
  * User Position Repository
- * 
+ *
  * Manages user-position assignments
  */
 
 import mongoose from 'mongoose';
 import userPositionSchema from '../db/schemas/platform/userPositionSchema.js';
+import boardMemberSchema from '../db/schemas/platform/boardMemberSchema.js';
 
 export class UserPositionRepository {
   constructor(tenantDb) {
-    this.UserPosition = tenantDb.models.UserPosition || 
+    this.UserPosition = tenantDb.models.UserPosition ||
       tenantDb.model('UserPosition', userPositionSchema);
+    this.BoardMember = tenantDb.models.BoardMember ||
+      tenantDb.model('BoardMember', boardMemberSchema);
   }
 
   async findByUserId(userId, activeOnly = true) {
@@ -75,21 +78,40 @@ export class UserPositionRepository {
   }
 
   async findUsersByPositionId(positionId, activeOnly = true) {
-    const query = { position_id: positionId };
+    const userIdsSet = new Set();
+
+    // 1. Check UserPosition collection
+    const upQuery = { position_id: positionId };
     if (activeOnly) {
-      query.is_active = true;
-      query.$or = [
+      upQuery.is_active = true;
+      upQuery.$or = [
         { effective_to: null },
         { effective_to: { $gte: new Date() } }
       ];
     }
-    const userPositions = await this.UserPosition.find(query)
+    const userPositions = await this.UserPosition.find(upQuery)
       .populate('user_id')
       .select('user_id');
-    
-    // Extract unique user IDs
-    const userIds = [...new Set(userPositions.map(up => up.user_id?._id || up.user_id))];
-    return userIds;
+
+    userPositions.forEach(up => {
+      const uid = up.user_id?._id || up.user_id;
+      if (uid) userIdsSet.add(uid.toString());
+    });
+
+    // 2. Check BoardMember collection (board members have position_id and user_id)
+    const bmQuery = { position_id: positionId, user_id: { $ne: null } };
+    if (activeOnly) {
+      bmQuery.is_active = true;
+      bmQuery.status = 'active';
+    }
+    const boardMembers = await this.BoardMember.find(bmQuery).select('user_id');
+
+    boardMembers.forEach(bm => {
+      if (bm.user_id) userIdsSet.add(bm.user_id.toString());
+    });
+
+    // Convert back to ObjectIds
+    return [...userIdsSet].map(id => new mongoose.Types.ObjectId(id));
   }
 
   async findUsersByDepartmentId(departmentId, activeOnly = true) {

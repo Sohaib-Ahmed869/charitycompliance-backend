@@ -82,12 +82,10 @@ export const getResourceViewUrl = asyncHandler(async (req, res) => {
 });
 
 // --- Stream PDF for in-app viewing (same-origin so iframe/progress tracking works) ---
+// Allowed for: (1) any authenticated org user e.g. HR viewing training detail, (2) members viewing assigned training
 export const streamResourcePdf = asyncHandler(async (req, res) => {
-  const { trainingRepo, boardMemberRepo, org } = await getTenantAndRepos(req);
-  const userId = req.user?.userId;
-  if (!userId) throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
-  const boardMember = await boardMemberRepo.findByUserId(userId, org._id);
-  if (!boardMember) throw new AppError('You are not registered as a member', 403, 'FORBIDDEN');
+  const { trainingRepo, org } = await getTenantAndRepos(req);
+  if (!req.user?.userId) throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
   const { resourceId } = req.params;
   const resource = await trainingRepo.findResourceById(resourceId);
   if (!resource) throw new AppError('Resource not found', 404, 'NOT_FOUND');
@@ -100,10 +98,6 @@ export const streamResourcePdf = asyncHandler(async (req, res) => {
   if (!program || program.org_id.toString() !== org._id.toString()) {
     throw new AppError('Training program not found', 404, 'NOT_FOUND');
   }
-  const bmPositionId = boardMember.position_id?.toString?.() || null;
-  const isAssigned = bmPositionId && Array.isArray(program.position_ids) &&
-    program.position_ids.some((pid) => (pid?.toString?.() || pid) === bmPositionId);
-  if (!isAssigned) throw new AppError('This training is not assigned to you', 403, 'FORBIDDEN');
   const rangeHeader = req.headers.range || null;
   const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await getFileStream(resource.file_url, rangeHeader);
   res.setHeader('Content-Type', ContentType || 'application/pdf');
