@@ -37,9 +37,51 @@ const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => {
     if (!boardMember?.position_id) return [];
 
     const position = await positionRepo.findById(boardMember.position_id);
-    if (!position?.granted_permissions?.length) return [];
+    if (!position) return [];
 
-    return position.granted_permissions.filter(p => typeof p === 'string' && p.trim());
+    const result = [];
+
+    // Include existing granted_permissions (string-based permissions)
+    if (Array.isArray(position.granted_permissions) && position.granted_permissions.length) {
+      result.push(...position.granted_permissions.filter(p => typeof p === 'string' && p.trim()));
+    }
+
+    // Known sidebar modules - used for defaults when module_permissions is empty
+    const MODULE_IDS = [
+      'dashboard', 'approval_workflow', 'charity_admin', 'policies', 'human_resources',
+      'financial_mgmt', 'risk_mgmt', 'programs', 'grants_donors', 'reporting', 'systems_legal'
+    ];
+
+    // Fixed modules: dashboard (view only), approval_workflow & human_resources (view+edit)
+    const FIXED_VIEW_ONLY = ['dashboard'];
+    const FIXED_VIEW_EDIT = ['approval_workflow', 'human_resources'];
+
+    const permsMap = {};
+    if (Array.isArray(position.module_permissions) && position.module_permissions.length) {
+      for (const mp of position.module_permissions) {
+        if (!mp || !mp.module_id) continue;
+        const mod = mp.module_id.toString();
+        permsMap[mod] = { view: !!mp.view, edit: !!mp.edit, delete: !!mp.delete };
+      }
+    }
+
+    // Default: all modules get view when not explicitly set
+    for (const mod of MODULE_IDS) {
+      if (permsMap[mod]) {
+        if (permsMap[mod].view) result.push(`module:${mod}:view`);
+        if (permsMap[mod].edit) result.push(`module:${mod}:edit`);
+        if (permsMap[mod].delete) result.push(`module:${mod}:delete`);
+      } else {
+        // No permissions set - use defaults
+        const isFixedViewOnly = FIXED_VIEW_ONLY.includes(mod);
+        const isFixedViewEdit = FIXED_VIEW_EDIT.includes(mod);
+        result.push(`module:${mod}:view`);
+        if (isFixedViewEdit) result.push(`module:${mod}:edit`);
+      }
+    }
+
+    // Deduplicate and return
+    return Array.from(new Set(result));
   } catch (err) {
     logError('Failed to load position permissions for user', err, { userId, orgId });
     return [];

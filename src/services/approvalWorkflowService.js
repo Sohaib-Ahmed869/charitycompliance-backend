@@ -8,9 +8,11 @@
 import { getTenantConnection } from '../db/connectionManager.js';
 import { ApprovalMatrixRepository } from '../repositories/approvalMatrixRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
+import { NotificationRepository } from '../repositories/notificationRepository.js';
 import { UserPositionRepository } from '../repositories/userPositionRepository.js';
 import { ExpenseRepository } from '../repositories/expenseRepository.js';
 import { RiskRepository } from '../repositories/riskRepository.js';
+import { PolicyRepository } from '../repositories/policyRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -320,6 +322,90 @@ export class ApprovalWorkflowService {
   }
 
   /**
+   * Create approval request for a policy (action_type: policy)
+   */
+  async createPolicyApprovalRequest(policyId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const policyRepo = new PolicyRepository(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const userPositionRepo = new UserPositionRepository(tenantDb);
+
+    const policy = await policyRepo.findById(policyId);
+    if (!policy) {
+      throw new AppError('Policy not found', 404, 'POLICY_NOT_FOUND');
+    }
+
+    const { matrix, rule } = await this.findMatchingRule('policy', 0, orgObjectId);
+
+    const approvers = [];
+    for (const approverConfig of rule.requires_approval_from) {
+      let userIds = [];
+      if (approverConfig.user_id) {
+        userIds = [approverConfig.user_id];
+      } else if (approverConfig.position_id) {
+        userIds = await userPositionRepo.findUsersByPositionId(approverConfig.position_id);
+      }
+
+      if (userIds.length > 0) {
+        userIds.forEach((userId) => {
+          approvers.push({
+            user_id: userId,
+            position_id: approverConfig.position_id || null,
+            department_id: approverConfig.department_id || null,
+            level: approverConfig.approval_level
+          });
+        });
+      } else {
+        approvers.push({
+          user_id: null,
+          position_id: approverConfig.position_id || null,
+          department_id: approverConfig.department_id || null,
+          level: approverConfig.approval_level
+        });
+      }
+    }
+
+    approvers.sort((a, b) => a.level - b.level);
+
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id || undefined,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'policy',
+      entity_id: policyId,
+      entity_type: 'policy',
+      amount: 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    await policyRepo.update(policyId, {
+      approval_matrix_id: matrix._id,
+      approval_request_id: approvalRequest._id,
+      status: 'under_review'
+    });
+
+    logInfo('Policy approval request created', {
+      policyId,
+      approvalRequestId: approvalRequest._id,
+      approversCount: approvers.length
+    });
+
+    return approvalRequest;
+  }
+
+  /**
    * Process approval (approve or reject)
    */
   async processApproval(approvalRequestId, stepIndex, userId, decision, comments = null, ipAddress = null, userAgent = null) {
@@ -331,6 +417,15 @@ export class ApprovalWorkflowService {
 
     // Get approval request
     const request = await approvalRequestRepo.findById(approvalRequestId);
+    logInfo('Processing approval step', {
+      approvalRequestId,
+      entityType: request?.entity_type,
+      requestType: request?.request_type,
+      approvalType: request?.approval_type,
+      currentStatus: request?.status,
+      stepIndex,
+      decision
+    });
     if (!request) {
       throw new AppError('Approval request not found', 404, 'APPROVAL_REQUEST_NOT_FOUND');
     }
@@ -401,6 +496,14 @@ export class ApprovalWorkflowService {
     // Check if all approvals are complete
     const updatedRequest = await approvalRequestRepo.findById(approvalRequestId);
     const allSteps = updatedRequest.approval_steps;
+    logInfo('Approval step updated', {
+      approvalRequestId,
+      entityType: updatedRequest?.entity_type,
+      approvalType: updatedRequest?.approval_type,
+      decision,
+      stepIndex,
+      steps: (allSteps || []).map((s) => ({ level: s.level, status: s.status }))
+    });
 
     if (decision === 'rejected') {
       await approvalRequestRepo.updateStatus(approvalRequestId, 'rejected');
@@ -413,6 +516,9 @@ export class ApprovalWorkflowService {
         });
       } else if (request.entity_type === 'risk') {
         await riskRepo.updateStatus(request.entity_id, 'rejected');
+      } else if (request.entity_type === 'policy') {
+        const policyRepo = new PolicyRepository(tenantDb);
+        await policyRepo.update(request.entity_id, { status: 'draft' });
       }
 
       return updatedRequest;
@@ -437,6 +543,9 @@ export class ApprovalWorkflowService {
           });
         } else if (request.entity_type === 'risk') {
           await riskRepo.updateStatus(request.entity_id, 'rejected');
+        } else if (request.entity_type === 'policy') {
+          const policyRepo = new PolicyRepository(tenantDb);
+          await policyRepo.update(request.entity_id, { status: 'draft' });
         }
         return updatedRequest;
       }
@@ -445,15 +554,61 @@ export class ApprovalWorkflowService {
     }
 
     if (allApproved) {
+      logInfo('All approval steps approved, updating entity status', {
+        approvalRequestId,
+        entityId: request.entity_id,
+        entityType: request.entity_type
+      });
+
       await approvalRequestRepo.updateStatus(approvalRequestId, 'approved');
 
       if (request.entity_type === 'expense') {
         await expenseRepo.updateStatus(request.entity_id, 'approved', { approved_at: new Date() });
+        logInfo('Expense status updated from approval', { approvalRequestId, entityId: request.entity_id });
       } else if (request.entity_type === 'risk') {
         await riskRepo.updateStatus(request.entity_id, 'under_treatment');
+        logInfo('Risk status updated from approval', { approvalRequestId, entityId: request.entity_id });
+      } else if (request.entity_type === 'policy') {
+        const policyRepo = new PolicyRepository(tenantDb);
+        const updatedPolicy = await policyRepo.update(request.entity_id, { status: 'active' });
+        logInfo('Policy status updated from approval', {
+          approvalRequestId,
+          entityId: request.entity_id,
+          previousStatus: request.status,
+          newStatus: updatedPolicy?.status
+        });
       }
 
       logInfo('All approvals completed', { approvalRequestId, entityId: request.entity_id, entityType: request.entity_type });
+
+      // Notify all parties (submitter + approvers) that the workflow is approved
+      const typeLabels = { expense: 'Expense Reimbursement', risk: 'Risk Assessment', purchase: 'Purchase', grant: 'Grant', policy: 'Policy', hr: 'HR', other: 'Approval Request' };
+      const workflowTitle = typeLabels[request.request_type] || request.request_type || 'Approval Request';
+      const userIds = new Set();
+
+      const submittedById = request.submitted_by?._id || request.submitted_by;
+      if (submittedById) userIds.add(String(submittedById));
+
+      const finalRequest = await approvalRequestRepo.findById(approvalRequestId);
+      (finalRequest?.approval_steps || allSteps || []).forEach((step) => {
+        const approverId = step.approver_user_id?._id || step.approver_user_id;
+        if (approverId) userIds.add(String(approverId));
+      });
+
+      const notificationRepo = new NotificationRepository(tenantDb);
+      const notifications = [...userIds].map((uid) => ({
+        user_id: uid,
+        type: 'workflow_approved',
+        title: 'Workflow Approved',
+        message: `${workflowTitle} has been fully approved by all approvers.`,
+        link: `/approvals/${approvalRequestId}`,
+        related_entity_id: approvalRequestId,
+        related_entity_type: 'approval_request'
+      }));
+
+      if (notifications.length > 0) {
+        await notificationRepo.createMany(notifications);
+      }
     }
 
     return await approvalRequestRepo.findById(approvalRequestId);
@@ -506,11 +661,13 @@ export class ApprovalWorkflowService {
       return true;
     }
 
-    // Position match (when no specific user assigned or field doesn't exist)
-    const hasNoUserAssigned = !step.approver_user_id || step.approver_user_id === null;
-    if (hasNoUserAssigned && step.approver_position_id) {
+    // Position match: user holds the approver position (works even when approver_user_id is set)
+    // This ensures position holders see approvals when a different user was pre-assigned
+    if (step.approver_position_id) {
       const stepPosId = step.approver_position_id._id || step.approver_position_id;
-      return stepPosId ? userPositionIds.includes(String(stepPosId)) : false;
+      if (stepPosId && userPositionIds.includes(String(stepPosId))) {
+        return true;
+      }
     }
 
     return false;

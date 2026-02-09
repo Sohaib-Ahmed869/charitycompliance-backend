@@ -37,7 +37,7 @@ export class ApprovalRequestRepository {
     }
     
     return await this.ApprovalRequest.find(query)
-      .populate('submitted_by', 'first_name last_name email')
+      .populate('submitted_by', 'first_name last_name email is_org_owner')
       .populate('approval_matrix_id', 'name')
       .populate('approval_steps.approver_user_id', 'first_name last_name email')
       .populate('approval_steps.approver_position_id', 'title')
@@ -67,7 +67,7 @@ export class ApprovalRequestRepository {
   }
 
   async findPendingByApprover(userId, positionIds = []) {
-    // Build query: match by user_id OR by position_id (when approver_user_id is null)
+    // Build query: match by user_id OR by position_id (position holders can always approve)
     // Use $elemMatch to ensure all conditions apply to the SAME array element
     const orConditions = [
       {
@@ -80,16 +80,13 @@ export class ApprovalRequestRepository {
       }
     ];
 
-    // Also match steps where position matches and no specific user assigned yet
+    // Match steps where user holds the approver position (works regardless of approver_user_id)
+    // This ensures position holders see approvals even when a different user was pre-assigned
     if (positionIds && positionIds.length > 0) {
       orConditions.push({
         approval_steps: {
           $elemMatch: {
             approver_position_id: { $in: positionIds },
-            $or: [
-              { approver_user_id: null },
-              { approver_user_id: { $exists: false } }
-            ],
             status: 'pending'
           }
         }

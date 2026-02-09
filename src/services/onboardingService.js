@@ -13,6 +13,7 @@ import { ApprovalMatrixRepository } from '../repositories/approvalMatrixReposito
 import { DepartmentRepository } from '../repositories/departmentRepository.js';
 import { PositionRepository } from '../repositories/positionRepository.js';
 import { logError, logInfo, logWarn } from '../utils/logger.js';
+import { AppError } from '../middleware/errorHandler.js';
 
 export class OnboardingService {
   constructor(orgId) {
@@ -80,10 +81,31 @@ export class OnboardingService {
   
     
     return departments.map(dept => ({
+      id: dept._id.toString(),
       name: dept.name,
       code: dept.code || '',
       description: dept.description || ''
     }));
+  }
+
+  async deleteDepartment(departmentId) {
+    const tenantDb = await this.getTenantDb();
+    const { DepartmentRepository } = await import('../repositories/departmentRepository.js');
+    const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (!org) {
+      throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+    }
+    const departmentRepo = new DepartmentRepository(tenantDb);
+    const department = await departmentRepo.findById(departmentId);
+    if (!department) {
+      throw new AppError('Department not found', 404, 'DEPARTMENT_NOT_FOUND');
+    }
+    if (department.org_id.toString() !== org._id.toString()) {
+      throw new AppError('Department does not belong to this organization', 403, 'FORBIDDEN');
+    }
+    await departmentRepo.delete(departmentId);
   }
 
   async updateStep(stepNumber, stepData = {}) {

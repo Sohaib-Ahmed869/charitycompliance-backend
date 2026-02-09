@@ -93,6 +93,17 @@ const positionSchema = new mongoose.Schema({
     type: Number,
     default: 1
   }
+  ,
+  /** Module-level permissions for this position. Stored as an array of objects per module. */
+  module_permissions: {
+    type: [{
+      module_id: { type: String, required: true },
+      view: { type: Boolean, default: false },
+      edit: { type: Boolean, default: false },
+      delete: { type: Boolean, default: false }
+    }],
+    default: []
+  }
 }, {
   timestamps: true,
   collection: 'positions'

@@ -32,6 +32,19 @@ export const getDepartments = asyncHandler(async (req, res) => {
   });
 });
 
+export const deleteDepartment = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { departmentId } = req.params;
+  const onboardingService = new OnboardingService(orgId);
+  
+  await onboardingService.deleteDepartment(departmentId);
+  
+  res.json({
+    success: true,
+    message: 'Department deleted'
+  });
+});
+
 export const updateStep = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {

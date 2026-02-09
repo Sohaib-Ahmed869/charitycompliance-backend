@@ -84,7 +84,10 @@ import financialControlsRoutes from './routes/platform/financialControlsRoutes.j
 import governanceStructureRoutes from './routes/platform/governanceStructureRoutes.js';
 import trainingRoutes from './routes/platform/trainingRoutes.js';
 import riskRoutes from './routes/platform/riskRoutes.js';
+import policyRoutes from './routes/platform/policyRoutes.js';
 import meRoutes from './routes/platform/meRoutes.js';
+import positionPermissionsRoutes from './routes/platform/positionPermissions.js';
+import notificationRoutes from './routes/platform/notificationRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -97,7 +100,10 @@ app.use('/api/v1/platform/financial-controls', financialControlsRoutes);
 app.use('/api/v1/platform/governance-structure', governanceStructureRoutes);
 app.use('/api/v1/platform/training', trainingRoutes);
 app.use('/api/v1/platform/risks', riskRoutes);
+app.use('/api/v1/platform/policies', policyRoutes);
 app.use('/api/v1/platform/me', meRoutes);
+app.use('/api/v1/platform/position-permissions', positionPermissionsRoutes);
+app.use('/api/v1/platform/notifications', notificationRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

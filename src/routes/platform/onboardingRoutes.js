@@ -21,6 +21,14 @@ router.get('/progress', onboardingController.getProgress);
 // Get departments (for Step 2)
 router.get('/departments', onboardingController.getDepartments);
 
+// Delete department (when user removes in Step 2)
+router.delete(
+  '/departments/:departmentId',
+  [param('departmentId').isMongoId().withMessage('Valid department ID is required')],
+  validate,
+  onboardingController.deleteDepartment
+);
+
 // Verify ABN (Step 1)
 router.post(
   '/verify-abn',

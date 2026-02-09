@@ -268,13 +268,26 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
       name: dept.name,
       code: dept.code,
       description: dept.description,
-      roles: deptPositions.map(pos => ({
-        id: pos._id.toString(),
-        name: pos.title,
-        level: pos.level,
-        isManagement: pos.is_management,
-        granted_permissions: pos.granted_permissions || []
-      }))
+      roles: deptPositions.map(pos => {
+        const modulePermissions = {};
+        (pos.module_permissions || []).forEach(mp => {
+          if (mp && mp.module_id) {
+            modulePermissions[mp.module_id] = {
+              view: !!mp.view,
+              edit: !!mp.edit,
+              delete: !!mp.delete
+            };
+          }
+        });
+        return {
+          id: pos._id.toString(),
+          name: pos.title,
+          level: pos.level,
+          isManagement: pos.is_management,
+          granted_permissions: pos.granted_permissions || [],
+          modulePermissions
+        };
+      })
     };
   });
 

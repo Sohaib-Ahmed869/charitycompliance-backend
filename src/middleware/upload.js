@@ -106,6 +106,70 @@ const uploadTraining = multer({
  */
 export const uploadTrainingSingle = uploadTraining.single('file');
 
+// Policy documents: PNG, JPG, PDF, DOC, DOCX, PPT, PPTX up to 50MB
+const policyFileFilter = (req, file, cb) => {
+  const allowedMimeTypes = [
+    'image/jpeg',
+    'image/jpg',
+    'image/png',
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  ];
+  const allowedExtensions = ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx', '.ppt', '.pptx'];
+  if (allowedMimeTypes.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    const ext = '.' + file.originalname.split('.').pop().toLowerCase();
+    if (allowedExtensions.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new AppError(
+        'File type not allowed. Allowed: PNG, JPG, PDF, DOC, DOCX, PPT, PPTX up to 50 MB',
+        400,
+        'INVALID_FILE_TYPE'
+      ), false);
+    }
+  }
+};
+
+const uploadPolicy = multer({
+  storage: storage,
+  fileFilter: policyFileFilter,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50MB
+    files: 1
+  }
+});
+
+export const uploadPolicySingle = uploadPolicy.single('file');
+
+export const handlePolicyUploadError = (err, req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'FILE_TOO_LARGE',
+          message: 'File size exceeds the maximum limit of 50MB'
+        }
+      });
+    }
+  }
+  if (err) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: err.code || 'UPLOAD_ERROR',
+        message: err.message || 'File upload failed'
+      }
+    });
+  }
+  next();
+};
+
 /**
  * Middleware for multiple file uploads
  * Attaches files to req.files
