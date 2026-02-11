@@ -13,25 +13,32 @@ const LOGO_URL = process.env.logo || process.env.LOGO_URL || '';
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@yathic.com';
 
 const GRADIENT = 'linear-gradient(103.82deg, #132E5E 6.74%, #9A78EC 76.18%)';
-
+const BODY_GRADIENT = 'linear-gradient(180deg, #FAFAFC 0%, #F5F3FA 40%, #EDE9F7 100%)';
+const CONTAINER_GRADIENT = 'linear-gradient(180deg, #FFFFFF 0%, #FDFCFE 50%, #FAF8FC 100%)';
 /**
- * Build base email HTML with Yathic design (from provided template)
+ * Build base email HTML - Yathic design (Reset Your Password reference)
+ * Vertical gradient background, gradient logo/heading, CTA with arrow, info box with padlock
  * @param {Object} options
  * @param {string} options.heading - Main heading (e.g. "Reset Your Password")
+ * @param {string} [options.headingHighlight] - Optional first word to style in purple (e.g. "Reset")
  * @param {string} options.bodyHtml - Main body content (HTML)
  * @param {string} options.buttonText - CTA button text
  * @param {string} options.buttonLink - CTA button href
  * @param {string[]} options.infoBoxLines - Info box lines (array of strings)
  */
-function buildEmailTemplate({ heading, bodyHtml, buttonText, buttonLink, infoBoxLines }) {
+function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, buttonLink, infoBoxLines }) {
   const logoHtml = LOGO_URL
     ? `<img src="${LOGO_URL}" alt="${APP_NAME}" style="max-width: 160px; height: auto;" />`
-    : `<div style="font-size: 36px; font-weight: 500; color: #132E5E; letter-spacing: 2px;">${APP_NAME.toLowerCase()}</div>`;
+    : `<span style="font-size: 32px; font-weight: 600; letter-spacing: 1px; color: #5B6B9D;">${APP_NAME.toLowerCase()}</span>`;
 
-  const lockIcon = '🔒'; // Simple emoji fallback for better email client compatibility
+  const lockIcon = '🔒';
+
+  const headingHtml = headingHighlight
+    ? `<span style="color: #6B7FBD; font-weight: 600;">${headingHighlight}</span> <span style="color: #1F2937; font-weight: 600;">${heading.slice(headingHighlight.length).trim()}</span>`
+    : `<span style="color: #132E5E;">${heading}</span>`;
 
   const infoBoxContent = infoBoxLines && infoBoxLines.length
-    ? infoBoxLines.map((line, i) => `<p style="margin: ${i === 0 ? '0 0 4px 0' : '0'}; font-size: 12px; line-height: 15px; color: rgba(0, 0, 0, 0.8); font-weight: 400;">${line}</p>`).join('')
+    ? infoBoxLines.map((line, i) => `<p style="margin: ${i === 0 ? '0 0 4px 0' : '0'}; font-size: 12px; line-height: 15px; color: #4A5568; font-weight: 400;">${line}</p>`).join('')
     : '';
 
   return `
@@ -42,41 +49,43 @@ function buildEmailTemplate({ heading, bodyHtml, buttonText, buttonLink, infoBox
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${APP_NAME} - ${heading}</title>
 </head>
-<body style="margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; background-color: #f5f5f5;">
-    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color: #f5f5f5;">
+<body style="margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; background: ${BODY_GRADIENT};">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background: ${BODY_GRADIENT}; min-height: 100vh;">
         <tr>
             <td align="center" style="padding: 40px 20px;">
-                <!-- Main email container with gradient background -->
-                <table width="600" cellpadding="0" cellspacing="0" border="0" style="background: linear-gradient(135deg, rgba(154, 120, 236, 0.08) 0%, rgba(19, 46, 94, 0.05) 100%), #FFFFFF; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.05);">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" style="background: ${CONTAINER_GRADIENT}; border-radius: 12px; box-shadow: 0 4px 24px rgba(19, 46, 94, 0.08); overflow: hidden;">
                     <tr>
-                        <td style="padding: 44px 30px 60px 30px;">
-                            <!-- Logo Section -->
+                        <td style="background: ${GRADIENT}; height: 6px; font-size: 0; line-height: 0;">&nbsp;</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 48px 40px 56px 40px;">
+                            <!-- Logo -->
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
-                                    <td align="center" style="padding-bottom: 10px;">
+                                    <td align="center" style="padding-bottom: 8px;">
                                         ${logoHtml}
                                     </td>
                                 </tr>
                                 <tr>
-                                    <td align="center" style="padding-bottom: 36px;">
-                                        <p style="margin: 0; font-size: 10px; line-height: 12px; color: #666666; font-weight: 400;">End to End Compliance Made Easy!</p>
+                                    <td align="center" style="padding-bottom: 40px;">
+                                        <p style="margin: 0; font-size: 11px; line-height: 14px; color: #6B7280; font-weight: 500;">End to End Compliance Made Easy!</p>
                                     </td>
                                 </tr>
                             </table>
                             
-                            <!-- Main Heading -->
+                            <!-- Heading -->
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
-                                    <td align="center" style="padding-bottom: 24px;">
-                                        <h1 style="margin: 0; font-size: 36px; line-height: 46px; font-weight: 600; text-align: center; color: #132E5E;">${heading}</h1>
+                                    <td align="center" style="padding-bottom: 28px;">
+                                        <h1 style="margin: 0; font-size: 32px; line-height: 42px; font-weight: 600; text-align: center;">${headingHtml}</h1>
                                     </td>
                                 </tr>
                             </table>
                             
-                            <!-- Body Content -->
+                            <!-- Body -->
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
-                                    <td align="center" style="padding: 0 20px 32px;">
+                                    <td align="center" style="padding: 0 24px 32px;">
                                         ${bodyHtml}
                                     </td>
                                 </tr>
@@ -85,12 +94,12 @@ function buildEmailTemplate({ heading, bodyHtml, buttonText, buttonLink, infoBox
                             <!-- CTA Button -->
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
-                                    <td align="center" style="padding-bottom: 32px;">
-                                        <table cellpadding="0" cellspacing="0" border="0">
+                                    <td align="center" style="padding-bottom: 36px;">
+                                        <table cellpadding="0" cellspacing="0" border="0" align="center">
                                             <tr>
-                                                <td align="center" style="background: linear-gradient(103.82deg, #132E5E 6.74%, #9A78EC 76.18%); border-radius: 50px; box-shadow: 0px 4px 20px rgba(154, 120, 236, 0.45);">
-                                                    <a href="${buttonLink}" style="display: inline-block; padding: 14px 32px; text-decoration: none; color: #FFFFFF; font-size: 14px; font-weight: 600; border-radius: 50px;">
-                                                        ${buttonText} →
+                                                <td align="center" style="background: ${GRADIENT}; border-radius: 50px; box-shadow: 0px 4px 20px rgba(154, 120, 236, 0.45);">
+                                                    <a href="${buttonLink}" style="display: inline-block; padding: 16px 36px; text-decoration: none; color: #FFFFFF; font-size: 15px; font-weight: 600; border-radius: 50px;">
+                                                        ${buttonText} ↗
                                                     </a>
                                                 </td>
                                             </tr>
@@ -103,15 +112,13 @@ function buildEmailTemplate({ heading, bodyHtml, buttonText, buttonLink, infoBox
                             ${infoBoxContent ? `
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
-                                    <td align="center" style="padding: 0 20px 40px;">
-                                        <table cellpadding="0" cellspacing="0" border="0" style="max-width: 420px; border: 1px solid #E5E5E5; border-radius: 10px; background: #FAFAFA;">
+                                    <td align="center" style="padding: 0 24px 32px;">
+                                        <table cellpadding="0" cellspacing="0" border="0" align="center" style="max-width: 440px; border: 1px solid #E5E7EB; border-radius: 10px; background: #FFFFFF;">
                                             <tr>
-                                                <td style="padding: 16px 20px;">
+                                                <td style="padding: 18px 20px;">
                                                     <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                                         <tr>
-                                                            <td width="30" valign="top" style="padding-right: 12px; font-size: 20px; color: #9A78EC;">
-                                                                ${lockIcon}
-                                                            </td>
+                                                            <td width="36" valign="top" style="padding-right: 14px; font-size: 18px;">${lockIcon}</td>
                                                             <td>
                                                                 ${infoBoxContent}
                                                             </td>
@@ -128,14 +135,14 @@ function buildEmailTemplate({ heading, bodyHtml, buttonText, buttonLink, infoBox
                             <!-- Footer -->
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
-                                    <td align="center" style="border-top: 1px solid #E5E5E5; padding-top: 24px;">
-                                        <p style="margin: 0 0 8px 0; font-size: 12px; line-height: 18px; color: #666666; font-weight: 400;">© ${new Date().getFullYear()} ${APP_NAME}. All rights reserved.</p>
-                                        <p style="margin: 0 0 8px 0; font-size: 12px; line-height: 18px; color: #666666; font-weight: 400;">
+                                    <td align="center" style="border-top: 1px solid #E5E7EB; padding-top: 28px;">
+                                        <p style="margin: 0 0 8px 0; font-size: 12px; line-height: 18px; color: #6B7280; font-weight: 400;">© ${new Date().getFullYear()} ${APP_NAME}. All rights reserved.</p>
+                                        <p style="margin: 0 0 8px 0; font-size: 12px; line-height: 18px; color: #6B7280; font-weight: 400;">
                                             Need help? <a href="mailto:${SUPPORT_EMAIL}" style="color: #9A78EC; text-decoration: none;">${SUPPORT_EMAIL}</a>
                                         </p>
                                         <p style="margin: 0; font-size: 12px; line-height: 18px; font-weight: 400;">
                                             <a href="#" style="color: #9A78EC; text-decoration: none;">Privacy Policy</a>
-                                            <span style="color: #666666;"> • </span>
+                                            <span style="color: #6B7280;"> • </span>
                                             <a href="#" style="color: #9A78EC; text-decoration: none;">Terms</a>
                                         </p>
                                     </td>
@@ -212,9 +219,10 @@ class EmailService {
         text: text || html.replace(/<[^>]*>/g, '') // Strip HTML for text version
       };
 
+      const sendTimeout = parseInt(process.env.SMTP_SEND_TIMEOUT_MS) || 30000;
       const result = await Promise.race([
         this.transporter.sendMail(mailOptions),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP send timeout (15s)')), 15000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error(`SMTP send timeout (${sendTimeout / 1000}s)`)), sendTimeout))
       ]);
       logInfo('Email sent successfully', { to, subject, messageId: result.messageId });
       return result;
@@ -277,6 +285,7 @@ class EmailService {
 
     const html = buildEmailTemplate({
       heading: 'Reset Your Password',
+      headingHighlight: 'Reset',
       bodyHtml,
       buttonText: 'Reset Password',
       buttonLink: resetLink,

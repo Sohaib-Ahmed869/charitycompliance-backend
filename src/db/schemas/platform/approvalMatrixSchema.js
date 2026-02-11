@@ -83,8 +83,13 @@ const approvalMatrixSchema = new mongoose.Schema({
   },
   priority: {
     type: Number,
-    description: 'Priority of the workflow (higher number = higher priority)',
+    description: 'Priority of the workflow (higher number = higher priority). Maps: High=3, Medium=2, Low=1',
     default: 0
+  },
+  priority_level: {
+    type: String,
+    enum: ['high', 'medium', 'low'],
+    description: 'Human-readable priority: High, Medium, Low'
   },
   rules: [approvalRuleSchema],
   default_approver: {

@@ -309,9 +309,11 @@ const ACTION_TYPE_MAP = {
   hr: 'hr'
 };
 
+const PRIORITY_LEVEL_MAP = { high: 3, medium: 2, low: 1 };
+
 export const createApprovalMatrix = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
-  const { name, action_type, priority, description, positions } = req.body;
+  const { name, action_type, priority, priority_level, description, positions } = req.body;
 
   const tenantDb = await getTenantConnection(orgId);
   const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
@@ -358,11 +360,14 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
     is_active: true
   };
 
+  const resolvedPriority = priority ?? (priority_level ? PRIORITY_LEVEL_MAP[priority_level] : 0);
+
   const matrix = await approvalMatrixRepo.create({
     org_id: org._id,
     name: name || `Workflow for ${mappedType}`,
     description: description || '',
-    priority: priority ?? 0,
+    priority: resolvedPriority,
+    priority_level: priority_level || null,
     rules: [rule],
     is_default: false,
     is_active: true
@@ -377,7 +382,7 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
 export const updateApprovalMatrix = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { matrixId } = req.params;
-  const { name, description, priority, positions } = req.body;
+  const { name, description, priority, priority_level, positions } = req.body;
 
   const tenantDb = await getTenantConnection(orgId);
   const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
@@ -408,6 +413,10 @@ export const updateApprovalMatrix = asyncHandler(async (req, res) => {
   if (name !== undefined) updateData.name = name;
   if (description !== undefined) updateData.description = description;
   if (priority !== undefined) updateData.priority = priority;
+  if (priority_level !== undefined) {
+    updateData.priority_level = priority_level;
+    if (priority === undefined) updateData.priority = PRIORITY_LEVEL_MAP[priority_level] ?? matrix.priority;
+  }
 
   if (positions && Array.isArray(positions) && matrix.rules?.length > 0) {
     const allPositions = await positionRepo.findByOrgId(org._id);

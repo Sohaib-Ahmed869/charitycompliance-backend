@@ -34,6 +34,10 @@ router.post(
       .optional()
       .isInt({ min: 0 })
       .withMessage('Priority must be a non-negative integer'),
+    body('priority_level')
+      .optional()
+      .isIn(['high', 'medium', 'low'])
+      .withMessage('Priority level must be high, medium, or low'),
     body('description')
       .optional()
       .trim(),
@@ -63,6 +67,10 @@ router.put(
       .optional()
       .isInt({ min: 0 })
       .withMessage('Priority must be a non-negative integer'),
+    body('priority_level')
+      .optional()
+      .isIn(['high', 'medium', 'low'])
+      .withMessage('Priority level must be high, medium, or low'),
     body('positions')
       .optional()
       .isArray()
