@@ -58,7 +58,16 @@ router.post(
   [
     body('title').trim().notEmpty().withMessage('Policy name is required'),
     body('category').trim().notEmpty().withMessage('Category is required'),
-    body('policy_owner_id').trim().notEmpty().withMessage('Policy owner is required').isMongoId().withMessage('Invalid policy owner'),
+    body('policy_owner_id').optional({ values: 'falsy' }).isMongoId().withMessage('Invalid policy owner'),
+    body('department_id').optional({ values: 'falsy' }).isMongoId().withMessage('Invalid department'),
+    body().custom((value, { req }) => {
+      const hasOwner = req.body.policy_owner_id && String(req.body.policy_owner_id).trim();
+      const hasDept = req.body.department_id && String(req.body.department_id).trim();
+      if (!hasOwner && !hasDept) {
+        throw new Error('Policy owner or department is required');
+      }
+      return true;
+    }),
     body('description').trim().notEmpty().withMessage('Policy description is required'),
     body('effective_date').optional().isISO8601().withMessage('Invalid effective date'),
     body('review_cycle').optional().isIn(['3 months', '6 months', '12 months', '24 months', 'other']).withMessage('Invalid review cycle'),
@@ -76,7 +85,8 @@ router.put(
     param('policyId').isMongoId().withMessage('Invalid policy ID'),
     body('title').optional().trim().notEmpty().withMessage('Policy name cannot be empty'),
     body('category').optional().trim().notEmpty().withMessage('Category cannot be empty'),
-    body('policy_owner_id').optional(),
+    body('policy_owner_id').optional({ values: 'falsy' }).isMongoId().withMessage('Invalid policy owner'),
+    body('department_id').optional({ values: 'falsy' }).isMongoId().withMessage('Invalid department'),
     body('effective_date').optional().isISO8601().withMessage('Invalid effective date'),
     body('review_cycle').optional().isIn(['3 months', '6 months', '12 months', '24 months', 'other']),
     body('review_date').optional().isISO8601().withMessage('Invalid review date'),
