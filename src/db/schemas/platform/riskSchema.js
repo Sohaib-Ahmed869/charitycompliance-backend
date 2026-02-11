@@ -31,6 +31,12 @@ const riskSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  /** Department ref for approval workflow (department head as first approver) */
+  department_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Department',
+    index: true
+  },
   risk_owner_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -89,7 +95,7 @@ const riskSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['draft', 'pending', 'under_treatment', 'approved', 'rejected', 'closed'],
+    enum: ['draft', 'pending', 'under_treatment', 'approved', 'resolved', 'rejected', 'closed'],
     default: 'draft',
     index: true
   },
@@ -114,6 +120,24 @@ const riskSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  /** Treatments and controls for this risk */
+  treatments: [{
+    control_action: { type: String, trim: true, default: '' },
+    owner: { type: String, trim: true, default: '' },
+    due_date: { type: Date },
+    status: {
+      type: String,
+      enum: ['under_treatment', 'implemented', 'resolved'],
+      default: 'resolved'
+    },
+    evidence: [{
+      file_path: { type: String },
+      file_name: { type: String },
+      file_size: { type: Number },
+      mime_type: { type: String },
+      uploaded_at: { type: Date, default: Date.now }
+    }]
+  }],
   metadata: {
     type: mongoose.Schema.Types.Mixed
   }

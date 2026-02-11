@@ -29,7 +29,7 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
   }
 
   const includeInactive = req.query.includeInactive === 'true';
-  const boardMembers = await boardMemberRepo.findByOrgId(org._id, includeInactive);
+  const boardMembers = await boardMemberRepo.findByOrgId(org._id, includeInactive, true);
 
   const keyHex = getMasterKeyHex();
   if (!keyHex) {
@@ -38,6 +38,9 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
   const list = await Promise.all(
     boardMembers.map(async (bm) => {
       const obj = bm.toObject ? bm.toObject() : { ...bm };
+      if (!obj.department && obj.position_id?.department_id?.name) {
+        obj.department = obj.position_id.department_id.name;
+      }
       decryptBoardMemberFields(obj, keyHex);
       if (bm.profile_picture_key) {
         try {
@@ -62,12 +65,16 @@ export const getBoardMemberById = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
-  const boardMember = await boardMemberRepo.findById(boardMemberId);
+  let boardMember = await boardMemberRepo.findById(boardMemberId)
+    .populate({ path: 'position_id', populate: { path: 'department_id' } });
   if (!boardMember) {
     throw new AppError('Board member not found', 404, 'NOT_FOUND');
   }
 
   const obj = boardMember.toObject ? boardMember.toObject() : { ...boardMember };
+  if (!obj.department && obj.position_id?.department_id?.name) {
+    obj.department = obj.position_id.department_id.name;
+  }
   const keyHex = getMasterKeyHex();
   if (!keyHex) {
     throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');

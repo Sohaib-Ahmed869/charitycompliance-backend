@@ -8,6 +8,11 @@ import mongoose from 'mongoose';
 import mongooseEncryptPlugin from '../../../utils/mongooseEncryptPlugin.js';
 
 const organizationSchema = new mongoose.Schema({
+  orgId: {
+    type: String,
+    trim: true,
+    index: true
+  },
   name: {
     type: String,
     required: true,

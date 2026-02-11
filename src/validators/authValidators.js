@@ -71,3 +71,38 @@ export const acceptInvitationValidator = [
     .matches(/[^A-Za-z0-9]/)
     .withMessage('Password must contain at least one special character')
 ];
+
+export const forgotPasswordValidator = [
+  body('email')
+    .isEmail()
+    .normalizeEmail()
+    .withMessage('Valid email is required')
+];
+
+export const resetPasswordValidator = [
+  body('token')
+    .notEmpty()
+    .withMessage('Reset token is required'),
+  body('password')
+    .isLength({ min: config.password.minLength })
+    .withMessage(`Password must be at least ${config.password.minLength} characters`)
+    .matches(/[A-Z]/)
+    .withMessage('Password must contain at least one uppercase letter')
+    .matches(/[a-z]/)
+    .withMessage('Password must contain at least one lowercase letter')
+    .matches(/[0-9]/)
+    .withMessage('Password must contain at least one number')
+    .matches(/[^A-Za-z0-9]/)
+    .withMessage('Password must contain at least one special character')
+];
+
+export const verifyOtpValidator = [
+  body('userId').notEmpty().withMessage('User ID is required'),
+  body('code').isLength({ min: 6, max: 6 }).isNumeric().withMessage('Code must be 6 digits'),
+  body('orgId').notEmpty().withMessage('Organization ID is required')
+];
+
+export const sendOtpValidator = [
+  body('userId').notEmpty().withMessage('User ID is required'),
+  body('orgId').notEmpty().withMessage('Organization ID is required')
+];

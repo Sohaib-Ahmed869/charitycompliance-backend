@@ -13,6 +13,7 @@ import { ApprovalMatrixRepository } from '../repositories/approvalMatrixReposito
 import { PositionRepository } from '../repositories/positionRepository.js';
 import { DepartmentRepository } from '../repositories/departmentRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
+import { RiskRepository } from '../repositories/riskRepository.js';
 
 export const listApprovalRequests = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -156,6 +157,7 @@ export const rejectRequest = asyncHandler(async (req, res) => {
 
 export const getApprovalRequestById = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
+  const userId = req.user?.userId || req.user?._id;
   const { approvalRequestId } = req.params;
 
   const workflowService = new ApprovalWorkflowService(orgId);
@@ -174,9 +176,37 @@ export const getApprovalRequestById = asyncHandler(async (req, res) => {
     });
   }
 
+  const doc = approvalRequest.toObject ? approvalRequest.toObject() : { ...approvalRequest };
+
+  // Compute can_approve and current_step_index for the current user
+  if (userId && doc.status === 'pending') {
+    const steps = doc.approval_steps || [];
+    const currentStepIndex = steps.findIndex((step, index) => {
+      if (doc.approval_type === 'sequential') {
+        return step.status === 'pending' &&
+          (index === 0 || steps[index - 1].status === 'approved');
+      }
+      return step.status === 'pending';
+    });
+    const currentStep = currentStepIndex >= 0 ? steps[currentStepIndex] : null;
+
+    if (currentStep) {
+      const userPositionIds = await workflowService._getUserPositionIds(userId);
+      const canApprove = workflowService._canUserApproveStep(currentStep, userId, userPositionIds);
+      doc.can_approve = canApprove;
+      doc.current_step_index = currentStepIndex;
+    } else {
+      doc.can_approve = false;
+      doc.current_step_index = -1;
+    }
+  } else {
+    doc.can_approve = false;
+    doc.current_step_index = -1;
+  }
+
   res.json({
     success: true,
-    data: approvalRequest
+    data: doc
   });
 });
 
@@ -279,6 +309,191 @@ const ACTION_TYPE_MAP = {
   hr: 'hr'
 };
 
+export const createApprovalMatrix = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { name, action_type, priority, description, positions } = req.body;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
+  const positionRepo = new PositionRepository(tenantDb);
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const orgRepo = new OrganizationRepository(tenantDb);
+
+  const org = await orgRepo.findOne();
+  if (!org) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'ORG_NOT_FOUND', message: 'Organization not found' }
+    });
+  }
+
+  const mappedType = ACTION_TYPE_MAP[action_type?.toLowerCase()] || action_type?.toLowerCase();
+
+  const requiresApprovalFrom = await Promise.all(
+    (positions || []).map(async (p, index) => {
+      const posId = p.positionId || p.id;
+      let positionId = null;
+      let departmentId = null;
+      if (posId) {
+        const pos = await positionRepo.findById(posId);
+        if (pos) {
+          positionId = pos._id;
+          departmentId = pos.department_id;
+        }
+      }
+      return {
+        approval_level: p.approvalLevel ?? index + 1,
+        position_id: positionId,
+        department_id: departmentId,
+        user_id: null
+      };
+    })
+  );
+
+  const rule = {
+    action_type: mappedType,
+    min_amount: 0,
+    requires_approval_from: requiresApprovalFrom,
+    approval_type: 'sequential',
+    is_active: true
+  };
+
+  const matrix = await approvalMatrixRepo.create({
+    org_id: org._id,
+    name: name || `Workflow for ${mappedType}`,
+    description: description || '',
+    priority: priority ?? 0,
+    rules: [rule],
+    is_default: false,
+    is_active: true
+  });
+
+  res.status(201).json({
+    success: true,
+    data: matrix
+  });
+});
+
+export const updateApprovalMatrix = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { matrixId } = req.params;
+  const { name, description, priority, positions } = req.body;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
+  const positionRepo = new PositionRepository(tenantDb);
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const orgRepo = new OrganizationRepository(tenantDb);
+
+  const org = await orgRepo.findOne();
+  if (!org) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'ORG_NOT_FOUND', message: 'Organization not found' }
+    });
+  }
+
+  const matrix = await approvalMatrixRepo.findById(matrixId);
+  if (!matrix || String(matrix.org_id) !== String(org._id)) {
+    return res.status(404).json({
+      success: false,
+      error: {
+        code: 'NOT_FOUND',
+        message: 'Approval matrix not found'
+      }
+    });
+  }
+
+  const updateData = {};
+  if (name !== undefined) updateData.name = name;
+  if (description !== undefined) updateData.description = description;
+  if (priority !== undefined) updateData.priority = priority;
+
+  if (positions && Array.isArray(positions) && matrix.rules?.length > 0) {
+    const allPositions = await positionRepo.findByOrgId(org._id);
+    const requiresApprovalFrom = positions.map((p, index) => {
+      const posId = p.positionId || p.id;
+      const pos = allPositions.find((x) => x._id.toString() === posId);
+      return {
+        approval_level: p.approvalLevel ?? index + 1,
+        position_id: pos?._id || null,
+        department_id: pos?.department_id || null,
+        user_id: null
+      };
+    });
+    matrix.rules[0].requires_approval_from = requiresApprovalFrom;
+    matrix.markModified('rules');
+  }
+
+  Object.assign(matrix, updateData);
+  await matrix.save();
+
+  res.json({
+    success: true,
+    data: matrix
+  });
+});
+
+export const approveRiskWithPriority = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { approvalRequestId } = req.params;
+  const { riskPriority, comments } = req.body;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+  const request = await approvalRequestRepo.findById(approvalRequestId);
+
+  if (!request) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Approval request not found' }
+    });
+  }
+  if (request.entity_type !== 'risk') {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_TYPE', message: 'This endpoint is for risk approvals only' }
+    });
+  }
+
+  const steps = request.approval_steps || [];
+  const deptHeadStepIndex = steps.findIndex((s) => s.status === 'pending' && s.is_department_head);
+  if (deptHeadStepIndex < 0) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'NO_PENDING_STEP', message: 'No pending department head approval step found' }
+    });
+  }
+
+  const ipAddress = req.ip || req.connection?.remoteAddress;
+  const userAgent = req.get('user-agent');
+
+  const workflowService = new ApprovalWorkflowService(orgId);
+  const approvalRequest = await workflowService.processApproval(
+    approvalRequestId,
+    deptHeadStepIndex,
+    userId,
+    'approved',
+    comments || '',
+    ipAddress,
+    userAgent
+  );
+
+  const riskRepo = new RiskRepository(tenantDb);
+  const risk = await riskRepo.findById(request.entity_id);
+  if (risk) {
+    const metadata = risk.metadata || {};
+    metadata.department_head_priority = riskPriority;
+    await riskRepo.update(request.entity_id, { metadata });
+  }
+
+  res.json({
+    success: true,
+    data: approvalRequest
+  });
+});
+
 export const updateWorkflowPositions = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { actionType } = req.params;
@@ -302,12 +517,21 @@ export const updateWorkflowPositions = asyncHandler(async (req, res) => {
   }
 
   const allMatrices = await approvalMatrixRepo.findByOrgId(org._id);
-  const matrix = allMatrices.find((m) => {
-    const rule = m.rules && m.rules[0];
-    return rule && (rule.action_type === mappedType || rule.action_type === actionType);
-  });
+  let matrix = null;
+  let ruleIndex = -1;
+  for (const m of allMatrices) {
+    if (!m.rules || !Array.isArray(m.rules)) continue;
+    const idx = m.rules.findIndex(
+      (r) => r && (r.action_type === mappedType || r.action_type === actionType)
+    );
+    if (idx >= 0) {
+      matrix = m;
+      ruleIndex = idx;
+      break;
+    }
+  }
 
-  if (!matrix) {
+  if (!matrix || ruleIndex < 0) {
     return res.status(404).json({
       success: false,
       error: {
@@ -356,7 +580,7 @@ export const updateWorkflowPositions = asyncHandler(async (req, res) => {
     })
   );
 
-  const rule = matrix.rules[0];
+  const rule = matrix.rules[ruleIndex];
   rule.requires_approval_from = requiresApprovalFrom;
   matrix.markModified('rules');
   await matrix.save();

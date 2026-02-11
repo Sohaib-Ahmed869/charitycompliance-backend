@@ -9,6 +9,7 @@ import * as riskController from '../../controllers/riskController.js';
 import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { uploadPolicySingle, handlePolicyUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
 
@@ -32,7 +33,7 @@ router.post(
 router.get(
   '/',
   [
-    query('status').optional().isIn(['draft', 'pending', 'under_treatment', 'approved', 'rejected', 'closed']),
+    query('status').optional().isIn(['draft', 'pending', 'under_treatment', 'approved', 'resolved', 'rejected', 'closed']),
     query('category').optional().trim(),
     query('search').optional().trim()
   ],
@@ -66,6 +67,41 @@ router.delete(
   [param('riskId').isMongoId().withMessage('Invalid risk ID')],
   validate,
   riskController.deleteRisk
+);
+
+router.post(
+  '/:riskId/treatments',
+  [
+    param('riskId').isMongoId().withMessage('Invalid risk ID'),
+    body('control_action').optional().trim(),
+    body('owner').optional().trim(),
+    body('due_date').optional().trim()
+  ],
+  validate,
+  riskController.addTreatment
+);
+
+router.post(
+  '/:riskId/treatments/:treatmentIndex/evidence',
+  [
+    param('riskId').isMongoId().withMessage('Invalid risk ID'),
+    param('treatmentIndex').isInt({ min: 0 }).withMessage('Invalid treatment index')
+  ],
+  validate,
+  uploadPolicySingle,
+  handlePolicyUploadError,
+  riskController.addTreatmentEvidence
+);
+
+router.get(
+  '/:riskId/treatments/:treatmentIndex/evidence/:evidenceIndex/stream',
+  [
+    param('riskId').isMongoId().withMessage('Invalid risk ID'),
+    param('treatmentIndex').isInt({ min: 0 }).withMessage('Invalid treatment index'),
+    param('evidenceIndex').isInt({ min: 0 }).withMessage('Invalid evidence index')
+  ],
+  validate,
+  riskController.streamEvidence
 );
 
 export default router;

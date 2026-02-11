@@ -5,6 +5,7 @@
  */
 
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { generateToken } from '../middleware/auth.js';
 import { generateOrgKey, getMasterKeyHex } from '../config/encryption.js';
 import { registerTenant } from '../db/router.js';
@@ -14,6 +15,7 @@ import getRouterModels from '../db/models/routerModels.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo, logWarn } from '../utils/logger.js';
 import { decrypt, isEncrypted } from '../utils/encryption.js';
+import emailService from './emailService.js';
 
 const SALT_ROUNDS = 12;
 const MAX_FAILED_ATTEMPTS = 5;
@@ -183,6 +185,7 @@ export class AuthService {
       let org = await orgRepo.findOne();
       if (!org) {
         org = await orgRepo.create({
+          orgId: orgId,  // Store the normalized orgId
           name: organizationName,
           status: 'pending_setup'
         });
@@ -343,6 +346,68 @@ export class AuthService {
       const userRepo = new UserRepository(tenantDb);
       await userRepo.updateLastLogin(user._id);
 
+      // Normalize orgId to lowercase for consistency (needed for both MFA and non-MFA paths)
+      const normalizedOrgId = orgId.toLowerCase().trim();
+
+      // Check if MFA is enabled
+      if (user.mfa_enabled) {
+        // Send OTP and return flag for frontend to redirect to OTP verification
+        try {
+          await this.sendOtpEmail(tenantDb, user);
+          
+          // Re-fetch user to ensure decryption via post-find hook for needs_otp response
+          const decryptedUser = await userRepo.findById(user._id);
+          const rawUser = decryptedUser.toObject ? decryptedUser.toObject() : decryptedUser;
+          const masterKeyHex = getMasterKeyHex();
+          const userObj = decryptUserFields(rawUser, masterKeyHex);
+          if (rawUser.email && isEncrypted(rawUser.email) && !userObj.email) {
+            userObj.email = email;
+          }
+
+          // Get org for permissions
+          const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+          const orgRepo = new OrganizationRepository(tenantDb);
+          const org = await orgRepo.findOne();
+          const positionPermissions = org ? await getPositionPermissionsForUser(tenantDb, userObj._id, org._id) : [];
+
+          let baseRoles;
+          let basePermissions;
+
+          if (userObj.is_org_owner) {
+            baseRoles = ['admin'];
+            basePermissions = ['*:*'];
+          } else if (positionPermissions.length > 0) {
+            baseRoles = ['board_member'];
+            basePermissions = ['read:own', 'write:own', ...positionPermissions];
+          } else {
+            baseRoles = ['board_member'];
+            basePermissions = ['read:own', 'write:own'];
+          }
+
+          // Format user for frontend (similar to non-MFA login response)
+          const userForFrontend = {
+            _id: userObj._id?.toString(),
+            firstName: userObj.first_name,
+            lastName: userObj.last_name,
+            email: userObj.email,
+            roles: baseRoles,
+            permissions: basePermissions,
+            mfa_enabled: userObj.mfa_enabled
+          };
+
+          return {
+            success: true,
+            needs_otp: true,
+            user_id: user._id.toString(),
+            user: userForFrontend,
+            orgId: normalizedOrgId
+          };
+        } catch (otpErr) {
+          logError('Failed to send OTP during login', otpErr, { userId: user._id, orgId });
+          throw new AppError('Failed to send verification code. Please try again.', 500, 'OTP_SEND_FAILED');
+        }
+      }
+
       // Re-fetch user to ensure decryption via post-find hook
       const decryptedUser = await userRepo.findById(user._id);
       const rawUser = decryptedUser.toObject ? decryptedUser.toObject() : decryptedUser;
@@ -354,9 +419,6 @@ export class AuthService {
       if (rawUser.email && isEncrypted(rawUser.email) && !userObj.email) {
         userObj.email = email;
       }
-
-      // Normalize orgId to lowercase for consistency
-      const normalizedOrgId = orgId.toLowerCase().trim();
 
       const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
       const orgRepo = new OrganizationRepository(tenantDb);
@@ -642,6 +704,325 @@ export class AuthService {
       logError('Failed to accept invitation', error);
       throw new AppError('Failed to accept invitation', 500, 'ACCEPT_INVITATION_ERROR');
     }
+  }
+
+  /**
+   * Request password reset - sends email with reset link
+   */
+  async forgotPassword(email) {
+    const routerModels = getRouterModels();
+    const tenants = await routerModels.Tenant.find({ status: 'active' });
+
+    let user = null;
+    let tenantDb = null;
+
+    for (const tenant of tenants) {
+      try {
+        tenantDb = await getTenantConnection(tenant.orgId);
+        const userRepo = new UserRepository(tenantDb);
+        user = await userRepo.findByEmail(email);
+        if (user) break;
+      } catch (err) {
+        logError('Failed to search tenant for forgot password', err, { orgId: tenant.orgId });
+        continue;
+      }
+    }
+
+    if (!user) {
+      logWarn('Forgot password - user not found', { email });
+      return; // Don't reveal if email exists
+    }
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 minutes
+
+    const userRepo = new UserRepository(tenantDb);
+    await userRepo.update(user._id, {
+      password_reset_token: resetToken,
+      password_reset_expires: expiresAt
+    });
+
+    const masterKeyHex = getMasterKeyHex();
+    const rawUser = user.toObject ? user.toObject() : { ...user };
+    const decrypted = decryptUserFields(rawUser, masterKeyHex);
+    const recipientName = [decrypted.first_name, decrypted.last_name].filter(Boolean).join(' ') || 'there';
+    const recipientEmail = decrypted.email || email;
+
+    try {
+      await emailService.sendPasswordResetEmail({
+        to: recipientEmail,
+        recipientName,
+        resetToken
+      });
+      logInfo('Password reset email sent', { email: recipientEmail });
+    } catch (emailErr) {
+      logError('Failed to send password reset email', emailErr, { email: recipientEmail });
+      throw new AppError('Failed to send reset email. Please try again.', 500, 'EMAIL_SEND_FAILED');
+    }
+  }
+
+  /**
+   * Reset password using token from email
+   */
+  async resetPassword(token, newPassword) {
+    const routerModels = getRouterModels();
+    const tenants = await routerModels.Tenant.find({ status: 'active' });
+
+    let user = null;
+    let tenantDb = null;
+
+    for (const tenant of tenants) {
+      try {
+        tenantDb = await getTenantConnection(tenant.orgId);
+        const userRepo = new UserRepository(tenantDb);
+        user = await userRepo.findByResetToken(token);
+        if (user) break;
+      } catch (err) {
+        logError('Failed to search tenant for reset password', err, { orgId: tenant.orgId });
+        continue;
+      }
+    }
+
+    if (!user) {
+      throw new AppError('Invalid or expired reset link. Please request a new one.', 400, 'INVALID_RESET_TOKEN');
+    }
+
+    const password_hash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    const userRepo = new UserRepository(tenantDb);
+    await userRepo.update(user._id, {
+      password_hash,
+      password_reset_token: null,
+      password_reset_expires: null
+    });
+
+    logInfo('Password reset successful', { userId: user._id });
+    return { success: true };
+  }
+
+  /**
+   * Generate a 6-digit OTP code
+   * @returns {string} 6-digit numeric code
+   */
+  generateOtpCode() {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+  }
+
+  /**
+   * Send OTP email to user
+   * @param {Object} tenantDb - Tenant database connection
+   * @param {Object} user - User object
+   * @returns {Promise<string>} Generated OTP code
+   */
+  async sendOtpEmail(tenantDb, user) {
+    const { OtpRepository } = await import('../repositories/otpRepository.js');
+    const otpRepo = new OtpRepository(tenantDb);
+
+    // Generate OTP code
+    const code = this.generateOtpCode();
+
+    // Store OTP in database
+    await otpRepo.create(user._id.toString(), user.email, code);
+
+    // Get decrypted user info for email
+    const masterKeyHex = getMasterKeyHex();
+    const rawUser = user.toObject ? user.toObject() : { ...user };
+    const decrypted = decryptUserFields(rawUser, masterKeyHex);
+    const recipientName = [decrypted.first_name, decrypted.last_name].filter(Boolean).join(' ') || 'there';
+    const recipientEmail = decrypted.email || user.email;
+
+    // Send OTP email
+    try {
+      await emailService.sendOtpEmail({
+        to: recipientEmail,
+        recipientName,
+        code
+      });
+      logInfo('OTP email sent', { userId: user._id, email: recipientEmail });
+    } catch (emailErr) {
+      logError('Failed to send OTP email', emailErr, { userId: user._id });
+      if (process.env.NODE_ENV !== 'production') {
+        logInfo('[DEV] OTP code (SMTP failed - use this to login)', { code, email: recipientEmail });
+      } else {
+        throw new AppError('Failed to send OTP code. Please try again.', 500, 'OTP_SEND_FAILED');
+      }
+    }
+
+    return code;
+  }
+
+  /**
+   * Verify OTP code
+   * @param {Object} tenantDb - Tenant database connection
+   * @param {string} userId - User ID
+   * @param {string} code - OTP code to verify
+   * @returns {Promise<boolean>} True if OTP is valid
+   */
+  async verifyOtp(tenantDb, userId, code) {
+    const { OtpRepository } = await import('../repositories/otpRepository.js');
+    const otpRepo = new OtpRepository(tenantDb);
+
+    // Find OTP by user ID and code
+    const otp = await otpRepo.findByUserIdAndCode(userId, code);
+
+    if (!otp) {
+      throw new AppError('Invalid OTP code', 400, 'INVALID_OTP');
+    }
+
+    // Check if max attempts exceeded
+    if (otp.attempts >= 3) {
+      await otpRepo.deleteById(otp._id);
+      throw new AppError('Too many failed attempts. Please request a new code.', 400, 'OTP_MAX_ATTEMPTS');
+    }
+
+    // Delete the OTP (one-time use)
+    await otpRepo.deleteById(otp._id);
+
+    return true;
+  }
+
+  /**
+   * Complete login after OTP verification - returns token, user, orgId
+   */
+  async completeLoginWithOtp(orgId, userId, code) {
+    const normalizedOrgId = (orgId || '').toLowerCase().trim();
+    if (!normalizedOrgId) {
+      throw new AppError('Organization ID is required', 400, 'MISSING_ORG_ID');
+    }
+
+    const tenantDb = await getTenantConnection(normalizedOrgId);
+    await this.verifyOtp(tenantDb, userId, code);
+
+    const userRepo = new UserRepository(tenantDb);
+    const user = await userRepo.findById(userId);
+    if (!user) {
+      throw new AppError('User not found', 404, 'USER_NOT_FOUND');
+    }
+
+    const rawUser = user.toObject ? user.toObject() : { ...user };
+    const masterKeyHex = getMasterKeyHex();
+    const userObj = decryptUserFields(rawUser, masterKeyHex);
+    if (rawUser.email && isEncrypted(rawUser.email) && !userObj.email) {
+      userObj.email = rawUser.email;
+    }
+
+    const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    const positionPermissions = org ? await getPositionPermissionsForUser(tenantDb, userObj._id, org._id) : [];
+
+    let baseRoles;
+    let basePermissions;
+    if (userObj.is_org_owner) {
+      baseRoles = ['admin'];
+      basePermissions = ['*:*'];
+    } else if (positionPermissions.length > 0) {
+      baseRoles = ['board_member'];
+      basePermissions = ['read:own', 'write:own', ...positionPermissions];
+    } else {
+      baseRoles = ['board_member'];
+      basePermissions = ['read:own', 'write:own'];
+    }
+
+    const token = generateToken({
+      userId: userObj._id.toString(),
+      orgId: normalizedOrgId,
+      email: userObj.email,
+      roles: baseRoles,
+      permissions: basePermissions
+    });
+
+    const responseUser = {
+      id: userObj._id.toString(),
+      email: userObj.email || '',
+      firstName: userObj.first_name || '',
+      lastName: userObj.last_name || '',
+      role: baseRoles[0] || 'board_member',
+      permissions: basePermissions
+    };
+
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const boardMemberRepo = new BoardMemberRepository(tenantDb);
+    const boardMember = await boardMemberRepo.findByUserId(userObj._id, org._id);
+    if (boardMember) {
+      responseUser.position = boardMember.custom_position_title || boardMember.position || null;
+      if (boardMember.profile_picture_key) {
+        try {
+          const { getFileUrl } = await import('../services/s3Service.js');
+          responseUser.profile_picture_url = await getFileUrl(boardMember.profile_picture_key, 604800);
+        } catch (err) {
+          logError('Failed to resolve profile picture URL', err, { userId: userObj._id });
+        }
+      }
+    } else if (userObj.is_org_owner) {
+      responseUser.position = 'Admin';
+      const userProfileKey = rawUser.profile_picture_key;
+      if (userProfileKey) {
+        try {
+          const { getFileUrl } = await import('../services/s3Service.js');
+          responseUser.profile_picture_url = await getFileUrl(userProfileKey, 604800);
+        } catch (err) {
+          logError('Failed to resolve profile picture URL for org owner', err, { userId: userObj._id });
+        }
+      }
+    }
+
+    return {
+      token,
+      user: responseUser,
+      orgId: normalizedOrgId,
+      user_id: userObj._id.toString()
+    };
+  }
+
+  /**
+   * Resend OTP to user (during login flow)
+   */
+  async resendOtp(orgId, userId) {
+    const normalizedOrgId = (orgId || '').toLowerCase().trim();
+    if (!normalizedOrgId) {
+      throw new AppError('Organization ID is required', 400, 'MISSING_ORG_ID');
+    }
+
+    const tenantDb = await getTenantConnection(normalizedOrgId);
+    const userRepo = new UserRepository(tenantDb);
+    const user = await userRepo.findById(userId);
+    if (!user) {
+      throw new AppError('User not found', 404, 'USER_NOT_FOUND');
+    }
+
+    await this.sendOtpEmail(tenantDb, user);
+    return { success: true, message: 'New code sent' };
+  }
+
+  /**
+   * Enable MFA for user
+   * @param {Object} tenantDb - Tenant database connection
+   * @param {string} userId - User ID
+   * @returns {Promise<void>}
+   */
+  async enableMfa(tenantDb, userId) {
+    const userRepo = new UserRepository(tenantDb);
+    await userRepo.update(userId, { mfa_enabled: true });
+    logInfo('MFA enabled for user', { userId });
+  }
+
+  /**
+   * Disable MFA for user
+   * @param {Object} tenantDb - Tenant database connection
+   * @param {string} userId - User ID
+   * @returns {Promise<void>}
+   */
+  async disableMfa(tenantDb, userId) {
+    const { OtpRepository } = await import('../repositories/otpRepository.js');
+    const userRepo = new UserRepository(tenantDb);
+    const otpRepo = new OtpRepository(tenantDb);
+
+    // Clean up any pending OTPs
+    await otpRepo.deleteByUserId(userId);
+
+    // Disable MFA
+    await userRepo.update(userId, { mfa_enabled: false });
+    logInfo('MFA disabled for user', { userId });
   }
 }
 

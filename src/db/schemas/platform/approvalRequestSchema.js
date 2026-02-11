@@ -28,6 +28,11 @@ const approvalStepSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Department'
   },
+  /** True when this step is the department head (must approve first before workflow steps) */
+  is_department_head: {
+    type: Boolean,
+    default: false
+  },
   status: {
     type: String,
     enum: ['pending', 'approved', 'rejected', 'cancelled'],

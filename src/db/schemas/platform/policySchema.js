@@ -33,6 +33,16 @@ const policySchema = new mongoose.Schema(
       ref: 'BoardMember',
       sparse: true
     },
+    /** Department ref for approval workflow (department head as first approver) */
+    department_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Department',
+      index: true
+    },
+    department: {
+      type: String,
+      trim: true
+    },
     effective_date: {
       type: Date
     },

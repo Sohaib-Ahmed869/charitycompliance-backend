@@ -13,6 +13,7 @@ import { UserPositionRepository } from '../repositories/userPositionRepository.j
 import { ExpenseRepository } from '../repositories/expenseRepository.js';
 import { RiskRepository } from '../repositories/riskRepository.js';
 import { PolicyRepository } from '../repositories/policyRepository.js';
+import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -224,6 +225,7 @@ export class ApprovalWorkflowService {
   /**
    * Create approval request for a risk (action_type: risk_management)
    * Uses amount 0 to match risk_management rules (min_amount 0, no max).
+   * If risk has department_id, department head is inserted as step 0 (first approver).
    */
   async createRiskApprovalRequest(riskId, submittedBy) {
     const tenantDb = await this.getTenantDb();
@@ -232,6 +234,7 @@ export class ApprovalWorkflowService {
     const riskRepo = new RiskRepository(tenantDb);
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
     const userPositionRepo = new UserPositionRepository(tenantDb);
+    const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
     const risk = await riskRepo.findById(riskId);
     if (!risk) {
@@ -284,13 +287,34 @@ export class ApprovalWorkflowService {
     // Sort by approval level
     approvers.sort((a, b) => a.level - b.level);
 
-    const approvalSteps = approvers.map((approver) => ({
-      level: approver.level,
+    // Prepend department head as step 0 if risk has department_id
+    const departmentId = risk.department_id?._id || risk.department_id;
+    const departmentHeadSteps = [];
+    if (departmentId) {
+      const deptHead = await boardMemberRepo.findDepartmentHeadByDepartmentId(orgObjectId, departmentId);
+      if (deptHead) {
+        const headUserId = deptHead.user_id?._id || deptHead.user_id;
+        departmentHeadSteps.push({
+          level: 1,
+          approver_user_id: headUserId || undefined,
+          approver_position_id: deptHead.position_id?._id || deptHead.position_id,
+          approver_department_id: departmentId,
+          is_department_head: true,
+          status: 'pending'
+        });
+      }
+    }
+
+    // Shift matrix rule levels: existing steps become 2, 3, 4... (add 1 to each level) since dept head is 1
+    const matrixSteps = approvers.map((approver) => ({
+      level: approver.level + 1,
       approver_user_id: approver.user_id || undefined,
       approver_position_id: approver.position_id,
       approver_department_id: approver.department_id,
       status: 'pending'
     }));
+
+    const approvalSteps = [...departmentHeadSteps, ...matrixSteps];
 
     const approvalRequest = await approvalRequestRepo.create({
       org_id: orgObjectId,
@@ -323,6 +347,7 @@ export class ApprovalWorkflowService {
 
   /**
    * Create approval request for a policy (action_type: policy)
+   * If policy has department_id, department head is inserted as step 0 (first approver).
    */
   async createPolicyApprovalRequest(policyId, submittedBy) {
     const tenantDb = await this.getTenantDb();
@@ -331,6 +356,7 @@ export class ApprovalWorkflowService {
     const policyRepo = new PolicyRepository(tenantDb);
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
     const userPositionRepo = new UserPositionRepository(tenantDb);
+    const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
     const policy = await policyRepo.findById(policyId);
     if (!policy) {
@@ -369,13 +395,33 @@ export class ApprovalWorkflowService {
 
     approvers.sort((a, b) => a.level - b.level);
 
-    const approvalSteps = approvers.map((approver) => ({
-      level: approver.level,
+    // Prepend department head as step 0 if policy has department_id
+    const departmentId = policy.department_id?._id || policy.department_id;
+    const departmentHeadSteps = [];
+    if (departmentId) {
+      const deptHead = await boardMemberRepo.findDepartmentHeadByDepartmentId(orgObjectId, departmentId);
+      if (deptHead) {
+        const headUserId = deptHead.user_id?._id || deptHead.user_id;
+        departmentHeadSteps.push({
+          level: 1,
+          approver_user_id: headUserId || undefined,
+          approver_position_id: deptHead.position_id?._id || deptHead.position_id,
+          approver_department_id: departmentId,
+          is_department_head: true,
+          status: 'pending'
+        });
+      }
+    }
+
+    const matrixSteps = approvers.map((approver) => ({
+      level: approver.level + 1,
       approver_user_id: approver.user_id || undefined,
       approver_position_id: approver.position_id,
       approver_department_id: approver.department_id,
       status: 'pending'
     }));
+
+    const approvalSteps = [...departmentHeadSteps, ...matrixSteps];
 
     const approvalRequest = await approvalRequestRepo.create({
       org_id: orgObjectId,

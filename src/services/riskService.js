@@ -7,6 +7,7 @@
 import { getTenantConnection } from '../db/connectionManager.js';
 import { RiskRepository } from '../repositories/riskRepository.js';
 import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
+import { DepartmentRepository } from '../repositories/departmentRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import { ApprovalWorkflowService } from './approvalWorkflowService.js';
@@ -56,7 +57,18 @@ export class RiskService {
 
     const riskRepo = new RiskRepository(tenantDb);
     let risk_owner_id = riskData.risk_owner_id;
-    const risk_owner_board_member_id = riskData.risk_owner_board_member_id || null;
+    let risk_owner_board_member_id = riskData.risk_owner_board_member_id || null;
+    const department_id = riskData.department_id || null;
+    let departmentName = riskData.department || null;
+
+    // Resolve department name from department_id if not provided
+    if (department_id && !departmentName) {
+      const departmentRepo = new DepartmentRepository(tenantDb);
+      const dept = await departmentRepo.findById(department_id);
+      if (dept) departmentName = dept.name;
+    }
+
+    // Legacy: if risk_owner_board_member_id provided, resolve user_id
     if (risk_owner_board_member_id) {
       const boardMemberRepo = new BoardMemberRepository(tenantDb);
       const boardMember = await boardMemberRepo.findById(risk_owner_board_member_id);
@@ -77,7 +89,8 @@ export class RiskService {
       title: riskData.title,
       description: riskData.description || '',
       category: riskData.category,
-      department: riskData.department,
+      department: departmentName,
+      department_id,
       risk_owner_id,
       risk_owner_board_member_id,
       next_review_date: riskData.next_review_date,
@@ -190,6 +203,11 @@ export class RiskService {
       const boardMemberRepo = new BoardMemberRepository(tenantDb);
       const boardMember = await boardMemberRepo.findById(updateData.risk_owner_board_member_id);
       updateData.risk_owner_id = boardMember?.user_id || null;
+    }
+    if (updateData.department_id != null) {
+      const departmentRepo = new DepartmentRepository(tenantDb);
+      const dept = await departmentRepo.findById(updateData.department_id);
+      if (dept) updateData.department = dept.name;
     }
     await riskRepo.update(riskId, updateData);
     const updated = await riskRepo.findById(riskId);

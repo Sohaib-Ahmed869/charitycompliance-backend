@@ -12,8 +12,12 @@ import { OrganizationRepository } from '../repositories/organizationRepository.j
 import { ApprovalMatrixRepository } from '../repositories/approvalMatrixRepository.js';
 import { DepartmentRepository } from '../repositories/departmentRepository.js';
 import { PositionRepository } from '../repositories/positionRepository.js';
+import { UserRepository } from '../repositories/userRepository.js';
 import { logError, logInfo, logWarn } from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { getMasterKeyHex } from '../config/encryption.js';
+import { decrypt, isEncrypted } from '../utils/encryption.js';
+import emailService from './emailService.js';
 
 export class OnboardingService {
   constructor(orgId) {
@@ -636,6 +640,7 @@ export class OnboardingService {
   async handleStep5(orgId, stepData) {
     const tenantDb = await this.getTenantDb();
     const progressRepo = new OnboardingProgressRepository(tenantDb);
+    const orgRepo = new OrganizationRepository(tenantDb);
     
     // Ensure all previous steps are marked complete and mark initial onboarding as complete
     const progress = await progressRepo.findByOrgId(orgId);
@@ -655,6 +660,41 @@ export class OnboardingService {
       
       // Recalculate progress to ensure percentages are correct
       await progressRepo.recalculateProgress(orgId);
+    }
+
+    // Send onboarding complete email to org owner
+    try {
+      const org = await orgRepo.findOne();
+      const userRepo = new UserRepository(tenantDb);
+      const owner = await userRepo.findOrgOwner();
+      if (org && owner) {
+        const keyHex = getMasterKeyHex();
+        const userObj = owner.toObject ? owner.toObject() : { ...owner };
+        const decrypted = { ...userObj };
+        if (keyHex && keyHex.length === 64) {
+          if (userObj.email && isEncrypted(userObj.email)) {
+            try { decrypted.email = decrypt(userObj.email, keyHex); } catch (e) { logError('Failed to decrypt email for onboarding email', e); }
+          }
+          if (userObj.first_name && isEncrypted(userObj.first_name)) {
+            try { decrypted.first_name = decrypt(userObj.first_name, keyHex); } catch (e) { logError('Failed to decrypt first_name', e); }
+          }
+          if (userObj.last_name && isEncrypted(userObj.last_name)) {
+            try { decrypted.last_name = decrypt(userObj.last_name, keyHex); } catch (e) { logError('Failed to decrypt last_name', e); }
+          }
+        }
+        const recipientName = [decrypted.first_name, decrypted.last_name].filter(Boolean).join(' ') || 'there';
+        if (decrypted.email) {
+          await emailService.sendOnboardingCompleteEmail({
+            to: decrypted.email,
+            recipientName,
+            organizationName: org.name || 'Your Organisation'
+          });
+          logInfo('Onboarding complete email sent', { orgId, to: decrypted.email });
+        }
+      }
+    } catch (emailError) {
+      logError('Failed to send onboarding complete email', emailError, { orgId });
+      // Don't fail the request if email fails
     }
     
     return { success: true, message: 'Onboarding completed successfully' };

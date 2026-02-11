@@ -43,12 +43,22 @@ const boardMemberSchema = new mongoose.Schema({
     trim: true,
     maxlength: 100
   },
+  /** Department name (for display and edit form pre-selection; derived from position if not set) */
+  department: {
+    type: String,
+    trim: true
+  },
   /** Link to Position document so we can load granted_permissions at login */
   position_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Position',
     default: null,
     sparse: true
+  },
+  /** Whether this person is the head of their department (used for pre-approval step in risk/policy workflows) */
+  is_head_of_department: {
+    type: Boolean,
+    default: false
   },
   custom_position_title: {
     type: String,

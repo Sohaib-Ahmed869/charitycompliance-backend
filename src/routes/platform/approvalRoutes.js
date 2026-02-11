@@ -18,6 +18,60 @@ router.use(authAndResolveTenant);
 // Get approval matrices (workflows)
 router.get('/matrices', approvalController.getApprovalMatrices);
 
+// Create approval matrix (workflow)
+router.post(
+  '/matrices',
+  [
+    body('name')
+      .trim()
+      .notEmpty()
+      .withMessage('Workflow name is required'),
+    body('action_type')
+      .trim()
+      .notEmpty()
+      .withMessage('Workflow type is required'),
+    body('priority')
+      .optional()
+      .isInt({ min: 0 })
+      .withMessage('Priority must be a non-negative integer'),
+    body('description')
+      .optional()
+      .trim(),
+    body('positions')
+      .optional()
+      .isArray()
+      .withMessage('Positions must be an array')
+  ],
+  validate,
+  approvalController.createApprovalMatrix
+);
+
+// Update approval matrix (workflow)
+router.put(
+  '/matrices/:matrixId',
+  [
+    param('matrixId')
+      .isMongoId()
+      .withMessage('Invalid matrix ID'),
+    body('name')
+      .optional()
+      .trim(),
+    body('description')
+      .optional()
+      .trim(),
+    body('priority')
+      .optional()
+      .isInt({ min: 0 })
+      .withMessage('Priority must be a non-negative integer'),
+    body('positions')
+      .optional()
+      .isArray()
+      .withMessage('Positions must be an array')
+  ],
+  validate,
+  approvalController.updateApprovalMatrix
+);
+
 // List all approval requests for the org (optional status filter)
 router.get('/list', approvalController.listApprovalRequests);
 
@@ -71,6 +125,29 @@ router.post(
   ],
   validate,
   approvalController.approveRequest
+);
+
+// Approve risk with priority selection (department head only)
+// This endpoint is called when the department head approves a risk
+// and selects the risk priority, which determines the workflow
+router.post(
+  '/:approvalRequestId/approve-with-priority',
+  [
+    param('approvalRequestId')
+      .isMongoId()
+      .withMessage('Invalid approval request ID'),
+    body('riskPriority')
+      .trim()
+      .notEmpty()
+      .withMessage('Risk priority is required')
+      .isIn(['low', 'medium', 'high'])
+      .withMessage('Risk priority must be low, medium, or high'),
+    body('comments')
+      .optional()
+      .trim()
+  ],
+  validate,
+  approvalController.approveRiskWithPriority
 );
 
 // Reject request

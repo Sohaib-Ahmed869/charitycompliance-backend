@@ -74,14 +74,17 @@ const createUserSchema = () => {
         type: String,
         default: null,
         trim: true
-      }
+      },
+      // Password reset
+      password_reset_token: { type: String, default: null },
+      password_reset_expires: { type: Date, default: null }
     }, {
       timestamps: true
     });
 
     userSchema.plugin(mongooseEncryptPlugin);
-    userSchema.index({ email_hash: 1 });
-    
+    // email_hash index already defined via field option above - don't duplicate
+
     return userSchema;
 };
 
@@ -97,6 +100,17 @@ export class UserRepository {
 
   async findById(userId) {
     return this.User.findById(userId);
+  }
+
+  async findOrgOwner() {
+    return this.User.findOne({ is_org_owner: true }).select('email first_name last_name');
+  }
+
+  async findByResetToken(token) {
+    return this.User.findOne({
+      password_reset_token: token,
+      password_reset_expires: { $gt: new Date() }
+    });
   }
 
   async create(userData) {

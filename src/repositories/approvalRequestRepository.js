@@ -9,6 +9,7 @@ import approvalRequestSchema from '../db/schemas/platform/approvalRequestSchema.
 import positionSchema from '../db/schemas/platform/positionSchema.js';
 import departmentSchema from '../db/schemas/platform/departmentSchema.js';
 import approvalMatrixSchema from '../db/schemas/platform/approvalMatrixSchema.js';
+import { UserRepository } from './userRepository.js';
 
 export class ApprovalRequestRepository {
   constructor(tenantDb) {
@@ -16,6 +17,9 @@ export class ApprovalRequestRepository {
     tenantDb.models.Position || tenantDb.model('Position', positionSchema);
     tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
     tenantDb.models.ApprovalMatrix || tenantDb.model('ApprovalMatrix', approvalMatrixSchema);
+    
+    // Register User model for populate() operations
+    new UserRepository(tenantDb);
 
     this.ApprovalRequest = tenantDb.models.ApprovalRequest ||
       tenantDb.model('ApprovalRequest', approvalRequestSchema);

@@ -51,3 +51,43 @@ export const acceptInvitation = asyncHandler(async (req, res) => {
     data: result
   });
 });
+
+export const forgotPassword = asyncHandler(async (req, res) => {
+  const { email } = req.body;
+  await authService.forgotPassword(email);
+
+  res.json({
+    success: true,
+    message: 'If an account exists with this email, you will receive a password reset link shortly.'
+  });
+});
+
+export const resetPassword = asyncHandler(async (req, res) => {
+  const { token, password } = req.body;
+  await authService.resetPassword(token, password);
+
+  res.json({
+    success: true,
+    message: 'Your password has been reset. You can now log in with your new password.'
+  });
+});
+
+export const verifyOtp = asyncHandler(async (req, res) => {
+  const { userId, code, orgId } = req.body;
+  const result = await authService.completeLoginWithOtp(orgId, userId, code);
+
+  res.json({
+    success: true,
+    data: result
+  });
+});
+
+export const sendOtp = asyncHandler(async (req, res) => {
+  const { userId, orgId } = req.body;
+  await authService.resendOtp(orgId, userId);
+
+  res.json({
+    success: true,
+    message: 'Verification code sent to your email'
+  });
+});

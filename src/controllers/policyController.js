@@ -219,6 +219,15 @@ export const createPolicy = asyncHandler(async (req, res) => {
     'policy'
   );
 
+  const department_id = req.body.department_id || null;
+  let departmentName = req.body.department || null;
+  if (department_id && !departmentName) {
+    const { DepartmentRepository } = await import('../repositories/departmentRepository.js');
+    const departmentRepo = new DepartmentRepository(tenantDb);
+    const dept = await departmentRepo.findById(department_id);
+    if (dept) departmentName = dept.name;
+  }
+
   const policyRepo = new PolicyRepository(tenantDb);
   const version = req.body.version || 'v1.0';
   const policy = await policyRepo.create({
@@ -226,7 +235,9 @@ export const createPolicy = asyncHandler(async (req, res) => {
     title: req.body.title,
     category: req.body.category,
     description: req.body.description || undefined,
-    policy_owner_id: req.body.policy_owner_id || undefined,
+    policy_owner_id: department_id ? null : (req.body.policy_owner_id || undefined),
+    department_id,
+    department: departmentName,
     effective_date: req.body.effective_date ? new Date(req.body.effective_date) : undefined,
     review_cycle: req.body.review_cycle || '12 months',
     review_date: req.body.review_date ? new Date(req.body.review_date) : undefined,
@@ -285,6 +296,16 @@ export const updatePolicy = asyncHandler(async (req, res) => {
   if (req.body.category !== undefined) updateData.category = req.body.category;
   if (req.body.description !== undefined) updateData.description = req.body.description;
   if (req.body.policy_owner_id !== undefined) updateData.policy_owner_id = req.body.policy_owner_id || null;
+  if (req.body.department_id !== undefined) {
+    updateData.department_id = req.body.department_id || null;
+    updateData.department = null;
+    if (req.body.department_id) {
+      const { DepartmentRepository } = await import('../repositories/departmentRepository.js');
+      const departmentRepo = new DepartmentRepository(tenantDb);
+      const dept = await departmentRepo.findById(req.body.department_id);
+      if (dept) updateData.department = dept.name;
+    }
+  }
   if (req.body.effective_date !== undefined) updateData.effective_date = req.body.effective_date ? new Date(req.body.effective_date) : null;
   if (req.body.review_cycle !== undefined) updateData.review_cycle = req.body.review_cycle;
   if (req.body.review_date !== undefined) updateData.review_date = req.body.review_date ? new Date(req.body.review_date) : null;

@@ -86,6 +86,42 @@ export class RiskRepository {
       .populate('approval_request_id');
   }
 
+  /** Add a treatment to a risk (status defaults to 'resolved') */
+  async addTreatment(riskId, treatment) {
+    const t = {
+      control_action: treatment.control_action || '',
+      owner: treatment.owner || '',
+      due_date: treatment.due_date ? new Date(treatment.due_date) : undefined,
+      status: treatment.status || 'resolved',
+      evidence: []
+    };
+    return await this.Risk.findByIdAndUpdate(
+      riskId,
+      { $push: { treatments: t }, $set: { updated_at: new Date() } },
+      { new: true, runValidators: true }
+    );
+  }
+
+  /** Add evidence to a treatment */
+  async addEvidenceToTreatment(riskId, treatmentIndex, evidence) {
+    const risk = await this.Risk.findById(riskId);
+    if (!risk || !risk.treatments?.[treatmentIndex]) return null;
+    const ev = {
+      file_path: evidence.file_path,
+      file_name: evidence.file_name,
+      file_size: evidence.file_size,
+      mime_type: evidence.mime_type,
+      uploaded_at: new Date()
+    };
+    const key = `treatments.${treatmentIndex}.evidence`;
+    await this.Risk.findByIdAndUpdate(
+      riskId,
+      { $push: { [key]: ev }, $set: { updated_at: new Date() } },
+      { new: true }
+    );
+    return await this.findById(riskId);
+  }
+
   /** Aggregate counts for dashboard */
   async getCountsByOrg(orgId) {
     const risks = await this.Risk.find({ org_id: orgId });
