@@ -7,10 +7,12 @@
 import { getTenantConnection } from '../db/connectionManager.js';
 import { RiskRepository } from '../repositories/riskRepository.js';
 import { RiskService } from '../services/riskService.js';
+import { ApprovalWorkflowService } from '../services/approvalWorkflowService.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
 import { uploadToS3, getFileStream } from '../services/s3Service.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { logError, logInfo } from '../utils/logger.js';
 
 export const createRisk = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
@@ -119,7 +121,7 @@ export const deleteRisk = asyncHandler(async (req, res) => {
   });
 });
 
-/** Add a treatment to a risk (status defaults to 'resolved') */
+/** Add a treatment to a risk - triggers approval workflow */
 export const addTreatment = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { riskId } = req.params;
@@ -136,17 +138,49 @@ export const addTreatment = asyncHandler(async (req, res) => {
     control_action: control_action || '',
     owner: owner || '',
     due_date: due_date || undefined,
-    status: 'resolved'
+    status: 'pending'
   });
 
-  // When a treatment is added, move risk from "under_treatment" to "resolved" (treatment in place)
-  if (updated?.status === 'under_treatment') {
-    await riskRepo.updateStatus(riskId, 'resolved');
+  // Treatment added - now trigger approval workflow if configured
+  const treatmentIndex = (updated.treatments?.length || 1) - 1;
+  
+  try {
+    const workflowService = new ApprovalWorkflowService(orgId);
+    await workflowService.createRiskTreatmentApprovalRequest(riskId, treatmentIndex, req.user?.userId);
+    
+    // Return updated risk with status 'under_treatment' (waiting for approval)
     const refreshed = await riskRepo.findById(riskId);
-    return res.status(201).json({ success: true, data: refreshed });
+    res.status(201).json({ 
+      success: true, 
+      data: refreshed,
+      message: 'Treatment added and submitted for approval'
+    });
+  } catch (workflowError) {
+    logError('Error creating treatment approval request', { error: workflowError.message, riskId });
+    
+    // Check if it's a missing workflow configuration error
+    const isConfigError = workflowError.code === 'NO_MATCHING_RULE' || 
+                          workflowError.code === 'NO_APPROVAL_MATRIX' ||
+                          workflowError.message?.includes('No approval');
+    
+    if (isConfigError) {
+      // Return error to prompt user to configure workflow
+      return res.status(400).json({ 
+        success: false, 
+        error: { 
+          message: 'Risk Treatment approval workflow not configured. Please create a Risk Treatment workflow in Settings > Roles & Permissions > Workflows.',
+          code: 'WORKFLOW_NOT_CONFIGURED'
+        }
+      });
+    }
+    
+    // For other errors, still add treatment but show warning
+    res.status(201).json({ 
+      success: true, 
+      data: updated,
+      warning: 'Treatment added but approval workflow could not be initialized: ' + workflowError.message
+    });
   }
-
-  res.status(201).json({ success: true, data: updated });
 });
 
 /** Upload evidence for a treatment */

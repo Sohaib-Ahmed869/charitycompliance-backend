@@ -127,8 +127,8 @@ const riskSchema = new mongoose.Schema({
     due_date: { type: Date },
     status: {
       type: String,
-      enum: ['under_treatment', 'implemented', 'resolved'],
-      default: 'resolved'
+      enum: ['pending', 'under_treatment', 'implemented', 'resolved'],
+      default: 'pending'
     },
     evidence: [{
       file_path: { type: String },

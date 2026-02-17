@@ -177,6 +177,12 @@ export const handlePolicyUploadError = (err, req, res, next) => {
 export const uploadMultiple = upload.array('files', 5); // Max 5 files
 
 /**
+ * Middleware for acknowledgement file uploads
+ * Allows up to 10 files (PDF, Word, images) - 10MB max each
+ */
+export const uploadAcknowledgementFiles = upload.array('files', 10);
+
+/**
  * Error handler for multer errors
  */
 export const handleUploadError = (err, req, res, next) => {

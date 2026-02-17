@@ -34,6 +34,11 @@ export class BoardMemberRepository {
     return await this.BoardMember.findById(id);
   }
 
+  async findByIdWithRelations(id) {
+    return await this.BoardMember.findById(id)
+      .populate({ path: 'position_id', populate: { path: 'department_id' } });
+  }
+
   async findByEmail(email, orgId) {
     return await this.BoardMember.findOne({ 
       email, 

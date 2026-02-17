@@ -54,6 +54,66 @@ const policySchema = new mongoose.Schema(
     review_date: {
       type: Date
     },
+    next_review_date: {
+      type: Date
+    },
+    is_under_review: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    reviewed_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      sparse: true
+    },
+    reviewed_at: {
+      type: Date,
+      sparse: true
+    },
+    review_history: [
+      {
+        reviewed_by: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true
+        },
+        reviewed_at: {
+          type: Date,
+          required: true,
+          default: Date.now
+        },
+        action: {
+          type: String,
+          enum: ['approved_no_changes', 'updated', 'rejected'],
+          required: true
+        },
+        comments: {
+          type: String,
+          trim: true
+        },
+        version_reviewed: {
+          type: String
+        },
+        next_review_date_set: {
+          type: Date
+        }
+      }
+    ],
+    acknowledgements: [
+      {
+        acknowledged_by: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: 'User',
+          required: true
+        },
+        acknowledged_at: {
+          type: Date,
+          required: true,
+          default: Date.now
+        }
+      }
+    ],
     file_name: {
       type: String
     },

@@ -432,9 +432,100 @@ export class ApprovalWorkflowService {
   }
 
   /**
+   * Create approval request for a risk treatment
+   * Triggers workflow when a treatment is added to a risk
+   * Risk treatment workflows have only one approval rule per organization
+   */
+  async createRiskTreatmentApprovalRequest(riskId, treatmentIndex, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const riskRepo = new RiskRepository(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const userPositionRepo = new UserPositionRepository(tenantDb);
+    const boardMemberRepo = new BoardMemberRepository(tenantDb);
+
+    const risk = await riskRepo.findById(riskId);
+    if (!risk) {
+      throw new AppError('Risk not found', 404, 'RISK_NOT_FOUND');
+    }
+
+    const { matrix, rule } = await this.findMatchingRule('risk_treatment', 0, orgObjectId);
+
+    const approvers = [];
+    for (const approverConfig of rule.requires_approval_from) {
+      let userIds = [];
+      if (approverConfig.user_id) {
+        userIds = [approverConfig.user_id];
+      } else if (approverConfig.position_id) {
+        userIds = await userPositionRepo.findUsersByPositionId(approverConfig.position_id);
+      }
+
+      if (userIds.length > 0) {
+        userIds.forEach((userId) => {
+          approvers.push({
+            user_id: userId,
+            position_id: approverConfig.position_id || null,
+            department_id: approverConfig.department_id || null,
+            level: approverConfig.approval_level
+          });
+        });
+      } else {
+        approvers.push({
+          user_id: null,
+          position_id: approverConfig.position_id || null,
+          department_id: approverConfig.department_id || null,
+          level: approverConfig.approval_level
+        });
+      }
+    }
+
+    approvers.sort((a, b) => a.level - b.level);
+
+    // Risk treatment does NOT require department head approval
+    // Only the workflow approvers from the matrix are involved
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id || undefined,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'risk_treatment',
+      entity_id: riskId,
+      entity_type: 'risk',
+      amount: 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy,
+      treatment_index: treatmentIndex // Track which treatment is being approved
+    });
+
+    // Risk stays in 'under_treatment' - it's not resolved until treatment is approved
+    await riskRepo.update(riskId, {
+      approval_matrix_id: matrix._id,
+      approval_request_id: approvalRequest._id
+    });
+
+    logInfo('Risk treatment approval request created', {
+      riskId,
+      treatmentIndex,
+      approvalRequestId: approvalRequest._id,
+      approversCount: approvers.length
+    });
+
+    return approvalRequest;
+  }
+
+  /**
    * Process approval (approve or reject)
    */
-  async processApproval(approvalRequestId, stepIndex, userId, decision, comments = null, ipAddress = null, userAgent = null) {
+  async processApproval(approvalRequestId, stepIndex, userId, decision, comments = null, ipAddress = null, userAgent = null, acknowledgement = null) {
     const tenantDb = await this.getTenantDb();
     this._ensureTenantModels(tenantDb);
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
@@ -457,6 +548,14 @@ export class ApprovalWorkflowService {
     }
 
     // Check if request is still pending
+    if (request.status === 'paused_for_coi') {
+      throw new AppError(
+        'Approval request is paused due to a conflict of interest review',
+        400,
+        'REQUEST_PAUSED_FOR_COI'
+      );
+    }
+
     if (request.status !== 'pending') {
       throw new AppError(
         `Approval request is already ${request.status}`,
@@ -502,6 +601,16 @@ export class ApprovalWorkflowService {
       comments: comments || null
     };
 
+    // Add acknowledgement data if provided
+    if (acknowledgement) {
+      if (acknowledgement.note) {
+        updateData.acknowledgement_note = acknowledgement.note;
+      }
+      if (acknowledgement.files && Array.isArray(acknowledgement.files) && acknowledgement.files.length > 0) {
+        updateData.acknowledgement_files = acknowledgement.files;
+      }
+    }
+
     // If approving by position (approver_user_id was null), record who actually approved
     if (!step.approver_user_id) {
       updateData.approver_user_id = userId;
@@ -541,7 +650,14 @@ export class ApprovalWorkflowService {
           rejected_at: new Date()
         });
       } else if (request.entity_type === 'risk') {
-        await riskRepo.updateStatus(request.entity_id, 'rejected');
+        // For risk_treatment requests, keep as 'under_treatment' on rejection
+        if (request.request_type === 'risk_treatment') {
+          // Treatment was rejected - keep risk under treatment
+          await riskRepo.update(request.entity_id, { approval_request_id: null });
+        } else {
+          // For regular risk approvals, mark as rejected
+          await riskRepo.updateStatus(request.entity_id, 'rejected');
+        }
       } else if (request.entity_type === 'policy') {
         const policyRepo = new PolicyRepository(tenantDb);
         await policyRepo.update(request.entity_id, { status: 'draft' });
@@ -592,8 +708,15 @@ export class ApprovalWorkflowService {
         await expenseRepo.updateStatus(request.entity_id, 'approved', { approved_at: new Date() });
         logInfo('Expense status updated from approval', { approvalRequestId, entityId: request.entity_id });
       } else if (request.entity_type === 'risk') {
-        await riskRepo.updateStatus(request.entity_id, 'under_treatment');
-        logInfo('Risk status updated from approval', { approvalRequestId, entityId: request.entity_id });
+        if (request.request_type === 'risk_treatment') {
+          // Treatment approved - mark risk as resolved
+          await riskRepo.updateStatus(request.entity_id, 'resolved');
+          logInfo('Risk status updated to resolved from treatment approval', { approvalRequestId, entityId: request.entity_id });
+        } else {
+          // Regular risk approval - mark as under_treatment
+          await riskRepo.updateStatus(request.entity_id, 'under_treatment');
+          logInfo('Risk status updated from approval', { approvalRequestId, entityId: request.entity_id });
+        }
       } else if (request.entity_type === 'policy') {
         const policyRepo = new PolicyRepository(tenantDb);
         const updatedPolicy = await policyRepo.update(request.entity_id, { status: 'active' });
@@ -603,12 +726,34 @@ export class ApprovalWorkflowService {
           previousStatus: request.status,
           newStatus: updatedPolicy?.status
         });
+      } else if (request.entity_type === 'funding_agreement') {
+        const FundingAgreement = tenantDb.model('FundingAgreement');
+        await FundingAgreement.findByIdAndUpdate(request.entity_id, { status: 'approved' });
+        logInfo('Funding agreement status updated from approval', { approvalRequestId, entityId: request.entity_id });
+      } else if (request.entity_type === 'partner') {
+        const Partner = tenantDb.model('PartnerVetting');
+        await Partner.findByIdAndUpdate(request.entity_id, { status: 'approved' });
+        logInfo('Partner status updated from approval', { approvalRequestId, entityId: request.entity_id });
       }
 
       logInfo('All approvals completed', { approvalRequestId, entityId: request.entity_id, entityType: request.entity_type });
 
       // Notify all parties (submitter + approvers) that the workflow is approved
-      const typeLabels = { expense: 'Expense Reimbursement', risk: 'Risk Assessment', purchase: 'Purchase', grant: 'Grant', policy: 'Policy', hr: 'HR', other: 'Approval Request' };
+      const typeLabels = {
+        expense: 'Expense Reimbursement',
+        risk: 'Risk Assessment',
+        risk_treatment: 'Risk Treatment',
+        coi: 'Conflict of Interest',
+        purchase: 'Purchase',
+        grant: 'Grant',
+        funding_agreement: 'Funding Agreement',
+        partner_vetting: 'Partner Vetting',
+        policy: 'Policy',
+        policy_approval: 'Policy Approval',
+        document_approval: 'Document Approval',
+        hr: 'HR',
+        other: 'Approval Request'
+      };
       const workflowTitle = typeLabels[request.request_type] || request.request_type || 'Approval Request';
       const userIds = new Set();
 
@@ -741,5 +886,362 @@ export class ApprovalWorkflowService {
         can_approve: userSteps.length > 0
       };
     }).filter(r => r !== null);
+  }
+
+  /**
+   * Forward a rejection for review to another workflow participant
+   */
+  async forwardRejectionForReview(approvalRequestId, stepIndex, rejectedBy, forwardToUserId, rejectionComments) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const notificationRepo = new NotificationRepository(tenantDb);
+
+    // Get approval request
+    const request = await approvalRequestRepo.findById(approvalRequestId);
+    if (!request) {
+      throw new AppError('Approval request not found', 404, 'APPROVAL_REQUEST_NOT_FOUND');
+    }
+
+    // Validate that the rejector is not forwarding to themselves
+    if (String(rejectedBy) === String(forwardToUserId)) {
+      throw new AppError('Cannot forward rejection to yourself', 400, 'INVALID_FORWARD_USER');
+    }
+
+    // Validate that forwardToUser is a workflow participant
+    const participants = await approvalRequestRepo.getApprovalWorkflowParticipants(approvalRequestId);
+    const isParticipant = participants.some(p => String(p._id) === String(forwardToUserId));
+    
+    if (!isParticipant) {
+      throw new AppError('Can only forward rejection to workflow participants', 400, 'INVALID_FORWARD_USER');
+    }
+
+    // Get step data for pre-fill
+    const step = request.approval_steps[stepIndex];
+    if (!step) {
+      throw new AppError('Approval step not found', 404, 'STEP_NOT_FOUND');
+    }
+
+    // Create rejection review
+    const rejectionReviewData = {
+      rejected_by: rejectedBy,
+      forwarded_to: forwardToUserId,
+      step_index: stepIndex,
+      rejection_comments: rejectionComments,
+      review_status: 'pending',
+      original_step_data: {
+        level: step.level,
+        approver_user_id: step.approver_user_id,
+        approver_position_id: step.approver_position_id,
+        approver_department_id: step.approver_department_id,
+        rejection_reason: rejectionComments
+      }
+    };
+
+    const updatedRequest = await approvalRequestRepo.createRejectionReview(approvalRequestId, rejectionReviewData);
+
+    // Send notification to the user who needs to review the rejection
+    try {
+      await notificationRepo.create({
+        org_id: request.org_id,
+        user_id: forwardToUserId,
+        type: 'approval',
+        title: 'Rejection Review Required',
+        message: `A rejection has been forwarded to you for review`,
+        entity_type: request.entity_type,
+        entity_id: request.entity_id,
+        created_at: new Date()
+      });
+    } catch (notifError) {
+      logError('Failed to send rejection review notification', { error: notifError });
+    }
+
+    logInfo('Rejection forwarded for review', {
+      approvalRequestId,
+      rejectedBy,
+      forwardToUserId,
+      stepIndex
+    });
+
+    return updatedRequest;
+  }
+
+  /**
+   * Process rejection review (accept or reject the rejection)
+   */
+  async processRejectionReview(approvalRequestId, reviewerUserId, reviewAction, reviewComments) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const notificationRepo = new NotificationRepository(tenantDb);
+
+    // Get approval request
+    const request = await approvalRequestRepo.findById(approvalRequestId);
+    if (!request) {
+      throw new AppError('Approval request not found', 404, 'APPROVAL_REQUEST_NOT_FOUND');
+    }
+
+    // Check status
+    if (request.status !== 'pending_rejection_review') {
+      throw new AppError('No active rejection review found', 400, 'NO_ACTIVE_REJECTION_REVIEW');
+    }
+
+    // Get current rejection review
+    const currentReview = await approvalRequestRepo.getCurrentRejectionReview(approvalRequestId);
+    if (!currentReview) {
+      throw new AppError('Current rejection review not found', 404, 'REJECTION_REVIEW_NOT_FOUND');
+    }
+
+    // Verify reviewer is the forwarded_to user
+    if (String(currentReview.forwarded_to) !== String(reviewerUserId)) {
+      throw new AppError('You are not authorized to review this rejection', 403, 'UNAUTHORIZED');
+    }
+
+    // Verify review is still pending
+    if (currentReview.review_status !== 'pending') {
+      throw new AppError('This rejection review is already processed', 400, 'REVIEW_ALREADY_PROCESSED');
+    }
+
+    // Update rejection review
+    const reviewData = {
+      review_status: reviewAction === 'accept_rejection' ? 'accepted' : 'rejected',
+      review_action: reviewAction,
+      review_comments: reviewComments,
+      reviewed_at: new Date()
+    };
+
+    await approvalRequestRepo.updateRejectionReview(
+      approvalRequestId,
+      currentReview._id,
+      reviewData
+    );
+
+    // Clear current rejection review ID and update status
+    let newStatus;
+    if (reviewAction === 'accept_rejection') {
+      newStatus = 'rejection_accepted';
+    } else {
+      // Rejection was rejected - return to pending so original rejector can re-review
+      newStatus = 'pending';
+    }
+
+    await approvalRequestRepo.update(approvalRequestId, {
+      current_rejection_review_id: null,
+      status: newStatus
+    });
+
+    // Send notification back to original rejector
+    try {
+      await notificationRepo.create({
+        org_id: request.org_id,
+        user_id: currentReview.rejected_by,
+        type: 'approval',
+        title: reviewAction === 'accept_rejection' ? 'Rejection Accepted' : 'Rejection Disagreed',
+        message: reviewAction === 'accept_rejection' 
+          ? `Your rejection has been accepted. You can now re-review the request.`
+          : `Your rejection was disagreed with. Please re-review the request.`,
+        entity_type: request.entity_type,
+        entity_id: request.entity_id,
+        created_at: new Date()
+      });
+    } catch (notifError) {
+      logError('Failed to send rejection review notification', { error: notifError });
+    }
+
+    logInfo('Rejection review processed', {
+      approvalRequestId,
+      reviewerUserId,
+      reviewAction,
+      newStatus
+    });
+
+    const updatedRequest = await approvalRequestRepo.findById(approvalRequestId);
+    return updatedRequest;
+  }
+
+  /**
+   * Create approval request for partner vetting
+   */
+  async createPartnerVettingApprovalRequest(partnerId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const partnerVettingRepo = await import('../repositories/partnerVettingRepository.js').then(m => m.PartnerVettingRepository);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    // Get partner
+    const Partner = tenantDb.model('PartnerVetting');
+    const partner = await Partner.findById(partnerId);
+    if (!partner) {
+      throw new AppError('Partner not found', 404, 'PARTNER_NOT_FOUND');
+    }
+
+    // Find matching approval rule (use amount 0 for partner_vetting, no amount-based rules)
+    const { matrix, rule } = await this.findMatchingRule('partner_vetting', 0, orgObjectId);
+    
+    // Resolve approvers
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    // Create approval steps
+    const approvalSteps = approvers.map(approver => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    // Create approval request
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'partner_vetting',
+      entity_id: partnerId,
+      entity_type: 'partner',
+      amount: 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    // Update partner with approval request reference
+    await Partner.findByIdAndUpdate(partnerId, {
+      approval_matrix_id: matrix._id,
+      approval_request_id: approvalRequest._id,
+      status: 'pending'
+    });
+
+    logInfo('Partner vetting approval request created', {
+      partnerId,
+      approvalRequestId: approvalRequest._id,
+      approversCount: approvers.length
+    });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Create approval request for funding agreement
+   */
+  async createFundingAgreementApprovalRequest(fundingAgreementId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    // Get funding agreement
+    const FundingAgreement = tenantDb.model('FundingAgreement');
+    const fundingAgreement = await FundingAgreement.findById(fundingAgreementId);
+    if (!fundingAgreement) {
+      throw new AppError('Funding agreement not found', 404, 'FUNDING_AGREEMENT_NOT_FOUND');
+    }
+
+    // Find matching approval rule (use agreement amount for threshold matching)
+    const agreementAmount = fundingAgreement.amount || 0;
+    const { matrix, rule } = await this.findMatchingRule('funding_agreement', agreementAmount, orgObjectId);
+    
+    // Resolve approvers
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    // Create approval steps
+    const approvalSteps = approvers.map(approver => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    // Create approval request
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'funding_agreement',
+      entity_id: fundingAgreementId,
+      entity_type: 'funding_agreement',
+      amount: agreementAmount,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    // Update funding agreement with approval request reference
+    await FundingAgreement.findByIdAndUpdate(fundingAgreementId, {
+      approval_matrix_id: matrix._id,
+      approval_request_id: approvalRequest._id,
+      status: 'pending'
+    });
+
+    logInfo('Funding agreement approval request created', {
+      fundingAgreementId,
+      approvalRequestId: approvalRequest._id,
+      approversCount: approvers.length
+    });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Create approval request for project
+   */
+  async createProjectApprovalRequest(projectId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    // Get project
+    const Project = tenantDb.model('ProjectRegister');
+    const project = await Project.findById(projectId);
+    if (!project) {
+      throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+    }
+
+    // Find matching approval rule (use project budget for threshold matching)
+    const projectBudget = project.budget_total || 0;
+    const { matrix, rule } = await this.findMatchingRule('project', projectBudget, orgObjectId);
+    
+    // Resolve approvers
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    // Create approval steps
+    const approvalSteps = approvers.map(approver => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    // Create approval request
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'project',
+      entity_id: projectId,
+      entity_type: 'project',
+      amount: projectBudget,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    // Update project with approval request reference
+    await Project.findByIdAndUpdate(projectId, {
+      approval_matrix_id: matrix._id,
+      approval_request_id: approvalRequest._id,
+      status: 'pending'
+    });
+
+    logInfo('Project approval request created', {
+      projectId,
+      approvalRequestId: approvalRequest._id,
+      approversCount: approvers.length
+    });
+
+    return approvalRequest;
   }
 }

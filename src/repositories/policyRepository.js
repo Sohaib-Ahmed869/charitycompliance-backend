@@ -23,7 +23,18 @@ export class PolicyRepository {
 
   async findByOrgId(orgId, filters = {}) {
     const query = { org_id: orgId };
-    if (filters.status) query.status = filters.status;
+    
+    // Handle special 'pending_review' filter
+    if (filters.status === 'pending_review') {
+      // Pending review: review_date is today or in the past, status is not expired
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      query.review_date = { $lte: today };
+      query.status = { $ne: 'expired' };
+    } else if (filters.status) {
+      query.status = filters.status;
+    }
+    
     if (filters.category) query.category = filters.category;
     if (filters.search) {
       query.$or = [
@@ -44,7 +55,25 @@ export class PolicyRepository {
   }
 
   async update(id, data) {
-    return this.Policy.findByIdAndUpdate(id, { $set: data }, { new: true });
+    // Separate MongoDB operators from regular fields
+    const operators = {};
+    const setData = {};
+    
+    for (const [key, value] of Object.entries(data)) {
+      if (key.startsWith('$')) {
+        // MongoDB operator like $push, $inc, etc.
+        operators[key] = value;
+      } else {
+        // Regular field to $set
+        setData[key] = value;
+      }
+    }
+    
+    // Build the update object
+    const updateObj = Object.keys(setData).length > 0 ? { $set: setData } : {};
+    Object.assign(updateObj, operators);
+    
+    return this.Policy.findByIdAndUpdate(id, updateObj, { new: true });
   }
 
   async delete(id) {

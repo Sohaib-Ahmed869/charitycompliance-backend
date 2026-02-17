@@ -586,20 +586,51 @@ export class OnboardingService {
           is_active: rule.isActive !== undefined ? rule.isActive : (rule.is_active !== undefined ? rule.is_active : true)
         };
       }));
+      
+      // Filter out rules that don't have any approvers - they would violate schema validation
+      rules = rules.filter(rule => 
+        rule.requires_approval_from && rule.requires_approval_from.length > 0
+      );
     } else {
-      // If no rules provided, create a default rule for expenses
-      rules = [{
-        action_type: 'expense',
-        min_amount: 0,
-        max_amount: null, // Unlimited
-        approval_type: 'sequential',
-        requires_approval_from: [],
-        is_active: true
-      }];
+      // If no rules provided, don't create a default matrix.
+      // Templates are required to define their own rules with at least one approver.
+      // This prevents creating invalid workflows that would fail to execute.
+      rules = [];
     }
 
     // Create ONE ApprovalMatrix document per rule/workflow instead of packing all
     // rules into a single "Default Approval Matrix".
+    // Map action types to workflow categories and required workflow types
+    const categoryMapping = {
+      risk: 'risk_management',
+      risk_management: 'risk_management',
+      expense: 'expense_approval',
+      purchase: 'expense_approval',
+      grant: 'funding_agreement',
+      coi: 'coi',
+      partner_vetting: 'partner_vetting',
+      policy: 'policy_approval',
+      policy_approval: 'policy_approval',
+      hr: 'hr_approval',
+      contract: 'other',
+      leave: 'hr_approval',
+      project: 'project_approval',
+      risk_treatment: 'risk_treatment',
+      funding_agreement: 'funding_agreement',
+      other: 'other'
+    };
+
+    // Map categories to default workflow types (when applicable)
+    const workflowTypeDefaults = {
+      risk_management: 'medium',  // Default to medium risk
+      expense_approval: 'moderate_cash',  // Default to moderate cash tier
+      funding_agreement: 'moderate_cash',
+      project_approval: 'moderate_cash'
+    };
+
+    // Categories that can only have ONE active workflow per org
+    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'risk_treatment'];
+
     const friendlyNames = {
       expense: 'Expense approvals',
       grant: 'Grant approvals',
@@ -619,18 +650,59 @@ export class OnboardingService {
         ? `${stepData.name} - ${baseName}`
         : baseName;
 
-      const matrixData = {
-        org_id: orgId,
-        name,
-        description: stepData.description || '',
-        rules: [rule],
-        // First created matrix is marked as default; others are additional workflows.
-        is_default: i === 0,
-        is_active: true
-      };
+      // Get workflow category from mapping
+      const workflowCategory = categoryMapping[typeKey] || 'other';
 
-      const matrix = await approvalMatrixRepo.create(matrixData);
-      createdMatrices.push(matrix._id);
+      try {
+        // Check for single-workflow category conflict
+        if (singleWorkflowCategories.includes(workflowCategory)) {
+          const existingCount = await approvalMatrixRepo.ApprovalMatrix.countDocuments({
+            org_id: orgId,
+            workflow_category: workflowCategory,
+            is_active: true
+          });
+          
+          if (existingCount > 0) {
+            console.warn(`Skipping ${typeKey} matrix - only one active workflow allowed for category ${workflowCategory}`);
+            continue;
+          }
+        }
+
+        // Skip if no valid approvers found (they're already resolved to IDs in earlier resolution logic)
+        if (!rule.requires_approval_from || rule.requires_approval_from.length === 0) {
+          console.warn(`Skipping ${typeKey} matrix - no valid positions found for approvers`);
+          continue;
+        }
+
+        // Build matrix data with proper validation
+        const matrixData = {
+          org_id: orgId,
+          name,
+          description: stepData.description || '',
+          workflow_category: workflowCategory,
+          rules: [{
+            action_type: rule.action_type,
+            min_amount: rule.min_amount || 0,
+            max_amount: rule.max_amount,
+            requires_approval_from: rule.requires_approval_from,
+            approval_type: 'sequential',
+            is_active: true
+          }],
+          is_default: i === 0,
+          is_active: true
+        };
+
+        // Add workflow_type if required by category
+        if (workflowTypeDefaults[workflowCategory]) {
+          matrixData.workflow_type = workflowTypeDefaults[workflowCategory];
+        }
+
+        const matrix = await approvalMatrixRepo.create(matrixData);
+        createdMatrices.push(matrix._id);
+      } catch (error) {
+        console.error(`Failed to create approval matrix for ${typeKey}:`, error.message);
+        // Continue creating other matrices even if one fails
+      }
     }
 
     return { success: true, matrices: createdMatrices };

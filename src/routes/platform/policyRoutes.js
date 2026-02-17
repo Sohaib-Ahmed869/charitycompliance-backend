@@ -21,7 +21,7 @@ router.get(
 router.get(
   '/',
   [
-    query('status').optional().isIn(['draft', 'active', 'under_review', 'expired']).withMessage('Invalid status'),
+    query('status').optional().isIn(['draft', 'active', 'under_review', 'expired', 'pending_review']).withMessage('Invalid status'),
     query('category').optional().trim(),
     query('search').optional().trim()
   ],
@@ -111,6 +111,38 @@ router.post(
   [param('policyId').isMongoId().withMessage('Invalid policy ID')],
   validate,
   policyController.acknowledgePolicy
+);
+
+// Review policy
+router.post(
+  '/:policyId/review',
+  [
+    param('policyId').isMongoId().withMessage('Invalid policy ID'),
+    body('action').isIn(['approved_no_changes', 'updated', 'rejected']).withMessage('Invalid action'),
+    body('comments').optional().trim(),
+    body('next_review_date').optional().isISO8601().withMessage('Invalid next_review_date format').custom((value) => {
+      if (value) {
+        const selectedDate = new Date(value);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        selectedDate.setHours(0, 0, 0, 0);
+        
+        if (selectedDate < today) {
+          throw new Error('Next review date cannot be in the past');
+        }
+      }
+      return true;
+    }),
+    body('changes').optional().isObject().withMessage('Changes must be an object')
+  ],
+  validate,
+  policyController.reviewPolicy
+);
+
+// Get policies pending review
+router.get(
+  '/pending-review',
+  policyController.getPoliciesPendingReview
 );
 
 // Stream policy PDF (same-origin) for in-app viewer

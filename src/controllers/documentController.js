@@ -134,6 +134,7 @@ export const createDocument = asyncHandler(async (req, res) => {
     uploaded_by: userId,
     category: req.body.category,
     document_type: req.body.document_type,
+    registration_number: req.body.registration_number,
     title: req.body.title,
     description: req.body.description,
     file_name: req.file.originalname,
@@ -141,7 +142,9 @@ export const createDocument = asyncHandler(async (req, res) => {
     file_size: req.file.size,
     mime_type: req.file.mimetype,
     date_adopted: req.body.date_adopted ? new Date(req.body.date_adopted) : undefined,
-    date_last_amended: req.body.date_last_amended ? new Date(req.body.date_last_amended) : undefined
+    date_last_amended: req.body.date_last_amended ? new Date(req.body.date_last_amended) : undefined,
+    effective_date: req.body.effective_date ? new Date(req.body.effective_date) : undefined,
+    expiry_date: req.body.expiry_date ? new Date(req.body.expiry_date) : undefined
   });
 
   // Update progress if this is a governing document

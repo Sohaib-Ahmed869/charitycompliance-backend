@@ -486,3 +486,205 @@ export const deletePolicy = asyncHandler(async (req, res) => {
     message: 'Policy deleted successfully'
   });
 });
+
+/**
+ * Review Policy
+ * POST /platform/policies/:policyId/review
+ * Body: {
+ *   action: 'approved_no_changes' | 'updated' | 'rejected',
+ *   comments: string (optional),
+ *   next_review_date: ISO date string (optional),
+ *   changes: object (if action === 'updated')
+ * }
+ */
+export const reviewPolicy = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user?.userId || req.userId;
+  const { policyId } = req.params;
+  const { action, comments, next_review_date, changes, e_signature } = req.body;
+
+  // Validate action
+  if (!['approved_no_changes', 'updated', 'rejected'].includes(action)) {
+    throw new AppError('Invalid action. Must be approved_no_changes, updated, or rejected', 400, 'INVALID_ACTION');
+  }
+
+  // Require e-signature for approval and update actions
+  if ((action === 'approved_no_changes' || action === 'updated') && !e_signature?.trim()) {
+    throw new AppError('E-signature is required to confirm this action', 400, 'MISSING_E_SIGNATURE');
+  }
+
+  // Validate next_review_date is not in the past
+  if (next_review_date) {
+    const selectedDate = new Date(next_review_date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    selectedDate.setHours(0, 0, 0, 0);
+    
+    if (selectedDate < today) {
+      throw new AppError('Next review date cannot be in the past', 400, 'INVALID_REVIEW_DATE');
+    }
+  }
+
+  const tenantDb = await getTenantConnection(orgId);
+  const policyRepo = new PolicyRepository(tenantDb);
+  const policy = await policyRepo.findById(policyId);
+
+  if (!policy) {
+    throw new AppError('Policy not found', 404, 'NOT_FOUND');
+  }
+
+  // Calculate next review date if not provided
+  let calculatedNextReviewDate = next_review_date;
+  if (!calculatedNextReviewDate && policy.review_cycle) {
+    const today = new Date();
+    const cycleMonths = {
+      '3 months': 3,
+      '6 months': 6,
+      '12 months': 12,
+      '24 months': 24
+    };
+    const months = cycleMonths[policy.review_cycle] || 12;
+    const nextDate = new Date(today);
+    nextDate.setMonth(nextDate.getMonth() + months);
+    calculatedNextReviewDate = nextDate.toISOString();
+  }
+
+  // Build review history entry with e-signature
+  const reviewEntry = {
+    reviewed_by: new mongoose.Types.ObjectId(userId),
+    reviewed_at: new Date(),
+    action: action,
+    comments: comments || null,
+    version_reviewed: policy.version,
+    next_review_date_set: calculatedNextReviewDate ? new Date(calculatedNextReviewDate) : null,
+    e_signature: e_signature || null
+  };
+
+  // Handle different review actions
+  if (action === 'approved_no_changes') {
+    // Just add to review history and set next review date
+    await policyRepo.update(policyId, {
+      $push: { review_history: reviewEntry },
+      reviewed_by: new mongoose.Types.ObjectId(userId),
+      reviewed_at: new Date(),
+      review_date: calculatedNextReviewDate ? new Date(calculatedNextReviewDate) : policy.next_review_date,
+      next_review_date: calculatedNextReviewDate ? new Date(calculatedNextReviewDate) : policy.next_review_date,
+      is_under_review: false,
+      status: 'active'
+    });
+
+    return res.json({
+      success: true,
+      message: 'Policy reviewed and approved without changes',
+      data: {
+        policyId,
+        reviewed_at: new Date(),
+        next_review_date: calculatedNextReviewDate
+      }
+    });
+  }
+
+  if (action === 'updated') {
+    // Changes provided - increment version, reset acknowledgements, trigger workflow
+    if (!changes) {
+      throw new AppError('Changes required when action is "updated"', 400, 'MISSING_CHANGES');
+    }
+
+    // Increment version
+    const newVersion = incrementVersion(policy.version);
+
+    // Update policy with new version and reset acknowledgements
+    const updateData = {
+      ...changes,
+      version: newVersion,
+      $push: { review_history: reviewEntry },
+      reviewed_by: new mongoose.Types.ObjectId(userId),
+      reviewed_at: new Date(),
+      review_date: calculatedNextReviewDate ? new Date(calculatedNextReviewDate) : policy.next_review_date,
+      next_review_date: calculatedNextReviewDate ? new Date(calculatedNextReviewDate) : policy.next_review_date,
+      acknowledgements: [], // Reset acknowledgements for new version
+      is_under_review: false,
+      status: 'active'
+    };
+
+    const updatedPolicy = await policyRepo.update(policyId, updateData);
+
+    // Trigger policy approval workflow again for new version
+    try {
+      const workflowService = new ApprovalWorkflowService(orgId);
+      await workflowService.createPolicyApprovalRequest(
+        policyId,
+        userId,
+        'policy_update_review'
+      );
+    } catch (workflowErr) {
+      // Log but don't fail the review if workflow fails
+      console.error('Error triggering policy approval workflow on update:', workflowErr);
+    }
+
+    return res.json({
+      success: true,
+      message: 'Policy reviewed and updated. New version created and workflow triggered for re-approvals.',
+      data: {
+        policyId,
+        new_version: newVersion,
+        reviewed_at: new Date(),
+        next_review_date: calculatedNextReviewDate,
+        acknowledgements_reset: true
+      }
+    });
+  }
+
+  if (action === 'rejected') {
+    // Mark policy as expired/rejected and add to review history
+    await policyRepo.update(policyId, {
+      $push: { review_history: reviewEntry },
+      reviewed_by: new mongoose.Types.ObjectId(userId),
+      reviewed_at: new Date(),
+      is_under_review: false,
+      status: 'expired'
+    });
+
+    return res.json({
+      success: true,
+      message: 'Policy review rejected. Policy marked as expired.',
+      data: {
+        policyId,
+        rejected_at: new Date(),
+        status: 'expired'
+      }
+    });
+  }
+});
+
+/**
+ * Get policies pending review (where review_date is today or has passed)
+ * GET /platform/policies/pending-review
+ */
+export const getPoliciesPendingReview = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+
+  const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  
+  if (!org) {
+    throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+  }
+
+  const policyRepo = new PolicyRepository(tenantDb);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  // Find policies where review_date is today or in the past and status is not expired
+  const pendingPolicies = await policyRepo.findByOrgId(orgId, {
+    review_date: { $lte: new Date(today) },
+    status: { $ne: 'expired' },
+    is_under_review: false
+  });
+
+  res.json({
+    success: true,
+    data: pendingPolicies || []
+  });
+});

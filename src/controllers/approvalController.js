@@ -13,7 +13,24 @@ import { ApprovalMatrixRepository } from '../repositories/approvalMatrixReposito
 import { PositionRepository } from '../repositories/positionRepository.js';
 import { DepartmentRepository } from '../repositories/departmentRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
+import { CoiRequestRepository } from '../repositories/coiRequestRepository.js';
 import { RiskRepository } from '../repositories/riskRepository.js';
+import { logInfo } from '../utils/logger.js';
+
+// Helper function to convert workflow_category to display name
+const getCategoryDisplayName = (category) => {
+  const categoryNames = {
+    risk_management: 'Risk Management',
+    coi: 'Conflict of Interest',
+    partner_vetting: 'Partner Vetting',
+    funding_agreement: 'Funding Agreement',
+    project_approval: 'Project Approval',
+    expense_approval: 'Expense Approval',
+    policy_approval: 'Policy Approval',
+    hr_approval: 'HR Approval'
+  };
+  return categoryNames[category] || category;
+};
 
 export const listApprovalRequests = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -32,7 +49,7 @@ export const listApprovalRequests = asyncHandler(async (req, res) => {
 
   const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
   const filters = {};
-  if (status && ['pending', 'approved', 'rejected', 'cancelled'].includes(status)) {
+  if (status && ['pending', 'approved', 'rejected', 'cancelled', 'paused_for_coi'].includes(status)) {
     filters.status = status;
   }
   let requests = await approvalRequestRepo.findByOrgId(org._id, filters);
@@ -69,6 +86,47 @@ export const getPendingApprovals = asyncHandler(async (req, res) => {
   });
 });
 
+export const uploadAcknowledgementFiles = asyncHandler(async (req, res) => {
+  const files = req.files;
+  const orgId = req.body.org_id || req.orgId;
+
+  if (!files || files.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'NO_FILES', message: 'No files uploaded' }
+    });
+  }
+
+  // Import S3 upload utility
+  const { uploadToS3 } = await import('../services/s3Service.js');
+  
+  const uploadedFiles = [];
+  
+  for (const file of files) {
+    try {
+      const result = await uploadToS3(file.buffer, file.originalname, file.mimetype, orgId, 'acknowledgements');
+      uploadedFiles.push({
+        name: file.originalname,
+        size: file.size,
+        type: file.mimetype,
+        url: result.url,  // Changed from result.Location
+        key: result.key   // Changed from result.Key
+      });
+    } catch (error) {
+      console.error('Error uploading file to S3:', error);
+      return res.status(500).json({
+        success: false,
+        error: { code: 'UPLOAD_FAILED', message: 'Failed to upload files' }
+      });
+    }
+  }
+
+  res.json({
+    success: true,
+    data: { files: uploadedFiles }
+  });
+});
+
 export const approveRequest = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -85,7 +143,7 @@ export const approveRequest = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user.userId;
   const { approvalRequestId } = req.params;
-  const { stepIndex, comments } = req.body;
+  const { stepIndex, comments, acknowledgement } = req.body;
 
   const ipAddress = req.ip || req.connection.remoteAddress;
   const userAgent = req.get('user-agent');
@@ -98,12 +156,134 @@ export const approveRequest = asyncHandler(async (req, res) => {
     'approved',
     comments,
     ipAddress,
-    userAgent
+    userAgent,
+    acknowledgement
   );
 
   res.json({
     success: true,
     data: approvalRequest
+  });
+});
+
+export const submitCoiRequest = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        details: errors.array()
+      }
+    });
+  }
+
+  const orgId = req.orgId;
+  const userId = req.user?.userId || req.user?._id;
+  const { approvalRequestId } = req.params;
+  const { reason } = req.body;
+
+  const workflowService = new ApprovalWorkflowService(orgId);
+  const tenantDb = await workflowService.getTenantDb();
+  const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+  const coiRepo = new CoiRequestRepository(tenantDb);
+
+  const approvalRequest = await approvalRequestRepo.findById(approvalRequestId);
+  if (!approvalRequest) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Approval request not found' }
+    });
+  }
+
+  if (approvalRequest.status === 'paused_for_coi') {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'REQUEST_PAUSED_FOR_COI', message: 'A COI review is already in progress' }
+    });
+  }
+
+  if (approvalRequest.status !== 'pending') {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'REQUEST_NOT_PENDING', message: `Approval request is already ${approvalRequest.status}` }
+    });
+  }
+
+  const steps = approvalRequest.approval_steps || [];
+  const currentStepIndex = steps.findIndex((step, index) => {
+    if (approvalRequest.approval_type === 'sequential') {
+      return step.status === 'pending' && (index === 0 || steps[index - 1].status === 'approved');
+    }
+    return step.status === 'pending';
+  });
+
+  if (currentStepIndex < 0) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'NO_PENDING_STEP', message: 'No pending approval step found to pause' }
+    });
+  }
+
+  const orgObjectId = await workflowService._getOrgObjectId();
+  const { matrix, rule } = await workflowService.findMatchingRule('coi', 0, orgObjectId);
+  const approvers = await workflowService.resolveApprovers(rule, orgObjectId);
+
+  logInfo('COI submit: resolved workflow and approvers', {
+    approvalRequestId,
+    orgId: String(orgObjectId),
+    userId: String(userId),
+    currentStepIndex,
+    matrixId: String(matrix?._id || ''),
+    ruleId: String(rule?._id || ''),
+    approvalType: rule?.approval_type,
+    approverCount: approvers.length,
+    approverPositionIds: approvers.map((a) => String(a.position_id || ''))
+  });
+
+  const approvalSteps = approvers.map(approver => ({
+    level: approver.level,
+    approver_user_id: approver.user_id,
+    approver_position_id: approver.position_id,
+    approver_department_id: approver.department_id,
+    status: 'pending'
+  }));
+
+  const coiRequest = await coiRepo.create({
+    org_id: orgObjectId,
+    parent_approval_request_id: approvalRequestId,
+    parent_step_index: currentStepIndex,
+    parent_entity_id: approvalRequest.entity_id,
+    parent_entity_type: approvalRequest.entity_type,
+    coi_reason: reason,
+    approval_matrix_id: matrix._id,
+    approval_type: rule.approval_type,
+    status: 'pending',
+    approval_steps: approvalSteps,
+    submitted_by: userId
+  });
+
+  logInfo('COI submit: created COI request', {
+    approvalRequestId,
+    coiRequestId: String(coiRequest?._id || ''),
+    status: coiRequest?.status,
+    approvalSteps: coiRequest?.approval_steps?.length || 0
+  });
+
+  approvalRequest.status = 'paused_for_coi';
+  approvalRequest.paused_step_index = currentStepIndex;
+  approvalRequest.paused_at = new Date();
+  approvalRequest.current_coi_request_id = coiRequest._id;
+  approvalRequest.coi_request_ids = [...(approvalRequest.coi_request_ids || []), coiRequest._id];
+  await approvalRequest.save();
+
+  res.json({
+    success: true,
+    data: {
+      approvalRequest,
+      coiRequest
+    }
   });
 });
 
@@ -313,7 +493,7 @@ const PRIORITY_LEVEL_MAP = { high: 3, medium: 2, low: 1 };
 
 export const createApprovalMatrix = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
-  const { name, action_type, priority, priority_level, description, positions } = req.body;
+  const { name, action_type, priority, priority_level, description, positions, workflow_category, workflow_type } = req.body;
 
   const tenantDb = await getTenantConnection(orgId);
   const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
@@ -327,6 +507,52 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
       success: false,
       error: { code: 'ORG_NOT_FOUND', message: 'Organization not found' }
     });
+  }
+
+  // Validate workflow_category and workflow_type combinations
+  if (workflow_category) {
+    // Risk management must have workflow_type
+    if (workflow_category === 'risk_management' && (!workflow_type || !['high', 'medium', 'low'].includes(workflow_type))) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Risk Management workflows must have workflow_type: high, medium, or low' }
+      });
+    }
+
+    // Single-workflow categories cannot have workflow_type
+    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval'];
+    if (singleWorkflowCategories.includes(workflow_category) && workflow_type) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: `${getCategoryDisplayName(workflow_category)} workflows cannot have a workflow type` }
+      });
+    }
+
+    // Financial workflows must have workflow_type
+    const financialCategories = ['funding_agreement', 'expense_approval', 'project_approval'];
+    if (financialCategories.includes(workflow_category) && (!workflow_type || !['petty_cash', 'low_cash', 'moderate_cash', 'high_cash'].includes(workflow_type))) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Financial workflows must have workflow_type: petty_cash, low_cash, moderate_cash, or high_cash' }
+      });
+    }
+
+    // Check for single-workflow limit
+    if (singleWorkflowCategories.includes(workflow_category)) {
+      const existing = await approvalMatrixRepo.findByOrgId(org._id);
+      const hasExisting = existing.some(m => 
+        m.workflow_category === workflow_category && 
+        m.is_active && 
+        String(m._id) !== String(req.params.matrixId)
+      );
+      
+      if (hasExisting) {
+        return res.status(400).json({
+          success: false,
+          error: { code: 'VALIDATION_ERROR', message: `Only one active ${getCategoryDisplayName(workflow_category)} workflow is allowed per organization` }
+        });
+      }
+    }
   }
 
   const mappedType = ACTION_TYPE_MAP[action_type?.toLowerCase()] || action_type?.toLowerCase();
@@ -362,7 +588,7 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
 
   const resolvedPriority = priority ?? (priority_level ? PRIORITY_LEVEL_MAP[priority_level] : 0);
 
-  const matrix = await approvalMatrixRepo.create({
+  const matrixData = {
     org_id: org._id,
     name: name || `Workflow for ${mappedType}`,
     description: description || '',
@@ -371,7 +597,13 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
     rules: [rule],
     is_default: false,
     is_active: true
-  });
+  };
+
+  // Add optional fields
+  if (workflow_category) matrixData.workflow_category = workflow_category;
+  if (workflow_type) matrixData.workflow_type = workflow_type;
+
+  const matrix = await approvalMatrixRepo.create(matrixData);
 
   res.status(201).json({
     success: true,
@@ -382,7 +614,7 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
 export const updateApprovalMatrix = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { matrixId } = req.params;
-  const { name, description, priority, priority_level, positions } = req.body;
+  const { name, description, priority, priority_level, positions, workflow_category, workflow_type } = req.body;
 
   const tenantDb = await getTenantConnection(orgId);
   const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
@@ -409,6 +641,38 @@ export const updateApprovalMatrix = asyncHandler(async (req, res) => {
     });
   }
 
+  // Validate workflow_category and workflow_type if provided
+  const categoryToValidate = workflow_category !== undefined ? workflow_category : matrix.workflow_category;
+  const typeToValidate = workflow_type !== undefined ? workflow_type : matrix.workflow_type;
+
+  if (categoryToValidate) {
+    // Risk management must have workflow_type
+    if (categoryToValidate === 'risk_management' && (!typeToValidate || !['high', 'medium', 'low'].includes(typeToValidate))) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Risk Management workflows must have workflow_type: high, medium, or low' }
+      });
+    }
+
+    // Single-workflow categories cannot have workflow_type
+    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval'];
+    if (singleWorkflowCategories.includes(categoryToValidate) && typeToValidate) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: `${categoryToValidate} workflows cannot have a workflow_type` }
+      });
+    }
+
+    // Financial workflows must have workflow_type
+    const financialCategories = ['funding_agreement', 'expense_approval', 'project_approval'];
+    if (financialCategories.includes(categoryToValidate) && (!typeToValidate || !['petty_cash', 'low_cash', 'moderate_cash', 'high_cash'].includes(typeToValidate))) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'VALIDATION_ERROR', message: 'Financial workflows must have workflow_type: petty_cash, low_cash, moderate_cash, or high_cash' }
+      });
+    }
+  }
+
   const updateData = {};
   if (name !== undefined) updateData.name = name;
   if (description !== undefined) updateData.description = description;
@@ -417,6 +681,8 @@ export const updateApprovalMatrix = asyncHandler(async (req, res) => {
     updateData.priority_level = priority_level;
     if (priority === undefined) updateData.priority = PRIORITY_LEVEL_MAP[priority_level] ?? matrix.priority;
   }
+  if (workflow_category !== undefined) updateData.workflow_category = workflow_category;
+  if (workflow_type !== undefined) updateData.workflow_type = workflow_type;
 
   if (positions && Array.isArray(positions) && matrix.rules?.length > 0) {
     const allPositions = await positionRepo.findByOrgId(org._id);
@@ -447,7 +713,35 @@ export const approveRiskWithPriority = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user.userId;
   const { approvalRequestId } = req.params;
-  const { riskPriority, comments } = req.body;
+  const { likelihood, severity, comments, acknowledgement } = req.body;
+
+  // Validate likelihood and severity
+  if (!likelihood || !severity) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Likelihood and severity are required' }
+    });
+  }
+
+  if (likelihood < 1 || likelihood > 5 || severity < 1 || severity > 5) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Likelihood and severity must be between 1 and 5' }
+    });
+  }
+
+  // Calculate risk score
+  const riskScore = likelihood * severity;
+  
+  // Auto-calculate priority based on risk matrix
+  let riskPriority;
+  if (riskScore >= 1 && riskScore <= 5) {
+    riskPriority = 'low';
+  } else if (riskScore >= 6 && riskScore <= 12) {
+    riskPriority = 'moderate';
+  } else if (riskScore >= 13 && riskScore <= 25) {
+    riskPriority = 'high';
+  }
 
   const tenantDb = await getTenantConnection(orgId);
   const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
@@ -486,20 +780,36 @@ export const approveRiskWithPriority = asyncHandler(async (req, res) => {
     'approved',
     comments || '',
     ipAddress,
-    userAgent
+    userAgent,
+    acknowledgement
   );
 
+  // Update risk with likelihood, severity, and calculated priority
   const riskRepo = new RiskRepository(tenantDb);
   const risk = await riskRepo.findById(request.entity_id);
   if (risk) {
-    const metadata = risk.metadata || {};
-    metadata.department_head_priority = riskPriority;
-    await riskRepo.update(request.entity_id, { metadata });
+    await riskRepo.update(request.entity_id, {
+      likelihood,
+      consequence: severity,
+      inherent_risk_score: riskScore,
+      inherent_risk_level: riskPriority,
+      'metadata.department_head_priority': riskPriority,
+      'metadata.department_head_likelihood': likelihood,
+      'metadata.department_head_severity': severity,
+      'metadata.department_head_risk_score': riskScore,
+      'metadata.risk_assessment_date': new Date()
+    });
   }
 
   res.json({
     success: true,
-    data: approvalRequest
+    data: approvalRequest,
+    riskAssessment: {
+      likelihood,
+      severity,
+      riskScore,
+      calculatedPriority: riskPriority
+    }
   });
 });
 
@@ -598,5 +908,140 @@ export const updateWorkflowPositions = asyncHandler(async (req, res) => {
     success: true,
     message: 'Workflow positions updated',
     data: { matrixId: matrix._id, actionType: mappedType }
+  });
+});
+
+// Rejection Workflow Endpoints
+
+export const forwardRejection = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        details: errors.array()
+      }
+    });
+  }
+
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { approvalRequestId } = req.params;
+  const { forwardToUserId, rejectionComments, stepIndex } = req.body;
+
+  if (!rejectionComments || rejectionComments.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Rejection reason is required'
+      }
+    });
+  }
+
+  if (!forwardToUserId) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Forward to user is required'
+      }
+    });
+  }
+
+  const workflowService = new ApprovalWorkflowService(orgId);
+  const result = await workflowService.forwardRejectionForReview(
+    approvalRequestId,
+    stepIndex,
+    userId,
+    forwardToUserId,
+    rejectionComments
+  );
+
+  res.json({
+    success: true,
+    data: result
+  });
+});
+
+export const reviewRejection = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        details: errors.array()
+      }
+    });
+  }
+
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { approvalRequestId } = req.params;
+  const { reviewAction, reviewComments } = req.body;
+
+  if (!reviewAction || !['accept_rejection', 'reject_rejection'].includes(reviewAction)) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Valid review action is required (accept_rejection or reject_rejection)'
+      }
+    });
+  }
+
+  if (!reviewComments || reviewComments.trim().length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Review comments are required'
+      }
+    });
+  }
+
+  const workflowService = new ApprovalWorkflowService(orgId);
+  const result = await workflowService.processRejectionReview(
+    approvalRequestId,
+    userId,
+    reviewAction,
+    reviewComments
+  );
+
+  res.json({
+    success: true,
+    data: result
+  });
+});
+
+export const getPendingRejectionReviews = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+  const reviews = await approvalRequestRepo.findPendingRejectionReviews(userId);
+
+  res.json({
+    success: true,
+    data: reviews
+  });
+});
+
+export const getWorkflowParticipants = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { approvalRequestId } = req.params;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+  const participants = await approvalRequestRepo.getApprovalWorkflowParticipants(approvalRequestId);
+
+  res.json({
+    success: true,
+    data: participants
   });
 });

@@ -51,6 +51,16 @@ const approvalStepSchema = new mongoose.Schema({
   rejection_reason: {
     type: String
   },
+  acknowledgement_note: {
+    type: String
+  },
+  acknowledgement_files: [{
+    name: String,
+    size: Number,
+    type: String,
+    url: String,
+    key: String
+  }],
   attachments: [{
     type: String // File paths/URLs
   }],
@@ -83,6 +93,10 @@ const approvalRequestSchema = new mongoose.Schema({
       'hr',
       'policy',
       'risk',
+      'risk_treatment',
+      'partner_vetting',
+      'funding_agreement',
+      'project',
       // legacy
       'policy_approval',
       'document_approval',
@@ -101,7 +115,7 @@ const approvalRequestSchema = new mongoose.Schema({
   entity_type: {
     type: String,
     required: true,
-    enum: ['expense', 'purchase', 'policy', 'document', 'budget', 'risk', 'grant', 'other']
+    enum: ['expense', 'purchase', 'policy', 'document', 'budget', 'risk', 'grant', 'partner', 'funding_agreement', 'project', 'other']
   },
   amount: {
     type: Number,
@@ -120,7 +134,7 @@ const approvalRequestSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'approved', 'rejected', 'cancelled'],
+    enum: ['pending', 'approved', 'rejected', 'cancelled', 'pending_rejection_review', 'rejection_accepted', 'paused_for_coi'],
     default: 'pending',
     index: true
   },
@@ -129,6 +143,11 @@ const approvalRequestSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  /** For risk_treatment requests: index of the treatment in risk.treatments array */
+  treatment_index: {
+    type: Number,
+    min: 0
   },
   created_at: {
     type: Date,
@@ -146,6 +165,70 @@ const approvalRequestSchema = new mongoose.Schema({
   },
   cancellation_reason: {
     type: String
+  },
+  paused_step_index: {
+    type: Number
+  },
+  paused_at: {
+    type: Date
+  },
+  current_coi_request_id: {
+    type: mongoose.Schema.Types.ObjectId
+  },
+  coi_request_ids: [{
+    type: mongoose.Schema.Types.ObjectId
+  }],
+  // Rejection Review Tracking
+  rejection_reviews: [{
+    rejected_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    forwarded_to: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true
+    },
+    step_index: {
+      type: Number,
+      required: true
+    },
+    rejection_comments: {
+      type: String,
+      required: true
+    },
+    review_status: {
+      type: String,
+      enum: ['pending', 'accepted', 'rejected'],
+      default: 'pending'
+    },
+    review_action: {
+      type: String,
+      enum: ['accept_rejection', 'reject_rejection', null],
+      default: null
+    },
+    review_comments: {
+      type: String
+    },
+    reviewed_at: {
+      type: Date
+    },
+    created_at: {
+      type: Date,
+      default: Date.now
+    },
+    // Store original step data for pre-fill when returning to rejector
+    original_step_data: {
+      type: mongoose.Schema.Types.Mixed
+    }
+  }],
+  current_rejection_review_id: {
+    type: mongoose.Schema.Types.ObjectId
+  },
+  rejection_loop_count: {
+    type: Number,
+    default: 0
   }
 }, {
   timestamps: true,

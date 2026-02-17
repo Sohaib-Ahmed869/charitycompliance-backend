@@ -9,6 +9,7 @@ import approvalRequestSchema from '../db/schemas/platform/approvalRequestSchema.
 import positionSchema from '../db/schemas/platform/positionSchema.js';
 import departmentSchema from '../db/schemas/platform/departmentSchema.js';
 import approvalMatrixSchema from '../db/schemas/platform/approvalMatrixSchema.js';
+import partnerVettingSchema from '../db/schemas/platform/partnerVettingSchema.js';
 import { UserRepository } from './userRepository.js';
 
 export class ApprovalRequestRepository {
@@ -17,6 +18,7 @@ export class ApprovalRequestRepository {
     tenantDb.models.Position || tenantDb.model('Position', positionSchema);
     tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
     tenantDb.models.ApprovalMatrix || tenantDb.model('ApprovalMatrix', approvalMatrixSchema);
+    tenantDb.models.PartnerVetting || tenantDb.model('PartnerVetting', partnerVettingSchema);
     
     // Register User model for populate() operations
     new UserRepository(tenantDb);
@@ -68,6 +70,20 @@ export class ApprovalRequestRepository {
       .populate('approval_steps.approver_user_id', 'first_name last_name email')
       .populate('approval_steps.approver_position_id', 'title')
       .populate('approval_steps.approver_department_id', 'name');
+  }
+
+  async findActiveByEntity(entityType, entityId) {
+    return await this.ApprovalRequest.findOne({
+      entity_id: entityId,
+      entity_type: entityType,
+      status: { $in: ['pending', 'in_progress'] }
+    })
+      .populate('submitted_by', 'first_name last_name email')
+      .populate('approval_matrix_id', 'name')
+      .populate('approval_steps.approver_user_id', 'first_name last_name email')
+      .populate('approval_steps.approver_position_id', 'title')
+      .populate('approval_steps.approver_department_id', 'name')
+      .sort({ created_at: -1 });
   }
 
   async findPendingByApprover(userId, positionIds = []) {
@@ -123,17 +139,44 @@ export class ApprovalRequestRepository {
   }
 
   async updateApprovalStep(requestId, stepIndex, updateData) {
+    // Load the document first
     const request = await this.ApprovalRequest.findById(requestId);
     if (!request) {
       throw new Error('Approval request not found');
     }
     
-    if (request.approval_steps[stepIndex]) {
-      Object.assign(request.approval_steps[stepIndex], updateData);
-      return await request.save();
+    if (!request.approval_steps[stepIndex]) {
+      throw new Error('Approval step not found');
     }
+
+    // Handle acknowledgement_files specially to avoid stringification
+    if (updateData.acknowledgement_files && Array.isArray(updateData.acknowledgement_files)) {
+      // Ensure each file object has the right structure
+      const files = updateData.acknowledgement_files.map(f => ({
+        name: f.name || '',
+        size: f.size || 0,
+        type: f.type || '',
+        url: f.url || '',
+        key: f.key || ''
+      }));
+      request.approval_steps[stepIndex].acknowledgement_files = files;
+    }
+
+    // Update other fields on the step
+    for (const [key, value] of Object.entries(updateData)) {
+      if (key !== 'acknowledgement_files') {
+        request.approval_steps[stepIndex][key] = value;
+      }
+    }
+
+    // Mark the entire approval_steps array as modified so Mongoose knows to validate
+    request.markModified('approval_steps');
     
-    throw new Error('Approval step not found');
+    // Save without running validators first, then check
+    const saved = await request.save({ validateBeforeSave: false });
+    
+    // Return the saved document directly - don't reload
+    return saved;
   }
 
   async updateStatus(id, status, additionalData = {}) {
@@ -152,5 +195,98 @@ export class ApprovalRequestRepository {
 
   async delete(id) {
     return await this.ApprovalRequest.findByIdAndDelete(id);
+  }
+
+  // Rejection Review Methods
+  async createRejectionReview(requestId, rejectionReviewData) {
+    const request = await this.ApprovalRequest.findById(requestId);
+    if (!request) {
+      throw new Error('Approval request not found');
+    }
+    
+    request.rejection_reviews.push(rejectionReviewData);
+    request.current_rejection_review_id = request.rejection_reviews[request.rejection_reviews.length - 1]._id;
+    request.rejection_loop_count = (request.rejection_loop_count || 0) + 1;
+    request.status = 'pending_rejection_review';
+    
+    return await request.save();
+  }
+
+  async updateRejectionReview(requestId, reviewId, reviewData) {
+    const request = await this.ApprovalRequest.findById(requestId);
+    if (!request) {
+      throw new Error('Approval request not found');
+    }
+    
+    const review = request.rejection_reviews.id(reviewId);
+    if (!review) {
+      throw new Error('Rejection review not found');
+    }
+    
+    Object.assign(review, reviewData);
+    return await request.save();
+  }
+
+  async findPendingRejectionReviews(userId) {
+    return await this.ApprovalRequest.find({
+      status: 'pending_rejection_review',
+      'rejection_reviews': {
+        $elemMatch: {
+          forwarded_to: userId,
+          review_status: 'pending'
+        }
+      }
+    })
+      .populate('submitted_by', 'first_name last_name email')
+      .populate('approval_matrix_id', 'name')
+      .populate('rejection_reviews.rejected_by', 'first_name last_name email')
+      .populate('rejection_reviews.forwarded_to', 'first_name last_name email')
+      .sort({ created_at: -1 });
+  }
+
+  async getCurrentRejectionReview(requestId) {
+    const request = await this.ApprovalRequest.findById(requestId)
+      .populate('rejection_reviews.rejected_by', 'first_name last_name email')
+      .populate('rejection_reviews.forwarded_to', 'first_name last_name email');
+    
+    if (!request || !request.current_rejection_review_id) {
+      return null;
+    }
+    
+    return request.rejection_reviews.id(request.current_rejection_review_id);
+  }
+
+  async getApprovalWorkflowParticipants(requestId) {
+    const request = await this.ApprovalRequest.findById(requestId)
+      .populate('approval_steps.approver_user_id', 'first_name last_name email');
+    
+    if (!request) {
+      return [];
+    }
+    
+    // Get unique participants from approval steps (exclude department head - not part of workflow)
+    const participants = new Map();
+    request.approval_steps.forEach(step => {
+      // Skip department head approvals as they're not part of the rejection workflow
+      if (step.is_department_head) {
+        return;
+      }
+      
+      if (step.approver_user_id) {
+        const userId = step.approver_user_id._id || step.approver_user_id;
+        const userKey = userId.toString();
+        if (!participants.has(userKey)) {
+          participants.set(userKey, {
+            _id: userId,
+            first_name: step.approver_user_id.first_name,
+            last_name: step.approver_user_id.last_name,
+            email: step.approver_user_id.email,
+            approval_status: step.status
+          });
+        }
+      }
+    });
+    
+    return Array.from(participants.values());
   }
 }

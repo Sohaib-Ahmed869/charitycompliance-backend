@@ -7,12 +7,20 @@
 import riskSchema from '../db/schemas/platform/riskSchema.js';
 import approvalRequestSchema from '../db/schemas/platform/approvalRequestSchema.js';
 import approvalMatrixSchema from '../db/schemas/platform/approvalMatrixSchema.js';
+import positionSchema from '../db/schemas/platform/positionSchema.js';
+import departmentSchema from '../db/schemas/platform/departmentSchema.js';
+import { UserRepository } from './userRepository.js';
 
 export class RiskRepository {
   constructor(tenantDb) {
     // Ensure related models used in populate() are registered on this tenant connection
     tenantDb.models.ApprovalRequest || tenantDb.model('ApprovalRequest', approvalRequestSchema);
     tenantDb.models.ApprovalMatrix || tenantDb.model('ApprovalMatrix', approvalMatrixSchema);
+    tenantDb.models.Position || tenantDb.model('Position', positionSchema);
+    tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
+    
+    // Register User model for approval request populate() operations
+    new UserRepository(tenantDb);
 
     this.Risk = tenantDb.models.Risk || tenantDb.model('Risk', riskSchema);
   }

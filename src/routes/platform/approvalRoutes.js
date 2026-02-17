@@ -9,6 +9,7 @@ import * as approvalController from '../../controllers/approvalController.js';
 import { body, param } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { uploadAcknowledgementFiles, handleUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
 
@@ -117,6 +118,14 @@ router.get(
   approvalController.getApprovalRequestById
 );
 
+// Upload acknowledgement files
+router.post(
+  '/upload-acknowledgement',
+  uploadAcknowledgementFiles,
+  handleUploadError,
+  approvalController.uploadAcknowledgementFiles
+);
+
 // Approve request
 router.post(
   '/:approvalRequestId/approve',
@@ -135,21 +144,21 @@ router.post(
   approvalController.approveRequest
 );
 
-// Approve risk with priority selection (department head only)
+// Approve risk with likelihood and severity (department head only)
 // This endpoint is called when the department head approves a risk
-// and selects the risk priority, which determines the workflow
+// and selects likelihood/severity, which auto-calculates priority and determines the workflow
 router.post(
   '/:approvalRequestId/approve-with-priority',
   [
     param('approvalRequestId')
       .isMongoId()
       .withMessage('Invalid approval request ID'),
-    body('riskPriority')
-      .trim()
-      .notEmpty()
-      .withMessage('Risk priority is required')
-      .isIn(['low', 'medium', 'high'])
-      .withMessage('Risk priority must be low, medium, or high'),
+    body('likelihood')
+      .isInt({ min: 1, max: 5 })
+      .withMessage('Likelihood must be between 1 and 5'),
+    body('severity')
+      .isInt({ min: 1, max: 5 })
+      .withMessage('Severity must be between 1 and 5'),
     body('comments')
       .optional()
       .trim()
@@ -175,6 +184,83 @@ router.post(
   ],
   validate,
   approvalController.rejectRequest
+);
+
+// Submit COI request (pauses main workflow)
+router.post(
+  '/:approvalRequestId/coi',
+  [
+    param('approvalRequestId')
+      .isMongoId()
+      .withMessage('Invalid approval request ID'),
+    body('reason')
+      .trim()
+      .notEmpty()
+      .withMessage('COI reason is required')
+  ],
+  validate,
+  approvalController.submitCoiRequest
+);
+
+// Rejection Workflow Routes
+
+// Get pending rejection reviews for current user
+router.get('/rejection-reviews/pending', approvalController.getPendingRejectionReviews);
+
+// Get workflow participants (for rejection forwarding)
+router.get(
+  '/:approvalRequestId/participants',
+  [
+    param('approvalRequestId')
+      .isMongoId()
+      .withMessage('Invalid approval request ID')
+  ],
+  validate,
+  approvalController.getWorkflowParticipants
+);
+
+// Forward rejection for review
+router.post(
+  '/:approvalRequestId/forward-rejection',
+  [
+    param('approvalRequestId')
+      .isMongoId()
+      .withMessage('Invalid approval request ID'),
+    body('stepIndex')
+      .isInt({ min: 0 })
+      .withMessage('Step index must be a non-negative integer'),
+    body('forwardToUserId')
+      .isMongoId()
+      .withMessage('Valid forward to user ID is required'),
+    body('rejectionComments')
+      .trim()
+      .notEmpty()
+      .withMessage('Rejection reason is required')
+  ],
+  validate,
+  approvalController.forwardRejection
+);
+
+// Review rejection (accept or reject the rejection)
+router.post(
+  '/:approvalRequestId/review-rejection',
+  [
+    param('approvalRequestId')
+      .isMongoId()
+      .withMessage('Invalid approval request ID'),
+    body('reviewAction')
+      .trim()
+      .notEmpty()
+      .withMessage('Review action is required')
+      .isIn(['accept_rejection', 'reject_rejection'])
+      .withMessage('Review action must be accept_rejection or reject_rejection'),
+    body('reviewComments')
+      .trim()
+      .notEmpty()
+      .withMessage('Review comments are required')
+  ],
+  validate,
+  approvalController.reviewRejection
 );
 
 export default router;

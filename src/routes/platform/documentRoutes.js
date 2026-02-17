@@ -22,7 +22,7 @@ router.get(
   [
     query('category')
       .optional()
-      .isIn(['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'board_minutes', 'financial_statement', 'responsible_person_consent', 'evidence_of_activities', 'supporting_document', 'withholding_evidence', 'other'])
+      .isIn(['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'board_minutes', 'financial_statement', 'responsible_person_consent', 'evidence_of_activities', 'supporting_document', 'withholding_evidence', 'registration_license', 'other'])
       .withMessage('Invalid category')
   ],
   validate,
@@ -48,12 +48,15 @@ router.post(
   handleUploadError,
   [
     body('category')
-      .isIn(['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'board_minutes', 'financial_statement', 'responsible_person_consent', 'evidence_of_activities', 'supporting_document', 'withholding_evidence', 'other'])
+      .isIn(['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'board_minutes', 'financial_statement', 'responsible_person_consent', 'evidence_of_activities', 'supporting_document', 'withholding_evidence', 'registration_license', 'other'])
       .withMessage('Valid category is required'),
     body('document_type')
       .trim()
       .notEmpty()
       .withMessage('Document type is required'),
+    body('registration_number')
+      .optional()
+      .trim(),
     body('title')
       .trim()
       .notEmpty()
@@ -63,6 +66,14 @@ router.post(
       .isISO8601()
       .withMessage('Invalid date format'),
     body('date_last_amended')
+      .optional()
+      .isISO8601()
+      .withMessage('Invalid date format'),
+    body('effective_date')
+      .optional()
+      .isISO8601()
+      .withMessage('Invalid date format'),
+    body('expiry_date')
       .optional()
       .isISO8601()
       .withMessage('Invalid date format')

@@ -27,6 +27,7 @@ const documentSchema = new mongoose.Schema({
       'evidence_of_activities',
       'supporting_document',
       'withholding_evidence',
+      'registration_license',
       'other'
     ],
     index: true
@@ -34,6 +35,10 @@ const documentSchema = new mongoose.Schema({
   document_type: {
     type: String,
     required: true,
+    trim: true
+  },
+  registration_number: {
+    type: String,
     trim: true
   },
   title: {
@@ -75,6 +80,12 @@ const documentSchema = new mongoose.Schema({
     type: Date
   },
   date_last_amended: {
+    type: Date
+  },
+  effective_date: {
+    type: Date
+  },
+  expiry_date: {
     type: Date
   },
   // Related entities

@@ -65,8 +65,7 @@ export const getBoardMemberById = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
-  let boardMember = await boardMemberRepo.findById(boardMemberId)
-    .populate({ path: 'position_id', populate: { path: 'department_id' } });
+  let boardMember = await boardMemberRepo.findByIdWithRelations(boardMemberId);
   if (!boardMember) {
     throw new AppError('Board member not found', 404, 'NOT_FOUND');
   }
@@ -80,6 +79,15 @@ export const getBoardMemberById = asyncHandler(async (req, res) => {
     throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
   }
   decryptBoardMemberFields(obj, keyHex);
+
+  // Resolve profile picture URL
+  if (boardMember.profile_picture_key) {
+    try {
+      obj.profile_picture_url = await getFileUrl(boardMember.profile_picture_key, 604800);
+    } catch (err) {
+      logError('Failed to resolve profile picture URL', err, { boardMemberId: boardMember._id });
+    }
+  }
 
   res.json({
     success: true,
@@ -180,6 +188,16 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
   }
   decryptBoardMemberFields(createObj, keyHex);
+  
+  // Resolve profile picture URL
+  if (boardMember.profile_picture_key) {
+    try {
+      createObj.profile_picture_url = await getFileUrl(boardMember.profile_picture_key, 604800);
+    } catch (err) {
+      logError('Failed to resolve profile picture URL', err, { boardMemberId: boardMember._id });
+    }
+  }
+  
   res.status(201).json({
     success: true,
     data: createObj
@@ -215,6 +233,16 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
     throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
   }
   decryptBoardMemberFields(obj, keyHex);
+  
+  // Resolve profile picture URL
+  if (boardMember.profile_picture_key) {
+    try {
+      obj.profile_picture_url = await getFileUrl(boardMember.profile_picture_key, 604800);
+    } catch (err) {
+      logError('Failed to resolve profile picture URL', err, { boardMemberId: boardMember._id });
+    }
+  }
+  
   res.json({
     success: true,
     data: obj
