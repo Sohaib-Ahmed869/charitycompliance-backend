@@ -1038,15 +1038,9 @@ export class ApprovalWorkflowService {
 
     // Clear current rejection review ID and update status
     // Business rules:
-    // - accept_rejection  -> workflow continues (treated as rejection accepted for tracking)
-    // - reject_rejection  -> workflow stays fully rejected and does NOT continue
-    let newStatus;
-    if (reviewAction === 'accept_rejection') {
-      newStatus = 'rejection_accepted';
-    } else {
-      // Reviewer has rejected the rejection – keep the request in a terminal rejected state
-      newStatus = 'rejected';
-    }
+    // - accept_rejection -> resume workflow (back to pending)
+    // - reject_rejection -> workflow is rejected
+    const newStatus = reviewAction === 'accept_rejection' ? 'pending' : 'rejected';
 
     await approvalRequestRepo.update(approvalRequestId, {
       current_rejection_review_id: null,
@@ -1062,9 +1056,9 @@ export class ApprovalWorkflowService {
         title: reviewAction === 'accept_rejection'
           ? 'Rejection Accepted'
           : 'Rejection Confirmed',
-        message: reviewAction === 'accept_rejection' 
-          ? `Your rejection has been reviewed and the workflow can now continue.`
-          : `Your rejection has been reviewed and the request is now fully rejected.`,
+        message: reviewAction === 'accept_rejection'
+          ? 'Your rejection has been reviewed and the workflow has resumed.'
+          : 'Your rejection has been reviewed and the request is now fully rejected.',
         entity_type: request.entity_type,
         entity_id: request.entity_id,
         created_at: new Date()
