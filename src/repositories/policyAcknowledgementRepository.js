@@ -18,7 +18,7 @@ export class PolicyAcknowledgementRepository {
     }).lean();
   }
 
-  async acknowledge(policyId, userId, signatureData = null) {
+  async acknowledge(policyId, userId, signatureData = null, userName = null, userTitle = null) {
     const existing = await this.PolicyAcknowledgement.findOne({ policy_id: policyId, user_id: userId });
     if (existing) {
       return existing;
@@ -26,7 +26,9 @@ export class PolicyAcknowledgementRepository {
     const record = new this.PolicyAcknowledgement({
       policy_id: policyId,
       user_id: userId,
-      signature_data: signatureData
+      signature_data: signatureData,
+      user_name: userName,
+      user_title: userTitle
     });
     return record.save();
   }
@@ -42,7 +44,6 @@ export class PolicyAcknowledgementRepository {
 
   async findByPolicyId(policyId) {
     return this.PolicyAcknowledgement.find({ policy_id: policyId })
-      .populate('user_id', 'first_name last_name email given_names family_name')
       .sort({ acknowledged_at: -1 })
       .lean();
   }

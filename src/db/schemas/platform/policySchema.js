@@ -67,6 +67,9 @@ const policySchema = new mongoose.Schema(
       ref: 'User',
       sparse: true
     },
+    reviewed_by_name: {
+      type: String
+    },
     reviewed_at: {
       type: Date,
       sparse: true
@@ -75,8 +78,13 @@ const policySchema = new mongoose.Schema(
       {
         reviewed_by: {
           type: mongoose.Schema.Types.ObjectId,
-          ref: 'User',
           required: true
+        },
+        reviewed_by_name: {
+          type: String
+        },
+        reviewed_by_title: {
+          type: String
         },
         reviewed_at: {
           type: Date,
@@ -97,6 +105,12 @@ const policySchema = new mongoose.Schema(
         },
         next_review_date_set: {
           type: Date
+        },
+        e_signature: {
+          type: String
+        },
+        approver_name: {
+          type: String
         }
       }
     ],

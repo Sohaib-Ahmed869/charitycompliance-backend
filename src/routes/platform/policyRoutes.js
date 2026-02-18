@@ -37,6 +37,27 @@ router.get(
 );
 
 router.get(
+  '/:policyId/acknowledgements',
+  [param('policyId').isMongoId().withMessage('Invalid policy ID')],
+  validate,
+  policyController.getPolicyAcknowledgements
+);
+
+router.get(
+  '/:policyId/approvals',
+  [param('policyId').isMongoId().withMessage('Invalid policy ID')],
+  validate,
+  policyController.getPolicyApprovals
+);
+
+router.get(
+  '/:policyId/signoff',
+  [param('policyId').isMongoId().withMessage('Invalid policy ID')],
+  validate,
+  policyController.getPolicySignOffData
+);
+
+router.get(
   '/:policyId',
   [param('policyId').isMongoId().withMessage('Invalid policy ID')],
   validate,

@@ -23,9 +23,29 @@ const policyDocumentLogSchema = new mongoose.Schema(
     notes: {
       type: String
     },
+    action: {
+      type: String
+    },
+    description: {
+      type: String
+    },
+    changes: {
+      type: String
+    },
+    e_signature: {
+      type: String
+    },
     updated_by: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User'
+      type: mongoose.Schema.Types.ObjectId
+    },
+    updated_by_name: {
+      type: String
+    },
+    updated_by_position: {
+      type: String
+    },
+    updated_by_title: {
+      type: String
     }
   },
   {

@@ -15,9 +15,14 @@ const policyAcknowledgementSchema = new mongoose.Schema(
     },
     user_id: {
       type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
       required: true,
       index: true
+    },
+    user_name: {
+      type: String
+    },
+    user_title: {
+      type: String
     },
     acknowledged_at: {
       type: Date,

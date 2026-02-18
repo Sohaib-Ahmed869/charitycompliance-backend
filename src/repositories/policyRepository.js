@@ -89,7 +89,6 @@ export class PolicyRepository {
   async getDocumentLogs(policyId) {
     return this.PolicyDocumentLog.find({ policy_id: policyId })
       .sort({ createdAt: -1 })
-      .populate('updated_by', 'first_name last_name email given_names family_name')
       .lean();
   }
 
@@ -103,4 +102,25 @@ export class PolicyRepository {
     ]);
     return { total, draft, active, underReview, expired };
   }
+
+  async getApprovals(policyId) {
+    const policy = await this.Policy.findById(policyId).lean();
+    
+    if (!policy || !policy.review_history) {
+      return [];
+    }
+
+    // Transform review_history into approval format
+    return policy.review_history.map((review, index) => ({
+      step: index + 1,
+      reviewer_id: review.reviewed_by,
+      approver_name: review.reviewed_by_name || review.approver_name || 'Reviewer', // Use stored denormalized name
+      status: review.action === 'approved_no_changes' || review.action === 'updated' ? 'approved' : review.action === 'rejected' ? 'rejected' : 'pending',
+      reviewed_at: review.reviewed_at,
+      action: review.action,
+      comments: review.comments,
+      version_reviewed: review.version_reviewed
+    }));
+  }
 }
+

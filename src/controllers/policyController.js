@@ -369,6 +369,31 @@ export const updatePolicyDocument = asyncHandler(async (req, res) => {
     }
   }
 
+  // Get updater information for denormalization
+  const { UserRepository } = await import('../repositories/userRepository.js');
+  const userRepo = new UserRepository(tenantDb);
+  const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
+
+  let updatedByName = undefined;
+  let updatedByTitle = undefined;
+  
+  if (userId) {
+    const user = await userRepo.findById(userId);
+    updatedByName = user?.first_name && user?.last_name 
+      ? `${user.first_name} ${user.last_name}` 
+      : (user?.email || undefined);
+
+    const org = await orgRepo.findOne();
+    if (org) {
+      const boardMember = await boardMemberRepo.findByUserId(userId, org._id);
+      if (boardMember) {
+        updatedByTitle = boardMember.position || boardMember.custom_position_title;
+      }
+    }
+  }
+
   const policy = await policyRepo.update(policyId, {
     file_name: req.file.originalname,
     file_path: key,
@@ -383,7 +408,9 @@ export const updatePolicyDocument = asyncHandler(async (req, res) => {
     version: newVersion,
     file_name: req.file.originalname,
     notes: notes || undefined,
-    updated_by: userId
+    updated_by: userId,
+    updated_by_name: updatedByName,
+    updated_by_title: updatedByTitle
   });
 
   res.json({
@@ -395,6 +422,7 @@ export const updatePolicyDocument = asyncHandler(async (req, res) => {
 /**
  * Acknowledge an active policy for the current user.
  * Optionally stores drawn signature data.
+ * Captures and denormalizes user name and title for PDF display.
  */
 export const acknowledgePolicy = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -408,6 +436,11 @@ export const acknowledgePolicy = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const policyRepo = new PolicyRepository(tenantDb);
   const acknowledgementRepo = new PolicyAcknowledgementRepository(tenantDb);
+  const { UserRepository } = await import('../repositories/userRepository.js');
+  const userRepo = new UserRepository(tenantDb);
+  const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
 
   const policy = await policyRepo.findById(policyId);
   if (!policy) {
@@ -425,8 +458,23 @@ export const acknowledgePolicy = asyncHandler(async (req, res) => {
     throw new AppError('Invalid user ID format', 400, 'INVALID_USER_ID');
   }
 
+  // Get user information for denormalization
+  const user = await userRepo.findById(userId);
+  let userName = user?.first_name && user?.last_name 
+    ? `${user.first_name} ${user.last_name}` 
+    : (user?.email || 'Unknown User');
+
+  let userTitle = undefined;
+  const org = await orgRepo.findOne();
+  if (org) {
+    const boardMember = await boardMemberRepo.findByUserId(userId, org._id);
+    if (boardMember) {
+      userTitle = boardMember.position || boardMember.custom_position_title;
+    }
+  }
+
   const signatureData = typeof req.body?.signature_data === 'string' ? req.body.signature_data : null;
-  const acknowledgement = await acknowledgementRepo.acknowledge(policyId, userId, signatureData);
+  const acknowledgement = await acknowledgementRepo.acknowledge(policyId, userId, signatureData, userName, userTitle);
 
   res.status(201).json({
     success: true,
@@ -533,6 +581,34 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
     throw new AppError('Policy not found', 404, 'NOT_FOUND');
   }
 
+  // Get reviewer information for denormalization
+  const { UserRepository } = await import('../repositories/userRepository.js');
+  const userRepo = new UserRepository(tenantDb);
+  const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
+
+  let userObjectId;
+  try {
+    userObjectId = new mongoose.Types.ObjectId(userId);
+  } catch {
+    throw new AppError('Invalid user ID format', 400, 'INVALID_USER_ID');
+  }
+
+  const user = await userRepo.findById(userObjectId);
+  let reviewerName = user?.first_name && user?.last_name 
+    ? `${user.first_name} ${user.last_name}` 
+    : (user?.email || 'Unknown User');
+
+  let reviewerTitle = undefined;
+  const org = await orgRepo.findOne();
+  if (org) {
+    const boardMember = await boardMemberRepo.findByUserId(userObjectId, org._id);
+    if (boardMember) {
+      reviewerTitle = boardMember.position || boardMember.custom_position_title;
+    }
+  }
+
   // Calculate next review date if not provided
   let calculatedNextReviewDate = next_review_date;
   if (!calculatedNextReviewDate && policy.review_cycle) {
@@ -549,9 +625,11 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
     calculatedNextReviewDate = nextDate.toISOString();
   }
 
-  // Build review history entry with e-signature
+  // Build review history entry with e-signature and denormalized reviewer info
   const reviewEntry = {
-    reviewed_by: new mongoose.Types.ObjectId(userId),
+    reviewed_by: userObjectId,
+    reviewed_by_name: reviewerName,
+    reviewed_by_title: reviewerTitle,
     reviewed_at: new Date(),
     action: action,
     comments: comments || null,
@@ -565,7 +643,8 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
     // Just add to review history and set next review date
     await policyRepo.update(policyId, {
       $push: { review_history: reviewEntry },
-      reviewed_by: new mongoose.Types.ObjectId(userId),
+      reviewed_by: userObjectId,
+      reviewed_by_name: reviewerName,
       reviewed_at: new Date(),
       review_date: calculatedNextReviewDate ? new Date(calculatedNextReviewDate) : policy.next_review_date,
       next_review_date: calculatedNextReviewDate ? new Date(calculatedNextReviewDate) : policy.next_review_date,
@@ -598,7 +677,8 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
       ...changes,
       version: newVersion,
       $push: { review_history: reviewEntry },
-      reviewed_by: new mongoose.Types.ObjectId(userId),
+      reviewed_by: userObjectId,
+      reviewed_by_name: reviewerName,
       reviewed_at: new Date(),
       review_date: calculatedNextReviewDate ? new Date(calculatedNextReviewDate) : policy.next_review_date,
       next_review_date: calculatedNextReviewDate ? new Date(calculatedNextReviewDate) : policy.next_review_date,
@@ -639,7 +719,8 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
     // Mark policy as expired/rejected and add to review history
     await policyRepo.update(policyId, {
       $push: { review_history: reviewEntry },
-      reviewed_by: new mongoose.Types.ObjectId(userId),
+      reviewed_by: userObjectId,
+      reviewed_by_name: reviewerName,
       reviewed_at: new Date(),
       is_under_review: false,
       status: 'expired'
@@ -688,3 +769,100 @@ export const getPoliciesPendingReview = asyncHandler(async (req, res) => {
     data: pendingPolicies || []
   });
 });
+
+/**
+ * Get all acknowledgements for a policy
+ * GET /platform/policies/:policyId/acknowledgements
+ */
+export const getPolicyAcknowledgements = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { policyId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+
+  const policyRepo = new PolicyRepository(tenantDb);
+  const acknowledgementRepo = new PolicyAcknowledgementRepository(tenantDb);
+
+  const policy = await policyRepo.findById(policyId);
+  if (!policy) {
+    throw new AppError('Policy not found', 404, 'NOT_FOUND');
+  }
+
+  const acknowledgements = await acknowledgementRepo.findByPolicyId(policyId);
+  
+  res.json({
+    success: true,
+    data: acknowledgements || []
+  });
+});
+
+/**
+ * Get all approval steps for a policy
+ * GET /platform/policies/:policyId/approvals
+ */
+export const getPolicyApprovals = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { policyId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+
+  const policyRepo = new PolicyRepository(tenantDb);
+  const policy = await policyRepo.findById(policyId);
+  if (!policy) {
+    throw new AppError('Policy not found', 404, 'NOT_FOUND');
+  }
+
+  // Get approval workflow data if available
+  try {
+    const approvals = await policyRepo.getApprovals(policyId);
+    res.json({
+      success: true,
+      data: approvals || []
+    });
+  } catch (error) {
+    // If approval data is not available, return empty
+    res.json({
+      success: true,
+      data: []
+    });
+  }
+});
+
+/**
+ * Get complete sign-off data (policy + logs + acknowledgements + approvals)
+ * GET /platform/policies/:policyId/signoff
+ */
+export const getPolicySignOffData = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { policyId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+
+  const policyRepo = new PolicyRepository(tenantDb);
+  const acknowledgementRepo = new PolicyAcknowledgementRepository(tenantDb);
+
+  const policy = await policyRepo.findById(policyId);
+  if (!policy) {
+    throw new AppError('Policy not found', 404, 'NOT_FOUND');
+  }
+
+  // Fetch all related data
+  const acknowledgements = await acknowledgementRepo.findByPolicyId(policyId);
+  const documentLogs = await policyRepo.getDocumentLogs(policyId);
+  
+  // Get approval data if available
+  let approvals = [];
+  try {
+    approvals = await policyRepo.getApprovals(policyId);
+  } catch (error) {
+    // Approvals may not be available
+  }
+
+  res.json({
+    success: true,
+    data: {
+      policy,
+      acknowledgements: acknowledgements || [],
+      document_logs: documentLogs || [],
+      approvals: approvals || []
+    }
+  });
+});
+
