@@ -858,8 +858,14 @@ export class ApprovalWorkflowService {
     // Query by both user_id and position_ids
     const requests = await approvalRequestRepo.findPendingByApprover(userId, userPositionIds);
 
+    // Also get pending rejection reviews for this user
+    const pendingRejectionReviews = await approvalRequestRepo.findPendingRejectionReviews(userId);
+    const rejectionReviewRequestIds = new Set(
+      pendingRejectionReviews.map(r => String(r._id))
+    );
+
     // Filter to only show steps that are pending for this user
-    return requests.map(request => {
+    const approvalRequests = requests.map(request => {
       const userSteps = request.approval_steps.filter(step =>
         this._canUserApproveStep(step, userId, userPositionIds)
       );
@@ -886,6 +892,18 @@ export class ApprovalWorkflowService {
         can_approve: userSteps.length > 0
       };
     }).filter(r => r !== null);
+
+    // Add pending rejection reviews that aren't already in the list
+    const existingRequestIds = new Set(approvalRequests.map(r => String(r._id)));
+    const additionalRejectionReviews = pendingRejectionReviews
+      .filter(r => !existingRequestIds.has(String(r._id)))
+      .map(request => ({
+        ...request.toObject(),
+        can_approve: false, // User can't approve steps, but can review rejection
+        has_pending_rejection_review: true
+      }));
+
+    return [...approvalRequests, ...additionalRejectionReviews];
   }
 
   /**
@@ -993,7 +1011,9 @@ export class ApprovalWorkflowService {
     }
 
     // Verify reviewer is the forwarded_to user
-    if (String(currentReview.forwarded_to) !== String(reviewerUserId)) {
+    // Note: forwarded_to may be populated (Object) or just an ObjectId
+    const forwardedToId = currentReview.forwarded_to?._id || currentReview.forwarded_to;
+    if (String(forwardedToId) !== String(reviewerUserId)) {
       throw new AppError('You are not authorized to review this rejection', 403, 'UNAUTHORIZED');
     }
 
@@ -1017,12 +1037,15 @@ export class ApprovalWorkflowService {
     );
 
     // Clear current rejection review ID and update status
+    // Business rules:
+    // - accept_rejection  -> workflow continues (treated as rejection accepted for tracking)
+    // - reject_rejection  -> workflow stays fully rejected and does NOT continue
     let newStatus;
     if (reviewAction === 'accept_rejection') {
       newStatus = 'rejection_accepted';
     } else {
-      // Rejection was rejected - return to pending so original rejector can re-review
-      newStatus = 'pending';
+      // Reviewer has rejected the rejection – keep the request in a terminal rejected state
+      newStatus = 'rejected';
     }
 
     await approvalRequestRepo.update(approvalRequestId, {
@@ -1036,10 +1059,12 @@ export class ApprovalWorkflowService {
         org_id: request.org_id,
         user_id: currentReview.rejected_by,
         type: 'approval',
-        title: reviewAction === 'accept_rejection' ? 'Rejection Accepted' : 'Rejection Disagreed',
+        title: reviewAction === 'accept_rejection'
+          ? 'Rejection Accepted'
+          : 'Rejection Confirmed',
         message: reviewAction === 'accept_rejection' 
-          ? `Your rejection has been accepted. You can now re-review the request.`
-          : `Your rejection was disagreed with. Please re-review the request.`,
+          ? `Your rejection has been reviewed and the workflow can now continue.`
+          : `Your rejection has been reviewed and the request is now fully rejected.`,
         entity_type: request.entity_type,
         entity_id: request.entity_id,
         created_at: new Date()

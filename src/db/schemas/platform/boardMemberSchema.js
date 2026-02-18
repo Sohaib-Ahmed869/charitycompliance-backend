@@ -39,7 +39,10 @@ const boardMemberSchema = new mongoose.Schema({
   // Governance/responsible person role title (not limited to board positions)
   position: {
     type: String,
-    required: true,
+    required: function() {
+      // Position is only required if not a volunteer
+      return !this.is_volunteer;
+    },
     trim: true,
     maxlength: 100
   },
@@ -47,6 +50,11 @@ const boardMemberSchema = new mongoose.Schema({
   department: {
     type: String,
     trim: true
+  },
+  /** Whether this person is a volunteer with no system access and no specific position */
+  is_volunteer: {
+    type: Boolean,
+    default: false
   },
   /** Link to Position document so we can load granted_permissions at login */
   position_id: {

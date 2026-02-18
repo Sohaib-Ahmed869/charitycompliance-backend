@@ -109,7 +109,7 @@ export const createBoardMember = asyncHandler(async (req, res) => {
   }
 
   const orgId = req.orgId;
-  const { invite, system_access, ...boardMemberData } = req.body;
+  const { invite, system_access, is_volunteer, ...boardMemberData } = req.body;
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
   const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
@@ -137,6 +137,7 @@ export const createBoardMember = asyncHandler(async (req, res) => {
   const boardMember = await boardMemberRepo.create({
     org_id: org._id,
     ...boardMemberData,
+    is_volunteer: is_volunteer || false,
     ...invitationData
   });
 

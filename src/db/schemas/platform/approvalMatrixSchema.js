@@ -147,6 +147,22 @@ const approvalMatrixSchema = new mongoose.Schema({
 approvalMatrixSchema.index({ org_id: 1 });
 approvalMatrixSchema.index({ org_id: 1, is_default: 1 });
 
+// Helper: human‑readable names for workflow categories (used in validation errors)
+const getCategoryDisplayName = (category) => {
+  const categoryNames = {
+    risk_management: 'Risk Management',
+    risk_treatment: 'Risk Treatment',
+    coi: 'Conflict of Interest',
+    partner_vetting: 'Partner Vetting',
+    funding_agreement: 'Funding Agreement',
+    project_approval: 'Project Approval',
+    expense_approval: 'Expense Approval',
+    policy_approval: 'Policy Approval',
+    hr_approval: 'HR Approval'
+  };
+  return categoryNames[category] || category;
+};
+
 // Validation: workflow_category and workflow_type rules
 approvalMatrixSchema.pre('save', async function(next) {
   const doc = this;

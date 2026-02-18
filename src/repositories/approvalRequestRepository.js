@@ -57,7 +57,9 @@ export class ApprovalRequestRepository {
       .populate('approval_matrix_id', 'name')
       .populate('approval_steps.approver_user_id', 'first_name last_name email')
       .populate('approval_steps.approver_position_id', 'title')
-      .populate('approval_steps.approver_department_id', 'name');
+      .populate('approval_steps.approver_department_id', 'name')
+      .populate('rejection_reviews.rejected_by', 'first_name last_name email')
+      .populate('rejection_reviews.forwarded_to', 'first_name last_name email');
   }
 
   async findByEntityId(entityId, entityType) {
@@ -113,15 +115,30 @@ export class ApprovalRequestRepository {
       });
     }
 
+    // Also include pending rejection reviews where user is forwarded_to
+    const rejectionReviewCondition = {
+      status: 'pending_rejection_review',
+      'rejection_reviews': {
+        $elemMatch: {
+          forwarded_to: userId,
+          review_status: 'pending'
+        }
+      }
+    };
+
     return await this.ApprovalRequest.find({
-      $or: orConditions,
-      status: 'pending'
+      $or: [
+        ...orConditions,
+        rejectionReviewCondition
+      ]
     })
       .populate('submitted_by', 'first_name last_name email')
       .populate('approval_matrix_id', 'name')
       .populate('approval_steps.approver_user_id', 'first_name last_name email')
       .populate('approval_steps.approver_position_id', 'title')
       .populate('approval_steps.approver_department_id', 'name')
+      .populate('rejection_reviews.rejected_by', 'first_name last_name email')
+      .populate('rejection_reviews.forwarded_to', 'first_name last_name email')
       .sort({ created_at: -1 });
   }
 

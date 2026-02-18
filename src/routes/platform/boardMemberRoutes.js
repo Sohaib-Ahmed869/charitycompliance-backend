@@ -101,6 +101,7 @@ router.post(
         return true;
       }),
     body('position')
+      .if((value, { req }) => !req.body.is_volunteer)
       .trim()
       .notEmpty()
       .withMessage('Position is required'),
