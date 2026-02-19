@@ -32,8 +32,11 @@ export class CalendarRepository {
    */
   async findByUserId(userId, options = {}) {
     const query = {
-      user_id: userId,
-      is_custom: true
+      is_custom: true,
+      $or: [
+        { user_id: userId },
+        { attendees: userId }
+      ]
     };
 
     // Filter by date range if provided

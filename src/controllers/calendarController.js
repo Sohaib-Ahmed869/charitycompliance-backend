@@ -203,7 +203,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
 export const createCustomEvent = asyncHandler(async (req, res) => {
   const userId = req.user.userId;
   const orgId = req.orgId;
-  const { title, date, type, description, color } = req.body;
+  const { title, date, type, description, color, attendees } = req.body;
 
   // Validate required fields
   if (!title || !date) {
@@ -213,6 +213,12 @@ export const createCustomEvent = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const calendarRepo = new CalendarRepository(tenantDb);
 
+  const attendeeIds = Array.isArray(attendees) ? attendees.filter(Boolean) : [];
+  const normalizedAttendees = [...new Set(attendeeIds.map((id) => id.toString()))];
+  if (!normalizedAttendees.includes(userId.toString())) {
+    normalizedAttendees.push(userId.toString());
+  }
+
   const eventData = {
     user_id: userId,
     title,
@@ -220,6 +226,7 @@ export const createCustomEvent = asyncHandler(async (req, res) => {
     type: type || 'custom',
     description,
     color,
+    attendees: normalizedAttendees,
     is_custom: true,
     created_by: userId
   };

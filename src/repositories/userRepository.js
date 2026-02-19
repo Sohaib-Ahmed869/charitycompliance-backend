@@ -120,6 +120,17 @@ export class UserRepository {
     return user.save();
   }
 
+  async listActiveUsers(excludeUserId) {
+    const query = { status: 'active' };
+    if (excludeUserId) {
+      query._id = { $ne: excludeUserId };
+    }
+    return this.User.find(query)
+      .select('first_name last_name email status')
+      .sort({ first_name: 1, last_name: 1 })
+      .exec();
+  }
+
   async update(userId, updateData) {
     return this.User.findByIdAndUpdate(
       userId,

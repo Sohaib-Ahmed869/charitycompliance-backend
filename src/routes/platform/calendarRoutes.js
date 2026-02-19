@@ -52,7 +52,15 @@ router.post(
       .trim(),
     body('color')
       .optional()
-      .trim()
+      .trim(),
+    body('attendees')
+      .optional()
+      .isArray()
+      .withMessage('attendees must be an array of user IDs'),
+    body('attendees.*')
+      .optional()
+      .isMongoId()
+      .withMessage('attendee id must be a valid Mongo ID')
   ],
   validate,
   calendarController.createCustomEvent
@@ -84,6 +92,14 @@ router.put(
     body('color')
       .optional()
       .trim(),
+    body('attendees')
+      .optional()
+      .isArray()
+      .withMessage('attendees must be an array of user IDs'),
+    body('attendees.*')
+      .optional()
+      .isMongoId()
+      .withMessage('attendee id must be a valid Mongo ID'),
     body('completed')
       .optional()
       .isBoolean()

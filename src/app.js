@@ -95,12 +95,14 @@ import fundingAgreementRoutes from './routes/platform/fundingAgreementRoutes.js'
 import coiRoutes from './routes/platform/coiRoutes.js';
 import auditTrailRoutes from './routes/platform/auditTrailRoutes.js';
 import approvalThresholdRoutes from './routes/platform/approvalThresholdRoutes.js';
+import userRoutes from './routes/platform/userRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
 app.use('/api/v1/platform/expenses', expenseRoutes);
 app.use('/api/v1/platform/approvals', approvalRoutes);
 app.use('/api/v1/platform/approval-thresholds', approvalThresholdRoutes);
+app.use('/api/v1/platform/users', userRoutes);
 app.use('/api/v1/platform/board-members', boardMemberRoutes);
 app.use('/api/v1/platform/documents', documentRoutes);
 app.use('/api/v1/platform/activities', activityRoutes);

@@ -41,6 +41,10 @@ const calendarEventSchema = new mongoose.Schema({
     default: false,
     index: true
   },
+  attendees: {
+    type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    default: []
+  },
   is_custom: {
     type: Boolean,
     default: true,
