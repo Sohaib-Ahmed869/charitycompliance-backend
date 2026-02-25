@@ -14,6 +14,9 @@ import { ApprovalWorkflowService } from '../services/approvalWorkflowService.js'
 import { generatePolicySignOffPDF } from '../services/policySignOffPdfService.js';
 import { decrypt, isEncrypted } from '../utils/encryption.js';
 import { getMasterKeyHex } from '../config/encryption.js';
+import archiver from 'archiver';
+import path from 'path';
+import fs from 'fs';
 
 export const getPolicies = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -999,6 +1002,167 @@ export const downloadPolicySignOffPDF = asyncHandler(async (req, res) => {
   res.setHeader('Content-Length', pdfBuffer.length);
   
   res.send(pdfBuffer);
+});
+
+/**
+ * Download Policy Pack as ZIP (policy document + sign-off sheet)
+ * GET /platform/policies/:policyId/signoff/pack-download
+ */
+export const downloadPolicyPackZip = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { policyId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+
+  const policyRepo = new PolicyRepository(tenantDb);
+  const acknowledgementRepo = new PolicyAcknowledgementRepository(tenantDb);
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const { UserRepository } = await import('../repositories/userRepository.js');
+  const userRepo = new UserRepository(tenantDb);
+
+  // Get policy
+  const policy = await policyRepo.findById(policyId);
+  if (!policy) {
+    throw new AppError('Policy not found', 404, 'NOT_FOUND');
+  }
+
+  // Get organization for logo
+  const org = await orgRepo.findOne();
+  const logoUrl = org?.logo_url || process.env.LOGO || '';
+  
+  console.log('Logo URL for pack download:', {
+    orgLogoUrl: org?.logo_url,
+    envLogo: process.env.LOGO,
+    finalLogoUrl: logoUrl,
+    orgData: org ? { id: org._id, name: org.name } : null
+  });
+
+  // Fetch all related data for sign-off sheet
+  let acknowledgements = await acknowledgementRepo.findByPolicyId(policyId);
+  let documentLogs = await policyRepo.getDocumentLogs(policyId);
+  let approvals = [];
+  
+  try {
+    approvals = await policyRepo.getApprovals(policyId);
+  } catch (error) {
+    console.error('Error fetching approvals:', error);
+  }
+
+  // Decrypt user names in document logs
+  const masterKeyHex = getMasterKeyHex();
+  for (const log of documentLogs) {
+    if (log.updated_by && mongoose.Types.ObjectId.isValid(log.updated_by)) {
+      try {
+        const user = await userRepo.findById(log.updated_by);
+        if (user) {
+          const firstName = isEncrypted(user.first_name) ? decrypt(user.first_name, masterKeyHex) : user.first_name;
+          const lastName = isEncrypted(user.last_name) ? decrypt(user.last_name, masterKeyHex) : user.last_name;
+          log.updated_by_name = `${firstName || ''} ${lastName || ''}`.trim() || 'Unknown User';
+        } else {
+          log.updated_by_name = 'Unknown User';
+        }
+      } catch (error) {
+        console.error('Error decrypting user:', error);
+        log.updated_by_name = 'Unknown User';
+      }
+    }
+  }
+
+  // Decrypt approver names in approval steps
+  for (const approval of approvals) {
+    if (approval.reviewer_id && mongoose.Types.ObjectId.isValid(approval.reviewer_id)) {
+      try {
+        const user = await userRepo.findById(approval.reviewer_id);
+        if (user) {
+          const firstName = isEncrypted(user.first_name) ? decrypt(user.first_name, masterKeyHex) : user.first_name;
+          const lastName = isEncrypted(user.last_name) ? decrypt(user.last_name, masterKeyHex) : user.last_name;
+          approval.approver_name = `${firstName || ''} ${lastName || ''}`.trim() || approval.approver_name || 'Unknown Approver';
+        }
+      } catch (error) {
+        console.error('Error decrypting approver:', error);
+      }
+    }
+  }
+
+  // Generate sign-off sheet PDF
+  let signOffPdfBuffer;
+  try {
+    signOffPdfBuffer = await generatePolicySignOffPDF(
+      policy,
+      acknowledgements || [],
+      documentLogs || [],
+      approvals || [],
+      logoUrl
+    );
+  } catch (pdfError) {
+    console.error('PDF Generation Error:', pdfError);
+    throw new AppError('Failed to generate sign-off PDF: ' + pdfError.message, 500, 'PDF_GENERATION_ERROR');
+  }
+
+  console.log('Sign-off PDF buffer generated:', {
+    isBuffer: Buffer.isBuffer(signOffPdfBuffer),
+    isUint8Array: signOffPdfBuffer instanceof Uint8Array,
+    length: signOffPdfBuffer?.length,
+    type: typeof signOffPdfBuffer,
+    constructor: signOffPdfBuffer?.constructor?.name
+  });
+
+  // Convert Uint8Array to Buffer if needed (puppeteer sometimes returns Uint8Array)
+  if (signOffPdfBuffer instanceof Uint8Array && !Buffer.isBuffer(signOffPdfBuffer)) {
+    signOffPdfBuffer = Buffer.from(signOffPdfBuffer);
+  }
+
+  // Validate PDF buffer
+  if (!Buffer.isBuffer(signOffPdfBuffer) || signOffPdfBuffer.length === 0) {
+    throw new AppError('Failed to generate sign-off PDF - invalid buffer returned', 500, 'PDF_GENERATION_ERROR');
+  }
+
+  // Create ZIP archive
+  const archive = archiver('zip', {
+    zlib: { level: 9 } // Maximum compression
+  });
+
+  // Handle archive errors
+  archive.on('error', (err) => {
+    console.error('Archive error:', err);
+    throw err;
+  });
+
+  // Set response headers for ZIP download
+  const zipFileName = `${policy.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'policy'}_pack_${Date.now()}.zip`;
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
+
+  // Pipe archive to response
+  archive.pipe(res);
+
+  // Add sign-off sheet PDF to ZIP
+  const signOffFileName = `${policy.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'policy'}_signoff_sheet.pdf`;
+  archive.append(signOffPdfBuffer, { name: signOffFileName });
+
+  // Add policy document to ZIP if it exists
+  if (policy.file_path) {
+    try {
+      // Get policy document from S3
+      const policyDocResult = await getFileStream(policy.file_path);
+      const policyDocFileName = policy.file_name || `${policy.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'policy'}_document.pdf`;
+      
+      // Convert stream to buffer for archiver
+      const chunks = [];
+      for await (const chunk of policyDocResult.Body) {
+        chunks.push(chunk);
+      }
+      const policyBuffer = Buffer.concat(chunks);
+      
+      archive.append(policyBuffer, { name: policyDocFileName });
+    } catch (error) {
+      console.error('Error fetching policy document:', error);
+      // Continue without the policy document if it fails - still send sign-off sheet
+    }
+  }
+
+  // Finalize the archive
+  await archive.finalize();
 });
 
 

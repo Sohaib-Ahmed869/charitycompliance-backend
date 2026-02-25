@@ -34,10 +34,13 @@ const getCategoryDisplayName = (category) => {
 
 export const listApprovalRequests = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
+  const userId = req.user.userId;
   const { status } = req.query;
 
   const tenantDb = await getTenantConnection(orgId);
   const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const { UserRepository } = await import('../repositories/userRepository.js');
+  const { UserPositionRepository } = await import('../repositories/userPositionRepository.js');
   const orgRepo = new OrganizationRepository(tenantDb);
   const org = await orgRepo.findOne();
   if (!org) {
@@ -47,12 +50,44 @@ export const listApprovalRequests = asyncHandler(async (req, res) => {
     });
   }
 
+  // Check if user is admin (org owner)
+  const userRepo = new UserRepository(tenantDb);
+  const user = await userRepo.findById(userId);
+  const isAdmin = user?.is_org_owner;
+
   const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
   const filters = {};
   if (status && ['pending', 'approved', 'rejected', 'cancelled', 'paused_for_coi'].includes(status)) {
     filters.status = status;
   }
   let requests = await approvalRequestRepo.findByOrgId(org._id, filters);
+
+  // If user is NOT admin, filter to show only workflows user is associated with
+  if (!isAdmin) {
+    const userPositionRepo = new UserPositionRepository(tenantDb);
+    const userPositions = await userPositionRepo.findByUserId(userId, true);
+    const userPositionIds = userPositions.map(up => String(up.position_id?._id || up.position_id));
+
+    requests = requests.filter(request => {
+      // ONLY include if user is an approver in any approval step
+      // User must be involved in the approval chain
+      
+      // Include if user is an approver by user_id
+      const isDirectApprover = request.approval_steps?.some(step => 
+        String(step.approver_user_id?._id || step.approver_user_id) === String(userId)
+      );
+      if (isDirectApprover) return true;
+
+      // Include if user's position is an approver in any approval step
+      const isPositionApprover = request.approval_steps?.some(step => {
+        const stepPositionId = String(step.approver_position_id?._id || step.approver_position_id);
+        return userPositionIds.includes(stepPositionId);
+      });
+      if (isPositionApprover) return true;
+
+      return false;
+    });
+  }
 
   // Enrich submitted_by with position (Admin for org owner)
   requests = requests.map((r) => {

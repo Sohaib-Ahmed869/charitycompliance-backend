@@ -65,6 +65,13 @@ router.get(
 );
 
 router.get(
+  '/:policyId/signoff/pack-download',
+  [param('policyId').isMongoId().withMessage('Invalid policy ID')],
+  validate,
+  policyController.downloadPolicyPackZip
+);
+
+router.get(
   '/:policyId',
   [param('policyId').isMongoId().withMessage('Invalid policy ID')],
   validate,

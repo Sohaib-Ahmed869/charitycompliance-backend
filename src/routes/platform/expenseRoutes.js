@@ -19,6 +19,10 @@ router.use(authAndResolveTenant);
 router.post(
   '/',
   [
+    body('expense_name')
+      .trim()
+      .notEmpty()
+      .withMessage('Expense name is required'),
     body('amount')
       .isFloat({ min: 0 })
       .withMessage('Amount must be a positive number'),
@@ -87,6 +91,11 @@ router.put(
     param('expenseId')
       .isMongoId()
       .withMessage('Invalid expense ID'),
+    body('expense_name')
+      .optional()
+      .trim()
+      .notEmpty()
+      .withMessage('Expense name cannot be empty'),
     body('amount')
       .optional()
       .isFloat({ min: 0 })

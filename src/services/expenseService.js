@@ -62,6 +62,7 @@ export class ExpenseService {
     const expense = await expenseRepo.create({
       org_id: this.orgId,
       submitted_by: submittedBy,
+      expense_name: expenseData.expense_name,
       amount: expenseData.amount,
       category: expenseData.category,
       description: expenseData.description,

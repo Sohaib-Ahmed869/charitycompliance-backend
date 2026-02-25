@@ -13,6 +13,7 @@ import { UserPositionRepository } from '../repositories/userPositionRepository.j
 import { ExpenseRepository } from '../repositories/expenseRepository.js';
 import { RiskRepository } from '../repositories/riskRepository.js';
 import { PolicyRepository } from '../repositories/policyRepository.js';
+import { ProjectRegisterRepository } from '../repositories/projectRegisterRepository.js';
 import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
@@ -767,6 +768,31 @@ export class ApprovalWorkflowService {
           });
           // Don't fail the approval process if project creation fails
         }
+      } else if (request.entity_type === 'project') {
+        try {
+          const projectRepo = new ProjectRegisterRepository(tenantDb);
+          const updatedProject = await projectRepo.update(request.entity_id, { status: 'active' });
+          logInfo('Project status updated to active from approval', {
+            approvalRequestId,
+            entityId: request.entity_id,
+            projectName: updatedProject?.project_name,
+            success: !!updatedProject
+          });
+          if (!updatedProject) {
+            logError('Project update returned null/undefined', {
+              approvalRequestId,
+              entityId: request.entity_id
+            });
+          }
+        } catch (projectUpdateErr) {
+          logError('Error updating project status after approval', {
+            approvalRequestId,
+            entityId: request.entity_id,
+            error: projectUpdateErr.message,
+            stack: projectUpdateErr.stack
+          });
+          // Don't fail the approval process if project update fails
+        }
       } else if (request.entity_type === 'partner') {
         const Partner = tenantDb.model('PartnerVetting');
         await Partner.findByIdAndUpdate(request.entity_id, { status: 'approved' });
@@ -785,6 +811,7 @@ export class ApprovalWorkflowService {
         grant: 'Grant',
         funding_agreement: 'Funding Agreement',
         partner_vetting: 'Partner Vetting',
+        project: 'Project',
         policy: 'Policy',
         policy_approval: 'Policy Approval',
         document_approval: 'Document Approval',

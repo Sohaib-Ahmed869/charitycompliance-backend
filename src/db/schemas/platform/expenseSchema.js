@@ -18,6 +18,11 @@ const expenseSchema = new mongoose.Schema({
     required: true,
     index: true
   },
+  expense_name: {
+    type: String,
+    required: true,
+    trim: true
+  },
   amount: {
     type: Number,
     required: true,
