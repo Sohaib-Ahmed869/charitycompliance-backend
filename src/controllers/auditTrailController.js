@@ -11,6 +11,10 @@ import { ApprovalRequestRepository } from '../repositories/approvalRequestReposi
 import { CoiRequestRepository } from '../repositories/coiRequestRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import { AppError } from '../middleware/errorHandler.js';
+import policySchema from '../db/schemas/platform/policySchema.js';
+import expenseSchema from '../db/schemas/platform/expenseSchema.js';
+import complaintSchema from '../db/schemas/platform/complaintSchema.js';
+import riskSchema from '../db/schemas/platform/riskSchema.js';
 
 const toName = (user) => {
   if (!user) return '—';
@@ -54,6 +58,12 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
     throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
   }
 
+  // Ensure models for entity lookups
+  const Policy = tenantDb.models.Policy || tenantDb.model('Policy', policySchema);
+  const Expense = tenantDb.models.Expense || tenantDb.model('Expense', expenseSchema);
+  const Complaint = tenantDb.models.Complaint || tenantDb.model('Complaint', complaintSchema);
+  const Risk = tenantDb.models.Risk || tenantDb.model('Risk', riskSchema);
+
   const approvalRepo = new ApprovalRequestRepository(tenantDb);
   // Use model directly to populate rejection reviews
   const ApprovalRequest = tenantDb.models.ApprovalRequest;
@@ -81,10 +91,54 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
 
   const events = [];
 
+  const policyIds = approvals
+    .filter((reqDoc) => reqDoc.entity_type === 'policy' && reqDoc.entity_id)
+    .map((reqDoc) => reqDoc.entity_id);
+  const expenseIds = approvals
+    .filter((reqDoc) => reqDoc.entity_type === 'expense' && reqDoc.entity_id)
+    .map((reqDoc) => reqDoc.entity_id);
+  const riskIds = approvals
+    .filter((reqDoc) => reqDoc.entity_type === 'risk' && reqDoc.entity_id)
+    .map((reqDoc) => reqDoc.entity_id);
+
+  const [policies, expenses, risks] = await Promise.all([
+    policyIds.length
+      ? Policy.find({ _id: { $in: policyIds } })
+          .select('title category version status')
+          .lean()
+      : Promise.resolve([]),
+    expenseIds.length
+      ? Expense.find({ _id: { $in: expenseIds } })
+          .select('amount category vendor_name description status')
+          .lean()
+      : Promise.resolve([]),
+    riskIds.length
+      ? Risk.find({ _id: { $in: riskIds } })
+          .select('title category status')
+          .lean()
+      : Promise.resolve([])
+  ]);
+
+  const policyMap = new Map(policies.map((item) => [item._id?.toString(), item]));
+  const expenseMap = new Map(expenses.map((item) => [item._id?.toString(), item]));
+  const riskMap = new Map(risks.map((item) => [item._id?.toString(), item]));
+
   approvals.forEach((reqDoc) => {
     const requestId = reqDoc._id?.toString();
     const requestType = reqDoc.request_type;
     const module = reqDoc.entity_type || reqDoc.request_type;
+    const entityId = reqDoc.entity_id?.toString();
+    const policy = entityId ? policyMap.get(entityId) : null;
+    const expense = entityId ? expenseMap.get(entityId) : null;
+    const risk = entityId ? riskMap.get(entityId) : null;
+
+    const submittedAction = module === 'policy'
+      ? 'Policy update submitted'
+      : module === 'expense'
+      ? 'Expense submitted for approval'
+      : module === 'risk'
+      ? 'Risk submitted for approval'
+      : 'Submitted approval request';
 
     // Submitted event
     events.push(normalizeEvent({
@@ -95,13 +149,19 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
         name: toName(reqDoc.submitted_by),
         role: toRole(reqDoc.submitted_by)
       },
-      action: 'Submitted approval request',
+      action: submittedAction,
       module,
       request_type: requestType,
       request_id: requestId,
       details: {
         status: reqDoc.status,
-        approval_type: reqDoc.approval_type
+        approval_type: reqDoc.approval_type,
+        entity_id: entityId || null,
+        entity_title: policy?.title || expense?.description || risk?.title || null,
+        entity_category: policy?.category || expense?.category || risk?.category || null,
+        entity_version: policy?.version || null,
+        amount: expense?.amount ?? reqDoc.amount ?? null,
+        vendor: expense?.vendor_name || null
       },
       source: 'approval'
     }));
@@ -293,6 +353,111 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
         }));
       }
     });
+  });
+
+  // Complaint resolution flow events
+  const complaints = await Complaint.find({
+    org_id: org._id,
+    $or: [
+      { 'resolution_details.root_cause': { $exists: true, $ne: '' } },
+      { 'resolution_details.risk_linked_at': { $exists: true } },
+      { 'resolution_details.training_linked_at': { $exists: true } },
+      { status: 'resolved' }
+    ]
+  })
+    .populate('assigned_to', 'first_name last_name email is_org_owner role position')
+    .lean();
+
+  const complaintRiskIds = complaints
+    .map((item) => item.linked_risk_id?.toString())
+    .filter(Boolean);
+  const complaintRiskMap = complaintRiskIds.length
+    ? new Map(
+        (await Risk.find({ _id: { $in: complaintRiskIds } })
+          .select('title')
+          .lean()
+        ).map((item) => [item._id?.toString(), item])
+      )
+    : new Map();
+
+  complaints.forEach((complaint) => {
+    const complaintId = complaint._id?.toString();
+    const actorUser = complaint.assigned_to;
+    const actor = {
+      id: actorUser?._id?.toString(),
+      name: toName(actorUser),
+      role: toRole(actorUser)
+    };
+    const resolutionDetails = complaint.resolution_details || {};
+
+    if (resolutionDetails.root_cause) {
+      events.push(normalizeEvent({
+        id: `complaint-resolution-${complaintId}`,
+        timestamp: resolutionDetails.completed_at || complaint.updated_at,
+        actor,
+        action: 'Resolution details saved',
+        module: 'complaint',
+        request_type: 'complaint',
+        request_id: complaintId,
+        details: {
+          complaint_title: complaint.complaint_title
+        },
+        source: 'complaint'
+      }));
+    }
+
+    if (complaint.linked_risk_id) {
+      const riskTitle = complaintRiskMap.get(complaint.linked_risk_id?.toString())?.title || null;
+      events.push(normalizeEvent({
+        id: `complaint-risk-${complaintId}`,
+        timestamp: resolutionDetails.risk_linked_at || complaint.updated_at,
+        actor,
+        action: 'Risk linked to complaint',
+        module: 'complaint',
+        request_type: 'complaint',
+        request_id: complaintId,
+        details: {
+          complaint_title: complaint.complaint_title,
+          risk_title: riskTitle,
+          risk_id: complaint.linked_risk_id?.toString()
+        },
+        source: 'complaint'
+      }));
+    }
+
+    if (complaint.linked_training_id) {
+      events.push(normalizeEvent({
+        id: `complaint-training-${complaintId}`,
+        timestamp: resolutionDetails.training_linked_at || complaint.updated_at,
+        actor,
+        action: 'Training linked to complaint',
+        module: 'complaint',
+        request_type: 'complaint',
+        request_id: complaintId,
+        details: {
+          complaint_title: complaint.complaint_title,
+          training_title: complaint.training_attachment?.training_title || null,
+          training_id: complaint.linked_training_id?.toString()
+        },
+        source: 'complaint'
+      }));
+    }
+
+    if (complaint.status === 'resolved') {
+      events.push(normalizeEvent({
+        id: `complaint-resolved-${complaintId}`,
+        timestamp: resolutionDetails.resolved_at || complaint.updated_at,
+        actor,
+        action: 'Complaint resolved',
+        module: 'complaint',
+        request_type: 'complaint',
+        request_id: complaintId,
+        details: {
+          complaint_title: complaint.complaint_title
+        },
+        source: 'complaint'
+      }));
+    }
   });
 
   const sorted = events

@@ -96,6 +96,7 @@ import coiRoutes from './routes/platform/coiRoutes.js';
 import auditTrailRoutes from './routes/platform/auditTrailRoutes.js';
 import approvalThresholdRoutes from './routes/platform/approvalThresholdRoutes.js';
 import userRoutes from './routes/platform/userRoutes.js';
+import complaintRoutes from './routes/platform/complaintRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -120,6 +121,7 @@ app.use('/api/v1/platform/project-register', projectRegisterRoutes);
 app.use('/api/v1/platform/funding-agreements', fundingAgreementRoutes);
 app.use('/api/v1/platform/coi', coiRoutes);
 app.use('/api/v1/platform/audit-trail', auditTrailRoutes);
+app.use('/api/v1/platform/complaints', complaintRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

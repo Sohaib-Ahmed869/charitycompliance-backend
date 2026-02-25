@@ -6,9 +6,27 @@
 
 import mongoose from 'mongoose';
 import expenseSchema from '../db/schemas/platform/expenseSchema.js';
+import projectRegisterSchema from '../db/schemas/platform/projectRegisterSchema.js';
+import fundingAgreementSchema from '../db/schemas/platform/fundingAgreementSchema.js';
+import approvalMatrixSchema from '../db/schemas/platform/approvalMatrixSchema.js';
+import approvalRequestSchema from '../db/schemas/platform/approvalRequestSchema.js';
+import { UserRepository } from './userRepository.js';
 
 export class ExpenseRepository {
   constructor(tenantDb) {
+    // Ensure related models are registered on this tenant connection so populate() works
+    tenantDb.models.ProjectRegister ||
+      tenantDb.model('ProjectRegister', projectRegisterSchema);
+    tenantDb.models.FundingAgreement ||
+      tenantDb.model('FundingAgreement', fundingAgreementSchema);
+    tenantDb.models.ApprovalMatrix ||
+      tenantDb.model('ApprovalMatrix', approvalMatrixSchema);
+    tenantDb.models.ApprovalRequest ||
+      tenantDb.model('ApprovalRequest', approvalRequestSchema);
+    
+    // Register User model for populate() operations
+    new UserRepository(tenantDb);
+
     this.Expense = tenantDb.models.Expense || 
       tenantDb.model('Expense', expenseSchema);
   }
@@ -38,6 +56,8 @@ export class ExpenseRepository {
       .populate('submitted_by', 'first_name last_name email')
       .populate('approval_matrix_id', 'name')
       .populate('approval_request_id')
+      .populate('project_id', 'project_name agreement_id')
+      .populate('funding_agreement_id', 'agreement_title total_amount partner_name')
       .sort({ created_at: -1 });
   }
 
@@ -46,6 +66,8 @@ export class ExpenseRepository {
       .populate('submitted_by', 'first_name last_name email')
       .populate('approval_matrix_id', 'name')
       .populate('approval_request_id')
+      .populate('project_id', 'project_name agreement_id')
+      .populate('funding_agreement_id', 'agreement_title total_amount partner_name')
       .populate('rejected_by', 'first_name last_name email');
   }
 
@@ -89,5 +111,25 @@ export class ExpenseRepository {
       .populate('submitted_by', 'first_name last_name email')
       .populate('approval_matrix_id', 'name')
       .populate('approval_request_id');
+  }
+
+  async getProjectUtilization(projectId) {
+    // Calculate total amount of approved and paid expenses for a project
+    const result = await this.Expense.aggregate([
+      {
+        $match: {
+          project_id: mongoose.Types.ObjectId.isValid(projectId) ? new mongoose.Types.ObjectId(projectId) : projectId,
+          status: { $in: ['approved', 'paid'] }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: '$amount' }
+        }
+      }
+    ]);
+
+    return result.length > 0 ? result[0].total : 0;
   }
 }

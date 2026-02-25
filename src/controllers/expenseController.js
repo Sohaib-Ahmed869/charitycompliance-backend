@@ -22,7 +22,7 @@ export const createExpense = asyncHandler(async (req, res) => {
   }
 
   const orgId = req.orgId;
-  const userId = req.user._id;
+  const userId = req.user.userId;
   const expenseData = req.body;
 
   const expenseService = new ExpenseService(orgId);
@@ -36,7 +36,7 @@ export const createExpense = asyncHandler(async (req, res) => {
 
 export const submitExpense = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
-  const userId = req.user._id;
+  const userId = req.user.userId;
   const { expenseId } = req.params;
 
   const expenseService = new ExpenseService(orgId);
@@ -93,7 +93,7 @@ export const updateExpense = asyncHandler(async (req, res) => {
   }
 
   const orgId = req.orgId;
-  const userId = req.user._id;
+  const userId = req.user.userId;
   const { expenseId } = req.params;
   const updateData = req.body;
 
@@ -108,7 +108,7 @@ export const updateExpense = asyncHandler(async (req, res) => {
 
 export const deleteExpense = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
-  const userId = req.user._id;
+  const userId = req.user.userId;
   const { expenseId } = req.params;
 
   const expenseService = new ExpenseService(orgId);
@@ -122,7 +122,7 @@ export const deleteExpense = asyncHandler(async (req, res) => {
 
 export const cancelExpense = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
-  const userId = req.user._id;
+  const userId = req.user.userId;
   const { expenseId } = req.params;
 
   const expenseService = new ExpenseService(orgId);

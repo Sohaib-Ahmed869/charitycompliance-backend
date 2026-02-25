@@ -50,12 +50,12 @@ const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => {
 
     // Known sidebar modules - used for defaults when module_permissions is empty
     const MODULE_IDS = [
-      'dashboard', 'approval_workflow', 'charity_admin', 'policies', 'human_resources',
+      'dashboard', 'approval_workflow', 'audit_trail', 'complaints', 'charity_admin', 'policies', 'human_resources',
       'financial_mgmt', 'risk_mgmt', 'programs', 'grants_donors', 'reporting', 'systems_legal'
     ];
 
-    // Fixed modules: dashboard (view only), approval_workflow & human_resources (view+edit)
-    const FIXED_VIEW_ONLY = ['dashboard'];
+    // Fixed modules: dashboard & audit_trail (view only), approval_workflow & human_resources (view+edit)
+    const FIXED_VIEW_ONLY = ['dashboard', 'audit_trail'];
     const FIXED_VIEW_EDIT = ['approval_workflow', 'human_resources'];
 
     const permsMap = {};

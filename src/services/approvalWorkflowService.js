@@ -16,6 +16,7 @@ import { PolicyRepository } from '../repositories/policyRepository.js';
 import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
+import { ProjectRegisterService } from './projectRegisterService.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
 
@@ -728,8 +729,44 @@ export class ApprovalWorkflowService {
         });
       } else if (request.entity_type === 'funding_agreement') {
         const FundingAgreement = tenantDb.model('FundingAgreement');
-        await FundingAgreement.findByIdAndUpdate(request.entity_id, { status: 'approved' });
-        logInfo('Funding agreement status updated from approval', { approvalRequestId, entityId: request.entity_id });
+        const fundingAgreement = await FundingAgreement.findByIdAndUpdate(
+          request.entity_id, 
+          { status: 'approved' },
+          { new: true }
+        );
+        logInfo('Funding agreement status updated from approval', { 
+          approvalRequestId, 
+          entityId: request.entity_id,
+          agreementTitle: fundingAgreement?.agreement_title
+        });
+
+        // Auto-create a project for this approved funding agreement
+        try {
+          const projectService = new ProjectRegisterService(this.orgId);
+          const projectData = {
+            agreement_id: fundingAgreement._id,
+            agreement_title: fundingAgreement.agreement_title,
+            project_name: fundingAgreement.agreement_title, // Use agreement title as project name
+            description: fundingAgreement.description || `Project for ${fundingAgreement.agreement_title}`,
+            planned_start_date: fundingAgreement.start_date,
+            planned_end_date: fundingAgreement.end_date,
+            status: 'active', // Auto-approve since created from approved agreement
+            created_by: userId
+          };
+          
+          const newProject = await projectService.createProject(projectData);
+          logInfo('Auto-created project from approved funding agreement', {
+            fundingAgreementId: fundingAgreement._id,
+            projectId: newProject._id,
+            projectName: newProject.project_name
+          });
+        } catch (err) {
+          logError('Failed to auto-create project for approved funding agreement', {
+            fundingAgreementId: fundingAgreement._id,
+            error: err.message
+          });
+          // Don't fail the approval process if project creation fails
+        }
       } else if (request.entity_type === 'partner') {
         const Partner = tenantDb.model('PartnerVetting');
         await Partner.findByIdAndUpdate(request.entity_id, { status: 'approved' });

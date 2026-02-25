@@ -27,6 +27,38 @@ export class ExpenseService {
     const tenantDb = await this.getTenantDb();
     const expenseRepo = new ExpenseRepository(tenantDb);
 
+    // Validate against project funding if project is specified
+    if (expenseData.project_id) {
+      const ProjectRegister = tenantDb.model('ProjectRegister');
+      const FundingAgreement = tenantDb.model('FundingAgreement');
+
+      // Fetch project
+      const project = await ProjectRegister.findById(expenseData.project_id);
+      if (!project) {
+        throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+      }
+
+      // Check if project has a funding agreement
+      if (project.agreement_id) {
+        // Fetch funding agreement
+        const agreement = await FundingAgreement.findById(project.agreement_id);
+        if (agreement && agreement.total_amount) {
+          // Calculate already used funds for this project (approved and paid expenses only)
+          const usedFunds = await expenseRepo.getProjectUtilization(expenseData.project_id);
+          const availableBalance = agreement.total_amount - usedFunds;
+
+          // Check if new expense exceeds available balance
+          if (expenseData.amount > availableBalance) {
+            throw new AppError(
+              `Expense amount ($${expenseData.amount}) exceeds available balance ($${availableBalance}). Total budget: $${agreement.total_amount}, Already used: $${usedFunds}`,
+              400,
+              'INSUFFICIENT_FUNDING'
+            );
+          }
+        }
+      }
+    }
+
     const expense = await expenseRepo.create({
       org_id: this.orgId,
       submitted_by: submittedBy,
@@ -38,6 +70,8 @@ export class ExpenseService {
       invoice_date: expenseData.invoice_date,
       vendor_name: expenseData.vendor_name,
       vendor_email: expenseData.vendor_email,
+      project_id: expenseData.project_id,
+      funding_agreement_id: expenseData.funding_agreement_id,
       status: expenseData.status || 'draft',
       metadata: expenseData.metadata || {}
     });

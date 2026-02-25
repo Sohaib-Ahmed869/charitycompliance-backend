@@ -8,8 +8,7 @@ import mongoose from 'mongoose';
 
 const expenseSchema = new mongoose.Schema({
   org_id: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Organization',
+    type: String,
     required: true,
     index: true
   },
@@ -64,6 +63,16 @@ const expenseSchema = new mongoose.Schema({
   approval_request_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ApprovalRequest'
+  },
+  project_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'ProjectRegister',
+    index: true
+  },
+  funding_agreement_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'FundingAgreement',
+    index: true
   },
   rejection_reason: {
     type: String

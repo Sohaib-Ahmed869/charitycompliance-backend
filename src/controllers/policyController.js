@@ -11,6 +11,9 @@ import { AppError } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
 import { uploadToS3, deleteFromS3, getFileUrl, getFileStream } from '../services/s3Service.js';
 import { ApprovalWorkflowService } from '../services/approvalWorkflowService.js';
+import { generatePolicySignOffPDF } from '../services/policySignOffPdfService.js';
+import { decrypt, isEncrypted } from '../utils/encryption.js';
+import { getMasterKeyHex } from '../config/encryption.js';
 
 export const getPolicies = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -271,7 +274,9 @@ export const createPolicy = asyncHandler(async (req, res) => {
     policy_id: policy._id,
     version,
     file_name: req.file.originalname,
+    action: 'Initial Upload',
     notes: 'Initial upload',
+    description: 'Initial policy document upload',
     updated_by: userId
   });
 
@@ -407,7 +412,9 @@ export const updatePolicyDocument = asyncHandler(async (req, res) => {
     policy_id: policy._id,
     version: newVersion,
     file_name: req.file.originalname,
+    action: 'Document Updated',
     notes: notes || undefined,
+    description: notes || 'Policy document updated',
     updated_by: userId,
     updated_by_name: updatedByName,
     updated_by_title: updatedByTitle
@@ -865,4 +872,133 @@ export const getPolicySignOffData = asyncHandler(async (req, res) => {
     }
   });
 });
+
+/**
+ * Download Policy Sign-Off Sheet PDF (generated on backend with proper decryption)
+ * GET /platform/policies/:policyId/signoff/download
+ */
+export const downloadPolicySignOffPDF = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { policyId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+
+  const policyRepo = new PolicyRepository(tenantDb);
+  const acknowledgementRepo = new PolicyAcknowledgementRepository(tenantDb);
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const { UserRepository } = await import('../repositories/userRepository.js');
+  const userRepo = new UserRepository(tenantDb);
+
+  // Get policy
+  const policy = await policyRepo.findById(policyId);
+  if (!policy) {
+    throw new AppError('Policy not found', 404, 'NOT_FOUND');
+  }
+
+  console.log('Policy review_history:', policy.review_history?.length || 0);
+  console.log('Policy dates:', {
+    createdAt: policy.createdAt,
+    updatedAt: policy.updatedAt,
+    created_at: policy.created_at,
+    updated_at: policy.updated_at
+  });
+
+  // Get organization for logo
+  const org = await orgRepo.findOne();
+  const logoUrl = org?.logo_url || process.env.LOGO || '';
+
+  // Fetch all related data
+  let acknowledgements = await acknowledgementRepo.findByPolicyId(policyId);
+  let documentLogs = await policyRepo.getDocumentLogs(policyId);
+  let approvals = [];
+  
+  try {
+    approvals = await policyRepo.getApprovals(policyId);
+    console.log('Approvals fetched for PDF:', JSON.stringify(approvals, null, 2));
+  } catch (error) {
+    console.error('Error fetching approvals:', error);
+  }
+
+  console.log('PDF Data Summary:', {
+    policyId,
+    acknowledgements: acknowledgements?.length || 0,
+    documentLogs: documentLogs?.length || 0,
+    approvals: approvals?.length || 0
+  });
+
+  // Debug: Check signature data
+  if (acknowledgements && acknowledgements.length > 0) {
+    console.log('First acknowledgement signature check:', {
+      hasSignature: !!acknowledgements[0].signature_data,
+      signaturePreview: acknowledgements[0].signature_data?.substring(0, 50) || 'none'
+    });
+  }
+
+  // Debug: Check document logs
+  if (documentLogs && documentLogs.length > 0) {
+    console.log('First document log check:', {
+      action: documentLogs[0].action || 'EMPTY',
+      hasESignature: !!documentLogs[0].e_signature,
+      eSignaturePreview: documentLogs[0].e_signature?.substring(0, 50) || 'none',
+      createdAt: documentLogs[0].createdAt,
+      created_at: documentLogs[0].created_at
+    });
+  }
+
+  // Decrypt user names in document logs
+  const masterKeyHex = getMasterKeyHex();
+  for (const log of documentLogs) {
+    if (log.updated_by && mongoose.Types.ObjectId.isValid(log.updated_by)) {
+      try {
+        const user = await userRepo.findById(log.updated_by);
+        if (user) {
+          // Decrypt user fields
+          const firstName = isEncrypted(user.first_name) ? decrypt(user.first_name, masterKeyHex) : user.first_name;
+          const lastName = isEncrypted(user.last_name) ? decrypt(user.last_name, masterKeyHex) : user.last_name;
+          log.updated_by_name = `${firstName || ''} ${lastName || ''}`.trim() || 'Unknown User';
+        } else {
+          log.updated_by_name = 'Unknown User';
+        }
+      } catch (error) {
+        console.error('Error decrypting user:', error);
+        log.updated_by_name = 'Unknown User';
+      }
+    }
+  }
+
+  // Decrypt approver names in approval steps
+  for (const approval of approvals) {
+    if (approval.reviewer_id && mongoose.Types.ObjectId.isValid(approval.reviewer_id)) {
+      try {
+        const user = await userRepo.findById(approval.reviewer_id);
+        if (user) {
+          const firstName = isEncrypted(user.first_name) ? decrypt(user.first_name, masterKeyHex) : user.first_name;
+          const lastName = isEncrypted(user.last_name) ? decrypt(user.last_name, masterKeyHex) : user.last_name;
+          approval.approver_name = `${firstName || ''} ${lastName || ''}`.trim() || approval.approver_name || 'Unknown Approver';
+        }
+      } catch (error) {
+        console.error('Error decrypting approver:', error);
+      }
+    }
+  }
+
+  // Generate PDF
+  const pdfBuffer = await generatePolicySignOffPDF(
+    policy,
+    acknowledgements || [],
+    documentLogs || [],
+    approvals || [],
+    logoUrl
+  );
+
+  // Set headers and send PDF
+  const fileName = `${policy.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'policy'}_signoff_${Date.now()}.pdf`;
+  
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.setHeader('Content-Length', pdfBuffer.length);
+  
+  res.send(pdfBuffer);
+});
+
 
