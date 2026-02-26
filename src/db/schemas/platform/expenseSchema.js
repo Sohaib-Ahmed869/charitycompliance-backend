@@ -20,8 +20,8 @@ const expenseSchema = new mongoose.Schema({
   },
   expense_name: {
     type: String,
-    required: true,
-    trim: true
+    trim: true,
+    default: ''
   },
   amount: {
     type: Number,
