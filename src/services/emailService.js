@@ -163,6 +163,21 @@ class EmailService {
   constructor() {
     this.transporter = null;
     this.initialized = false;
+    this.initFailed = false;
+    this.lastInitAttempt = null;
+  }
+
+  /**
+   * Check if SMTP is configured
+   */
+  isConfigured() {
+    const hasHost = !!process.env.SMTP_HOST;
+    const hasUser = !!process.env.EMAIL_USER;
+    const hasPass = !!process.env.EMAIL_PASS;
+    if (!hasHost) logError('SMTP config missing: SMTP_HOST');
+    if (!hasUser) logError('SMTP config missing: EMAIL_USER');
+    if (!hasPass) logError('SMTP config missing: EMAIL_PASS');
+    return hasHost && hasUser && hasPass;
   }
 
   /**
@@ -171,28 +186,75 @@ class EmailService {
   async initialize() {
     if (this.initialized) return;
 
+    // Check if SMTP is configured
+    if (!this.isConfigured()) {
+      logError('Email service not configured - check SMTP_HOST, EMAIL_USER, EMAIL_PASS');
+      this.initFailed = true;
+      return;
+    }
+
+    // Avoid re-attempting init too frequently after failure (wait 5 minutes)
+    if (this.initFailed && this.lastInitAttempt) {
+      const timeSinceLastAttempt = Date.now() - this.lastInitAttempt;
+      if (timeSinceLastAttempt < 5 * 60 * 1000) {
+        logInfo('SMTP init skipped - cooldown after previous failure', {
+          secondsRemaining: Math.ceil((5 * 60 * 1000 - timeSinceLastAttempt) / 1000)
+        });
+        return; // Skip re-init, still in cooldown
+      }
+    }
+
+    this.lastInitAttempt = Date.now();
+
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpPort = parseInt(process.env.SMTP_PORT) || 587;
+    const connTimeout = parseInt(process.env.SMTP_VERIFY_TIMEOUT_MS) || 20000;
+
+    logInfo('SMTP connection attempt', {
+      host: smtpHost,
+      port: smtpPort,
+      user: process.env.EMAIL_USER,
+      secure: smtpPort === 465,
+      timeoutMs: connTimeout
+    });
+
     try {
+      const socketTimeout = parseInt(process.env.SMTP_SOCKET_TIMEOUT_MS) || 60000;
       this.transporter = nodemailer.createTransport({
-        host: process.env.SMTP_HOST,
-        port: parseInt(process.env.SMTP_PORT) || 587,
-        secure: process.env.SMTP_PORT === '465', // true for 465, false for other ports
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpPort === 465,
         auth: {
           user: process.env.EMAIL_USER,
           pass: process.env.EMAIL_PASS
         },
-        connectionTimeout: 10000, // 10s - don't hang on bad SMTP config
-        greetingTimeout: 10000
+        connectionTimeout: connTimeout,
+        greetingTimeout: connTimeout,
+        socketTimeout
       });
 
-      // Verify connection (with timeout - avoid hanging on unreachable SMTP)
-      await Promise.race([
-        this.transporter.verify(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP verify timeout')), 10000))
-      ]);
+      // Verify connection (with timeout - avoid hanging on unreachable SMTP).
+      // Set SMTP_SKIP_VERIFY=true to skip verify and try sending anyway (helps when Gmail verify is slow).
+      const skipVerify = process.env.SMTP_SKIP_VERIFY === 'true' || process.env.SMTP_SKIP_VERIFY === '1';
+      if (!skipVerify) {
+        await Promise.race([
+          this.transporter.verify(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP verify timeout')), connTimeout))
+        ]);
+      } else {
+        logInfo('SMTP verify skipped (SMTP_SKIP_VERIFY=true)', { host: smtpHost, port: smtpPort });
+      }
       this.initialized = true;
-      logInfo('Email service initialized successfully');
+      this.initFailed = false;
+      logInfo('SMTP connection verified successfully', { host: smtpHost, port: smtpPort });
     } catch (error) {
-      logError('Failed to initialize email service', error);
+      logError('SMTP connection failed', error, {
+        host: smtpHost,
+        port: smtpPort,
+        timeoutMs: connTimeout,
+        errorType: error?.message === 'SMTP verify timeout' ? 'timeout' : 'connection_error'
+      });
+      this.initFailed = true;
       throw error;
     }
   }
@@ -206,8 +268,37 @@ class EmailService {
    * @param {string} options.text - Plain text content (optional)
    */
   async sendEmail({ to, subject, html, text }) {
+    // Check if email service is configured
+    if (!this.isConfigured()) {
+      logInfo('Email skipped - SMTP not configured', { to, subject });
+      return { skipped: true, reason: 'SMTP not configured' };
+    }
+
     if (!this.initialized) {
-      await this.initialize();
+      try {
+        await this.initialize();
+      } catch (initError) {
+        logError('Email skipped - initialization failed', initError, { to, subject });
+        logInfo('SMTP config at failure', {
+          SMTP_HOST: process.env.SMTP_HOST,
+          SMTP_PORT: process.env.SMTP_PORT,
+          EMAIL_USER: process.env.EMAIL_USER,
+          EMAIL_PASS: process.env.EMAIL_PASS ? '***' : undefined
+        });
+        return { skipped: true, reason: 'SMTP initialization failed' };
+      }
+    }
+
+    // If still not initialized after attempt (config missing, cooldown, etc.)
+    if (!this.initialized) {
+      logError('Email skipped - service not available', new Error('SMTP not initialized'), { to, subject });
+      logInfo('SMTP config at unavailable', {
+        SMTP_HOST: process.env.SMTP_HOST,
+        SMTP_PORT: process.env.SMTP_PORT,
+        EMAIL_USER: process.env.EMAIL_USER,
+        EMAIL_PASS: process.env.EMAIL_PASS ? '***' : undefined
+      });
+      return { skipped: true, reason: 'Email service not available' };
     }
 
     try {
@@ -219,7 +310,7 @@ class EmailService {
         text: text || html.replace(/<[^>]*>/g, '') // Strip HTML for text version
       };
 
-      const sendTimeout = parseInt(process.env.SMTP_SEND_TIMEOUT_MS) || 30000;
+      const sendTimeout = parseInt(process.env.SMTP_SEND_TIMEOUT_MS) || 60000;
       const result = await Promise.race([
         this.transporter.sendMail(mailOptions),
         new Promise((_, reject) => setTimeout(() => reject(new Error(`SMTP send timeout (${sendTimeout / 1000}s)`)), sendTimeout))
@@ -347,6 +438,165 @@ class EmailService {
       buttonText: 'Go to Dashboard',
       buttonLink: dashboardLink,
       infoBoxLines: ["You can now access your dashboard and start managing compliance for your organisation."]
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
+   * Send meeting invitation email
+   * @param {Object} params
+   * @param {string} params.to - Recipient email
+   * @param {string} params.recipientName - Recipient's name
+   * @param {string} params.meetingTitle - Meeting title
+   * @param {Date} params.meetingDate - Meeting date/time
+   * @param {number} params.durationMinutes - Meeting duration
+   * @param {string} params.location - Meeting location
+   * @param {string} params.meetingLink - Meeting link (video call URL)
+   * @param {string[]} params.agenda - Meeting agenda items
+   * @param {string[]} params.attendeeNames - List of attendee names
+   * @param {string} params.organizerName - Name of meeting organizer
+   * @param {string} params.meetingId - Meeting ID for link
+   */
+  async sendMeetingInvitationEmail({ to, recipientName, meetingTitle, meetingDate, durationMinutes, location, meetingLink, agenda, attendeeNames, organizerName, meetingId, isExternal = false }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const viewMeetingLink = `${baseUrl}/meetings/${meetingId}`;
+
+    const formattedDate = new Date(meetingDate).toLocaleDateString('en-AU', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric'
+    });
+    const formattedTime = new Date(meetingDate).toLocaleTimeString('en-AU', {
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const subject = `Meeting Invitation: ${meetingTitle}`;
+
+    const attendeesHtml = attendeeNames && attendeeNames.length > 0
+      ? `<p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Attendees:</strong> ${attendeeNames.slice(0, 5).join(', ')}${attendeeNames.length > 5 ? ` +${attendeeNames.length - 5} more` : ''}</p>`
+      : '';
+
+    const agendaHtml = agenda && agenda.length > 0
+      ? `<div style="margin: 12px 0; text-align: left;"><p style="margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #333333;">Agenda:</p><ul style="margin: 0; padding-left: 20px;">${agenda.map(item => `<li style="font-size: 12px; color: #333333; margin: 4px 0;">${item}</li>`).join('')}</ul></div>`
+      : '';
+
+    const meetingLinkHtml = meetingLink
+      ? `<p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Meeting Link:</strong> <a href="${meetingLink}" style="color: #9A78EC; text-decoration: none;">${meetingLink}</a></p>`
+      : '';
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
+      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">You have been invited to a meeting by <strong>${organizerName}</strong>.</p>
+      <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
+        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #132E5E;">${meetingTitle}</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Date:</strong> ${formattedDate}</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Time:</strong> ${formattedTime} (${durationMinutes} minutes)</p>
+        ${location ? `<p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Location:</strong> ${location}</p>` : ''}
+        ${meetingLinkHtml}
+        ${attendeesHtml}
+        ${agendaHtml}
+      </div>
+    `;
+
+    const html = buildEmailTemplate({
+      heading: 'Meeting Invitation',
+      bodyHtml,
+      buttonText: 'View Meeting',
+      buttonLink: viewMeetingLink,
+      infoBoxLines: ["Please confirm your attendance.", "Add this meeting to your calendar."]
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
+   * Send meeting notes update email
+   * @param {Object} params
+   * @param {string} params.to - Recipient email
+   * @param {string} params.recipientName - Recipient's name
+   * @param {string} params.meetingTitle - Meeting title
+   * @param {string} params.noteContent - The note that was added
+   * @param {string} params.addedByName - Name of person who added the note
+   * @param {string} params.meetingId - Meeting ID for link
+   */
+  async sendMeetingNotesEmail({ to, recipientName, meetingTitle, noteContent, addedByName, meetingId }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const viewMeetingLink = `${baseUrl}/meetings/${meetingId}?tab=notes`;
+
+    const subject = `New Note Added: ${meetingTitle}`;
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
+      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;"><strong>${addedByName}</strong> has added a new note to the meeting <strong>${meetingTitle}</strong>.</p>
+      <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
+        <p style="margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: #132E5E;">Note:</p>
+        <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333;">${noteContent}</p>
+      </div>
+    `;
+
+    const html = buildEmailTemplate({
+      heading: 'Meeting Notes Updated',
+      bodyHtml,
+      buttonText: 'View Meeting Notes',
+      buttonLink: viewMeetingLink,
+      infoBoxLines: ["Stay updated with the latest meeting notes."]
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+  /**
+   * Send authority transfer notification emails to both from-user and to-user
+   */
+  async sendAuthorityTransferEmail({ to, recipientName, isFromUser, positionTitle, otherPersonName, transferCode, effectiveDate }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const bcpLink = `${baseUrl}/bcp`;
+
+    const formattedDate = effectiveDate
+      ? new Date(effectiveDate).toLocaleDateString('en-AU', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+      : 'Effective immediately';
+
+    const subject = isFromUser
+      ? `Authority Transfer – Your ${positionTitle} Responsibilities Have Been Transferred`
+      : `Authority Transfer – You Have Been Assigned the ${positionTitle} Role`;
+
+    const bodyHtml = isFromUser
+      ? `
+        <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
+        <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">This is to inform you that your responsibilities for the <strong>${positionTitle}</strong> position have been transferred to <strong>${otherPersonName}</strong>.</p>
+        <div style="background: #FEF3C7; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
+          <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #92400E;">Position Privileges Revoked</p>
+          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #78350F;"><strong>Position:</strong> ${positionTitle}</p>
+          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #78350F;"><strong>Transferred to:</strong> ${otherPersonName}</p>
+          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #78350F;"><strong>Effective:</strong> ${formattedDate}</p>
+          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #78350F;"><strong>Transfer Code:</strong> ${transferCode}</p>
+        </div>
+        <p style="margin: 16px 0 0 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Your access to workflows and approvals associated with this position has been revoked. Please contact your administrator if you have any questions.</p>
+      `
+      : `
+        <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
+        <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">You have been assigned the responsibilities of the <strong>${positionTitle}</strong> position, previously held by <strong>${otherPersonName}</strong>.</p>
+        <div style="background: #D1FAE5; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
+          <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #065F46;">New Role Assigned</p>
+          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #064E3B;"><strong>Position:</strong> ${positionTitle}</p>
+          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #064E3B;"><strong>Previously held by:</strong> ${otherPersonName}</p>
+          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #064E3B;"><strong>Effective:</strong> ${formattedDate}</p>
+          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #064E3B;"><strong>Transfer Code:</strong> ${transferCode}</p>
+        </div>
+        <p style="margin: 16px 0 0 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Any trainings and policy acknowledgements associated with this role have been assigned to you. Please complete them at your earliest convenience.</p>
+      `;
+
+    const html = buildEmailTemplate({
+      heading: isFromUser ? 'Authority Transferred' : 'New Role Assigned',
+      headingHighlight: isFromUser ? 'Authority' : 'New',
+      bodyHtml,
+      buttonText: 'View Business Continuity',
+      buttonLink: bcpLink,
+      infoBoxLines: isFromUser
+        ? ["Your position privileges have been transferred as part of the Business Continuity Plan.", "Contact your administrator if you believe this is an error."]
+        : ["You now have new responsibilities under the Business Continuity Plan.", "Please review your assigned trainings and policies."]
     });
 
     return this.sendEmail({ to, subject, html });

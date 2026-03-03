@@ -54,6 +54,7 @@ export class ExpenseRepository {
     
     return await this.Expense.find(query)
       .populate('submitted_by', 'first_name last_name email')
+      .populate('assigned_to', 'first_name last_name email')
       .populate('approval_matrix_id', 'name')
       .populate('approval_request_id')
       .populate('project_id', 'project_name agreement_id')
@@ -64,6 +65,7 @@ export class ExpenseRepository {
   async findById(id) {
     return await this.Expense.findById(id)
       .populate('submitted_by', 'first_name last_name email')
+      .populate('assigned_to', 'first_name last_name email')
       .populate('approval_matrix_id', 'name')
       .populate('approval_request_id')
       .populate('project_id', 'project_name agreement_id')

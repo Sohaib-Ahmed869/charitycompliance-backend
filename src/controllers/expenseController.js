@@ -133,3 +133,57 @@ export const cancelExpense = asyncHandler(async (req, res) => {
     data: expense
   });
 });
+
+export const assignExpense = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        details: errors.array()
+      }
+    });
+  }
+
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { expenseId } = req.params;
+  const { assigned_to } = req.body;
+
+  const expenseService = new ExpenseService(orgId);
+  const expense = await expenseService.assignExpense(expenseId, assigned_to, userId);
+
+  res.json({
+    success: true,
+    data: expense
+  });
+});
+
+export const submitPaymentProof = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        details: errors.array()
+      }
+    });
+  }
+
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { expenseId } = req.params;
+  const paymentData = req.body;
+
+  const expenseService = new ExpenseService(orgId);
+  const expense = await expenseService.submitPaymentProof(expenseId, paymentData, userId);
+
+  res.json({
+    success: true,
+    data: expense
+  });
+});

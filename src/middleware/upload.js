@@ -61,6 +61,12 @@ const upload = multer({
  */
 export const uploadSingle = upload.single('file');
 
+/**
+ * Middleware for asset documentation upload
+ * Attaches file to req.file
+ */
+export const uploadAssetSingle = upload.single('documentation');
+
 // Training resources: PDF, images, video
 const trainingFileFilter = (req, file, cb) => {
   const allowedMimeTypes = [

@@ -55,11 +55,12 @@ export class CoiWorkflowService {
     });
 
     const orgObjectId = await this._getOrgObjectId();
-    const boardMember = await boardMemberRepo.findByUserId(userId, orgObjectId);
-    if (boardMember?.position_id?._id) {
-      positionIds.add(String(boardMember.position_id._id));
-    } else if (boardMember?.position_id) {
-      positionIds.add(String(boardMember.position_id));
+    const allBms = await boardMemberRepo.findAllActiveByUserId(userId, orgObjectId);
+    if (allBms && allBms.length > 0) {
+      for (const bm of allBms) {
+        const bmPosId = bm.position_id?._id || bm.position_id;
+        if (bmPosId) positionIds.add(String(bmPosId));
+      }
     }
 
     return Array.from(positionIds);

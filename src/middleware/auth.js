@@ -13,6 +13,33 @@ dotenv.config();
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 
+const _transferCache = new Map();
+const TRANSFER_CACHE_TTL = 30_000; // 30s
+
+async function checkTransferredUser(userId, orgId) {
+  const cacheKey = `${userId}:${orgId}`;
+  const cached = _transferCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < TRANSFER_CACHE_TTL) return cached.blocked;
+
+  const { getTenantConnection } = await import('../db/connectionManager.js');
+  const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+
+  const tenantDb = await getTenantConnection(orgId);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) { _transferCache.set(cacheKey, { blocked: false, ts: Date.now() }); return false; }
+
+  const bmRepo = new BoardMemberRepository(tenantDb);
+  const records = await bmRepo.BoardMember.find({ user_id: userId, org_id: org._id }).lean();
+  const hasActive = records.some(r => r.is_active && r.status !== 'transferred');
+  const hasTransferred = records.some(r => r.status === 'transferred');
+  const blocked = records.length > 0 && !hasActive && hasTransferred;
+
+  _transferCache.set(cacheKey, { blocked, ts: Date.now() });
+  return blocked;
+}
+
 if (!JWT_SECRET) {
   throw new Error('JWT_SECRET environment variable is required');
 }
@@ -109,6 +136,24 @@ export const authenticate = async (req, res, next) => {
 
     // Attach token for potential refresh
     req.token = token;
+
+    // Check if user's position has been fully transferred (non-admin only)
+    if (!decoded.roles?.includes('admin') && decoded.orgId) {
+      try {
+        const isBlocked = await checkTransferredUser(decoded.userId, decoded.orgId);
+        if (isBlocked) {
+          return res.status(403).json({
+            success: false,
+            error: {
+              message: 'Your position has been transferred to another person as part of a Business Continuity transfer. Please contact your administrator.',
+              code: 'POSITION_TRANSFERRED'
+            }
+          });
+        }
+      } catch (_) {
+        // Don't block auth if the check fails
+      }
+    }
 
     next();
   } catch (error) {

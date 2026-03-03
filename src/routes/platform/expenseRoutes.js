@@ -151,4 +151,51 @@ router.delete(
   expenseController.deleteExpense
 );
 
+// Assign expense to a member for payment
+router.post(
+  '/:expenseId/assign',
+  [
+    param('expenseId')
+      .isMongoId()
+      .withMessage('Invalid expense ID'),
+    body('assigned_to')
+      .isMongoId()
+      .withMessage('Invalid user ID for assignment')
+  ],
+  validate,
+  expenseController.assignExpense
+);
+
+// Submit payment proof
+router.post(
+  '/:expenseId/payment-proof',
+  [
+    param('expenseId')
+      .isMongoId()
+      .withMessage('Invalid expense ID'),
+    body('payment_method')
+      .trim()
+      .notEmpty()
+      .withMessage('Payment method is required')
+      .isIn(['Bank Transfer', 'Cash', 'Check', 'Credit Card', 'Debit Card', 'Online Payment', 'Other'])
+      .withMessage('Invalid payment method'),
+    body('payment_proof')
+      .trim()
+      .notEmpty()
+      .withMessage('Payment proof file is required'),
+    body('payment_date')
+      .optional()
+      .isISO8601()
+      .withMessage('Invalid payment date format'),
+    body('payment_reference')
+      .optional()
+      .trim(),
+    body('payment_notes')
+      .optional()
+      .trim()
+  ],
+  validate,
+  expenseController.submitPaymentProof
+);
+
 export default router;

@@ -525,6 +525,84 @@ export class ApprovalWorkflowService {
   }
 
   /**
+   * Create approval request for a BCP authority transfer.
+   * Uses the approval matrix referenced by workflow_matrix_id on the transfer.
+   */
+  async createEmergencyTransferApprovalRequest(transferId, matrixId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const userPositionRepo = new UserPositionRepository(tenantDb);
+
+    const matrix = await approvalMatrixRepo.findById(matrixId);
+    if (!matrix) {
+      throw new AppError('Approval matrix not found', 404, 'MATRIX_NOT_FOUND');
+    }
+
+    const rule = (matrix.rules || []).find(r => r.is_active && this._normalizeActionType(r.action_type) === 'emergency');
+    if (!rule) {
+      throw new AppError('No active emergency rule found in the selected workflow', 400, 'NO_MATCHING_RULE');
+    }
+
+    const approvers = [];
+    for (const cfg of rule.requires_approval_from) {
+      let userIds = [];
+      if (cfg.user_id) {
+        userIds = [cfg.user_id];
+      } else if (cfg.position_id) {
+        userIds = await userPositionRepo.findUsersByPositionId(cfg.position_id);
+      }
+      if (userIds.length > 0) {
+        userIds.forEach(uid => approvers.push({
+          user_id: uid,
+          position_id: cfg.position_id || null,
+          department_id: cfg.department_id || null,
+          level: cfg.approval_level
+        }));
+      } else {
+        approvers.push({
+          user_id: null,
+          position_id: cfg.position_id || null,
+          department_id: cfg.department_id || null,
+          level: cfg.approval_level
+        });
+      }
+    }
+    approvers.sort((a, b) => a.level - b.level);
+
+    const approvalSteps = approvers.map(a => ({
+      level: a.level,
+      approver_user_id: a.user_id || undefined,
+      approver_position_id: a.position_id,
+      approver_department_id: a.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'emergency',
+      entity_id: transferId,
+      entity_type: 'authority_transfer',
+      amount: 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    logInfo('Emergency transfer approval request created', {
+      transferId,
+      approvalRequestId: approvalRequest._id,
+      approversCount: approvers.length
+    });
+
+    return approvalRequest;
+  }
+
+  /**
    * Process approval (approve or reject)
    */
   async processApproval(approvalRequestId, stepIndex, userId, decision, comments = null, ipAddress = null, userAgent = null, acknowledgement = null) {
@@ -797,6 +875,19 @@ export class ApprovalWorkflowService {
         const Partner = tenantDb.model('PartnerVetting');
         await Partner.findByIdAndUpdate(request.entity_id, { status: 'approved' });
         logInfo('Partner status updated from approval', { approvalRequestId, entityId: request.entity_id });
+      } else if (request.entity_type === 'authority_transfer') {
+        try {
+          const { BcpService } = await import('./bcpService.js');
+          const bcpService = new BcpService(this.orgId);
+          await bcpService.approveAuthorityTransfer(request.entity_id, true, 'Workflow approved', userId, 'workflow');
+          logInfo('Authority transfer activated from workflow approval', { approvalRequestId, entityId: request.entity_id });
+        } catch (transferErr) {
+          logError('Error activating authority transfer after workflow approval', {
+            approvalRequestId,
+            entityId: request.entity_id,
+            error: transferErr.message
+          });
+        }
       }
 
       logInfo('All approvals completed', { approvalRequestId, entityId: request.entity_id, entityType: request.entity_type });
@@ -816,6 +907,7 @@ export class ApprovalWorkflowService {
         policy_approval: 'Policy Approval',
         document_approval: 'Document Approval',
         hr: 'HR',
+        emergency: 'Emergency Authority Transfer',
         other: 'Approval Request'
       };
       const workflowTitle = typeLabels[request.request_type] || request.request_type || 'Approval Request';
@@ -871,14 +963,16 @@ export class ApprovalWorkflowService {
       }
     });
 
-    // Get position from board_members collection
+    // Get positions from ALL active board_member records (user may hold multiple positions)
     const orgObjectId = await this._getOrgObjectId();
-    const boardMember = await boardMemberRepo.findByUserId(userId, orgObjectId);
+    const allBoardMembers = await boardMemberRepo.findAllActiveByUserId(userId, orgObjectId);
 
-    if (boardMember && boardMember.position_id) {
-      const bmPosId = boardMember.position_id._id || boardMember.position_id;
-      if (bmPosId) {
-        positionIds.add(String(bmPosId));
+    if (allBoardMembers && allBoardMembers.length > 0) {
+      for (const bm of allBoardMembers) {
+        const bmPosId = bm.position_id?._id || bm.position_id;
+        if (bmPosId) {
+          positionIds.add(String(bmPosId));
+        }
       }
     }
 

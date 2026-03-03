@@ -1,0 +1,89 @@
+/**
+ * Legal Document Schema (Tenant DB)
+ * 
+ * Organization legal documents with versioning support
+ */
+
+import mongoose from 'mongoose';
+
+const versionSchema = new mongoose.Schema({
+  version_number: {
+    type: Number,
+    required: true
+  },
+  file_key: {
+    type: String,
+    required: true
+  },
+  file_name: {
+    type: String,
+    required: true
+  },
+  file_size: {
+    type: Number
+  },
+  file_type: {
+    type: String
+  },
+  uploaded_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  uploaded_at: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: true });
+
+const legalDocumentSchema = new mongoose.Schema({
+  org_id: {
+    type: String,
+    required: true,
+    index: true
+  },
+  document_name: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  category: {
+    type: String,
+    enum: ['mou', 'sponsorship_agreement', 'contract', 'lease_agreement', 'grant_agreement', 'sla', 'other'],
+    required: true,
+    index: true
+  },
+  effective_date: {
+    type: Date
+  },
+  owner_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  status: {
+    type: String,
+    enum: ['active', 'expired', 'archived'],
+    default: 'active',
+    index: true
+  },
+  last_reviewed: {
+    type: Date
+  },
+  versions: [versionSchema],
+  current_version: {
+    type: Number,
+    default: 1
+  },
+  created_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  }
+}, {
+  timestamps: true,
+  collection: 'legal_documents'
+});
+
+legalDocumentSchema.index({ org_id: 1, status: 1 });
+legalDocumentSchema.index({ org_id: 1, category: 1 });
+legalDocumentSchema.index({ org_id: 1, created_at: -1 });
+
+export default legalDocumentSchema;

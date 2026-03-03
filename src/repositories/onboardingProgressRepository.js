@@ -96,19 +96,19 @@ export class OnboardingProgressRepository {
     }
 
     // Calculate full profile completion (4 initial onboarding + 6 profile steps = 10 total)
-    // Profile steps from dashboard (counting unique step keys):
-    // 1. Organisation Information (responsible_people_complete)
+    // Profile steps from dashboard:
+    // 1. Organisation Information (org_details_complete)
     // 2. Upload Governing Documents (documents_complete)
-    // 3. Add Responsible Persons (responsible_people_complete) - same key as #1
+    // 3. Add Responsible Persons (responsible_people_complete)
     // 4. Define Operating Activities (activities_complete)
     // 5. Set Up Financial Controls (financial_controls_complete)
     // 6. Configure Governance Structure (declaration_complete)
-    // Note: responsible_people_complete is used for both items 1 and 3, so we count it once
     const profileSteps = [
-      progress.responsible_people_complete,  // Organisation Information & Add Responsible Persons
-      progress.documents_complete,            // Upload Governing Documents
-      progress.activities_complete,           // Define Operating Activities
-      progress.financial_controls_complete,   // Set Up Financial Controls
+      progress.org_details_complete,         // Organisation Information
+      progress.documents_complete,           // Upload Governing Documents
+      progress.responsible_people_complete,  // Add Responsible Persons
+      progress.activities_complete,          // Define Operating Activities
+      progress.financial_controls_complete, // Set Up Financial Controls
       progress.declaration_complete          // Configure Governance Structure
     ];
     
@@ -117,8 +117,8 @@ export class OnboardingProgressRepository {
       ...profileSteps
     ];
     const completedFullProfileSteps = fullProfileSteps.filter(Boolean).length;
-    // 4 initial + 5 unique profile steps = 9 total
-    const fullProfileCompletionPercentage = Math.round((completedFullProfileSteps / 9) * 100);
+    // 4 initial + 6 profile steps = 10 total
+    const fullProfileCompletionPercentage = Math.round((completedFullProfileSteps / 10) * 100);
     
     progress.full_profile_completion_percentage = fullProfileCompletionPercentage;
     

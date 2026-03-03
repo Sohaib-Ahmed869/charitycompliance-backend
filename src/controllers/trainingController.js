@@ -585,8 +585,10 @@ export const getMyTraining = asyncHandler(async (req, res) => {
   if (!userId) {
     throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
   }
-  const boardMember = await boardMemberRepo.findByUserId(userId, org._id);
-  if (!boardMember) {
+
+  // Get ALL active board_member records for this user (they may hold multiple positions)
+  const allBoardMembers = await boardMemberRepo.findAllActiveByUserId(userId, org._id);
+  if (!allBoardMembers || allBoardMembers.length === 0) {
     return res.json({
       success: true,
       data: {
@@ -596,23 +598,42 @@ export const getMyTraining = asyncHandler(async (req, res) => {
       }
     });
   }
+
+  // Build a map: positionId → boardMember (for enrollment creation)
+  const positionToBm = new Map();
+  const allPositionIds = new Set();
+  for (const bm of allBoardMembers) {
+    const pid = bm.position_id?.toString?.() || null;
+    if (pid) {
+      allPositionIds.add(pid);
+      if (!positionToBm.has(pid)) positionToBm.set(pid, bm);
+    }
+  }
+
+  const primaryBm = allBoardMembers[0];
   const programs = await trainingRepo.findProgramsByOrg(org._id, { includeDraft: false });
-  const bmPositionId = boardMember.position_id?.toString?.() || null;
+
   const duePrograms = programs.filter((p) => {
-    if (!bmPositionId || !Array.isArray(p.position_ids)) return false;
-    return p.position_ids.some((pid) => (pid?.toString?.() || pid) === bmPositionId);
+    if (!Array.isArray(p.position_ids) || allPositionIds.size === 0) return false;
+    return p.position_ids.some((pid) => allPositionIds.has(pid?.toString?.() || pid));
   });
+
   const records = [];
   for (const prog of duePrograms) {
     const programId = prog._id.toString();
-    let enrollment = await trainingRepo.findEnrollmentByProgramAndPerson(programId, boardMember._id);
+
+    // Find which board_member matches this program's position
+    const matchingPid = prog.position_ids.find(pid => allPositionIds.has(pid?.toString?.() || pid));
+    const targetBm = positionToBm.get(matchingPid?.toString?.() || matchingPid) || primaryBm;
+
+    let enrollment = await trainingRepo.findEnrollmentByProgramAndPerson(programId, targetBm._id);
     if (!enrollment) {
       const resourceIds = await trainingRepo.getResourceIdsByProgram(programId);
-      enrollment = await trainingRepo.upsertEnrollment(programId, boardMember._id);
+      enrollment = await trainingRepo.upsertEnrollment(programId, targetBm._id);
       for (const resId of resourceIds) {
         await trainingRepo.upsertCompletion(enrollment._id, resId, {});
       }
-      enrollment = await trainingRepo.findEnrollmentByProgramAndPerson(programId, boardMember._id);
+      enrollment = await trainingRepo.findEnrollmentByProgramAndPerson(programId, targetBm._id);
     }
     const modules = await trainingRepo.findModulesByProgram(programId);
     const modulesWithResources = await Promise.all(
@@ -641,8 +662,8 @@ export const getMyTraining = asyncHandler(async (req, res) => {
     success: true,
     data: {
       person: {
-        _id: boardMember._id,
-        name: [boardMember.given_names, boardMember.family_name].filter(Boolean).join(' ')
+        _id: primaryBm._id,
+        name: [primaryBm.given_names, primaryBm.family_name].filter(Boolean).join(' ')
       },
       records,
       duePrograms: duePrograms.map((p) => ({ _id: p._id, title: p.title, category: p.category }))
@@ -655,12 +676,13 @@ export const updateResourceProgress = asyncHandler(async (req, res) => {
   const { trainingRepo, boardMemberRepo, org } = await getTenantAndRepos(req);
   const userId = req.user?.userId;
   if (!userId) throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
-  const boardMember = await boardMemberRepo.findByUserId(userId, org._id);
-  if (!boardMember) throw new AppError('You are not registered as a member', 403, 'FORBIDDEN');
+  const allBoardMembers = await boardMemberRepo.findAllActiveByUserId(userId, org._id);
+  if (!allBoardMembers || allBoardMembers.length === 0) throw new AppError('You are not registered as a member', 403, 'FORBIDDEN');
+  const bmIdSet = new Set(allBoardMembers.map(bm => bm._id.toString()));
   const { enrollmentId, resourceId } = req.params;
   const { video_seconds_watched, pdf_percent_read, status, signature_data } = req.body || {};
   const enrollmentDoc = await trainingRepo.findEnrollmentById(enrollmentId);
-  if (!enrollmentDoc || enrollmentDoc.board_member_id?.toString?.() !== boardMember._id.toString()) {
+  if (!enrollmentDoc || !bmIdSet.has(enrollmentDoc.board_member_id?.toString?.())) {
     throw new AppError('Enrollment not found', 404, 'NOT_FOUND');
   }
   const existing = await trainingRepo.findCompletion(enrollmentId, resourceId);

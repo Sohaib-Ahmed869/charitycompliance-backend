@@ -6,6 +6,7 @@
 
 import { getTenantConnection } from '../db/connectionManager.js';
 import { ExpenseRepository } from '../repositories/expenseRepository.js';
+import { UserRepository } from '../repositories/userRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
 import { ApprovalWorkflowService } from './approvalWorkflowService.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -74,6 +75,8 @@ export class ExpenseService {
       project_id: expenseData.project_id,
       funding_agreement_id: expenseData.funding_agreement_id,
       status: expenseData.status || 'draft',
+      is_asset_purchase: expenseData.is_asset_purchase || false,
+      asset_details: expenseData.asset_details || {},
       metadata: expenseData.metadata || {}
     });
 
@@ -225,5 +228,86 @@ export class ExpenseService {
 
     logInfo('Expense cancelled', { expenseId, userId });
     return await expenseRepo.findById(expenseId);
+  }
+
+  async assignExpense(expenseId, assignedToUserId, assigningUserId) {
+    const tenantDb = await this.getTenantDb();
+    const expenseRepo = new ExpenseRepository(tenantDb);
+    const userRepo = new UserRepository(tenantDb);
+
+    const expense = await expenseRepo.findById(expenseId);
+    if (!expense) {
+      throw new AppError('Expense not found', 404, 'EXPENSE_NOT_FOUND');
+    }
+
+    // Only approved expenses can be assigned for payment
+    if (expense.status !== 'approved') {
+      throw new AppError('Only approved expenses can be assigned for payment', 400, 'INVALID_STATUS');
+    }
+
+    // Verify that the user to assign exists
+    const assignedUser = await userRepo.findById(assignedToUserId);
+    if (!assignedUser) {
+      throw new AppError('User to assign not found', 404, 'USER_NOT_FOUND');
+    }
+
+    // Update expense with assigned user
+    const updatedExpense = await expenseRepo.update(expenseId, {
+      assigned_to: assignedToUserId
+    });
+
+    logInfo('Expense assigned for payment', { expenseId, assignedTo: assignedToUserId, assignedBy: assigningUserId });
+    return updatedExpense;
+  }
+
+  async submitPaymentProof(expenseId, paymentData, userId) {
+    const tenantDb = await this.getTenantDb();
+    const expenseRepo = new ExpenseRepository(tenantDb);
+
+    const expense = await expenseRepo.findById(expenseId);
+    if (!expense) {
+      throw new AppError('Expense not found', 404, 'EXPENSE_NOT_FOUND');
+    }
+
+    // Only approved expenses can have payment proof submitted
+    if (expense.status !== 'approved') {
+      throw new AppError('Only approved expenses can have payment proof submitted', 400, 'INVALID_STATUS');
+    }
+
+    // Check if user is assigned to this expense
+    if (expense.assigned_to && expense.assigned_to.toString() !== userId.toString()) {
+      throw new AppError('You are not assigned to process this payment', 403, 'UNAUTHORIZED');
+    }
+
+    // Validate required payment data
+    if (!paymentData.payment_method) {
+      throw new AppError('Payment method is required', 400, 'VALIDATION_ERROR');
+    }
+
+    if (!paymentData.payment_proof) {
+      throw new AppError('Payment proof is required', 400, 'VALIDATION_ERROR');
+    }
+
+    // Update expense with payment proof and mark as paid
+    const updateData = {
+      payment_method: paymentData.payment_method,
+      payment_proof: paymentData.payment_proof,
+      payment_proof_name: paymentData.payment_proof_name,
+      payment_date: paymentData.payment_date || new Date(),
+      payment_notes: paymentData.payment_notes,
+      payment_reference: paymentData.payment_reference,
+      status: 'paid',
+      paid_at: new Date()
+    };
+
+    const updatedExpense = await expenseRepo.update(expenseId, updateData);
+
+    logInfo('Payment proof submitted, expense marked as paid', { 
+      expenseId, 
+      paymentMethod: paymentData.payment_method,
+      userId 
+    });
+
+    return updatedExpense;
   }
 }

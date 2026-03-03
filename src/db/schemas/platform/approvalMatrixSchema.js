@@ -26,6 +26,7 @@ const approvalRuleSchema = new mongoose.Schema({
       'partner_vetting',
       'funding_agreement',
       'project',
+      'emergency',
       // legacy
       'policy_approval',
       'document_approval',
@@ -98,6 +99,7 @@ const approvalMatrixSchema = new mongoose.Schema({
       'funding_agreement',
       'expense_approval',
       'project_approval',
+      'emergency',
       'other'
     ],
     description: 'Categorizes workflow by module/purpose for validation'
@@ -158,7 +160,8 @@ const getCategoryDisplayName = (category) => {
     project_approval: 'Project Approval',
     expense_approval: 'Expense Approval',
     policy_approval: 'Policy Approval',
-    hr_approval: 'HR Approval'
+    hr_approval: 'HR Approval',
+    emergency: 'Emergency Response'
   };
   return categoryNames[category] || category;
 };

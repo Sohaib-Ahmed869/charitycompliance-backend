@@ -113,10 +113,12 @@ export const getPolicyById = asyncHandler(async (req, res) => {
   const { policyId } = req.params;
   const tenantDb = await getTenantConnection(orgId);
   const policyRepo = new PolicyRepository(tenantDb);
+
   const policy = await policyRepo.findById(policyId);
   if (!policy) {
     throw new AppError('Policy not found', 404, 'NOT_FOUND');
   }
+
   let file_url = null;
   if (policy.file_path) {
     try {
@@ -125,16 +127,13 @@ export const getPolicyById = asyncHandler(async (req, res) => {
       // ignore
     }
   }
+
   res.json({
     success: true,
     data: { ...policy.toObject(), file_url }
   });
 });
 
-/**
- * Get policy details for the current user (includes acknowledgement state)
- * Used for staff-side "read & acknowledge" flow.
- */
 export const getPolicyForCurrentUser = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { policyId } = req.params;

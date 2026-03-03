@@ -92,11 +92,16 @@ import notificationRoutes from './routes/platform/notificationRoutes.js';
 import partnerVettingRoutes from './routes/platform/partnerVettingRoutes.js';
 import projectRegisterRoutes from './routes/platform/projectRegisterRoutes.js';
 import fundingAgreementRoutes from './routes/platform/fundingAgreementRoutes.js';
+import assetRoutes from './routes/platform/assetRoutes.js';
 import coiRoutes from './routes/platform/coiRoutes.js';
 import auditTrailRoutes from './routes/platform/auditTrailRoutes.js';
 import approvalThresholdRoutes from './routes/platform/approvalThresholdRoutes.js';
 import userRoutes from './routes/platform/userRoutes.js';
 import complaintRoutes from './routes/platform/complaintRoutes.js';
+import meetingRoutes from './routes/platform/meetingRoutes.js';
+import supportTicketRoutes from './routes/platform/supportTicketRoutes.js';
+import bcpRoutes from './routes/platform/bcpRoutes.js';
+import legalDocumentRoutes from './routes/platform/legalDocumentRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -119,9 +124,14 @@ app.use('/api/v1/platform/notifications', notificationRoutes);
 app.use('/api/v1/platform/partner-vetting', partnerVettingRoutes);
 app.use('/api/v1/platform/project-register', projectRegisterRoutes);
 app.use('/api/v1/platform/funding-agreements', fundingAgreementRoutes);
+app.use('/api/v1/platform/assets', assetRoutes);
 app.use('/api/v1/platform/coi', coiRoutes);
 app.use('/api/v1/platform/audit-trail', auditTrailRoutes);
 app.use('/api/v1/platform/complaints', complaintRoutes);
+app.use('/api/v1/platform/meetings', meetingRoutes);
+app.use('/api/v1/platform/support-tickets', supportTicketRoutes);
+app.use('/api/v1/platform/bcp', bcpRoutes);
+app.use('/api/v1/platform/legal-documents', legalDocumentRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {
