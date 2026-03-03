@@ -66,7 +66,19 @@ export const listApprovalRequests = asyncHandler(async (req, res) => {
   if (!isAdmin) {
     const userPositionRepo = new UserPositionRepository(tenantDb);
     const userPositions = await userPositionRepo.findByUserId(userId, true);
-    const userPositionIds = userPositions.map(up => String(up.position_id?._id || up.position_id));
+    const posIdSet = new Set(userPositions.map(up => String(up.position_id?._id || up.position_id)));
+
+    // Also check board_members (user may hold extra positions after authority transfer)
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const bmRepo = new BoardMemberRepository(tenantDb);
+    const allBms = await bmRepo.findAllActiveByUserId(userId, org._id);
+    if (allBms) {
+      allBms.forEach(bm => {
+        const pid = bm.position_id?._id?.toString?.() || bm.position_id?.toString?.();
+        if (pid) posIdSet.add(pid);
+      });
+    }
+    const userPositionIds = [...posIdSet];
 
     requests = requests.filter(request => {
       // ONLY include if user is an approver in any approval step

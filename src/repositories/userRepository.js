@@ -126,7 +126,7 @@ export class UserRepository {
       query._id = { $ne: excludeUserId };
     }
     return this.User.find(query)
-      .select('first_name last_name email status')
+      .select('first_name last_name email status profile_picture_key')
       .sort({ first_name: 1, last_name: 1 })
       .exec();
   }

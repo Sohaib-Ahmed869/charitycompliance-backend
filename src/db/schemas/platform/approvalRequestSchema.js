@@ -97,6 +97,7 @@ const approvalRequestSchema = new mongoose.Schema({
       'partner_vetting',
       'funding_agreement',
       'project',
+      'emergency',
       // legacy
       'policy_approval',
       'document_approval',
@@ -115,7 +116,7 @@ const approvalRequestSchema = new mongoose.Schema({
   entity_type: {
     type: String,
     required: true,
-    enum: ['expense', 'purchase', 'policy', 'document', 'budget', 'risk', 'grant', 'partner', 'funding_agreement', 'project', 'other']
+    enum: ['expense', 'purchase', 'policy', 'document', 'budget', 'risk', 'grant', 'partner', 'funding_agreement', 'project', 'authority_transfer', 'other']
   },
   amount: {
     type: Number,

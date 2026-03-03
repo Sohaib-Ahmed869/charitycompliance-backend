@@ -15,7 +15,7 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['workflow_approved', 'workflow_rejected', 'approval_pending'],
+    enum: ['workflow_approved', 'workflow_rejected', 'approval_pending', 'meeting_invitation', 'meeting_notes_added', 'ticket_assigned', 'authority_transfer_revoked', 'authority_transfer_assigned'],
     required: true,
     index: true
   },

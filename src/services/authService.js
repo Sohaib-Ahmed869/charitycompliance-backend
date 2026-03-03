@@ -35,17 +35,25 @@ const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => {
     const boardMemberRepo = new BoardMemberRepository(tenantDb);
     const positionRepo = new PositionRepository(tenantDb);
 
-    const boardMember = await boardMemberRepo.findByUserId(userId, orgId);
-    if (!boardMember?.position_id) return [];
+    // Get ALL active board_members (user may hold multiple positions after transfer)
+    const allBoardMembers = await boardMemberRepo.findAllActiveByUserId(userId, orgId);
+    if (!allBoardMembers || allBoardMembers.length === 0) return [];
 
-    const position = await positionRepo.findById(boardMember.position_id);
-    if (!position) return [];
+    const positionIds = allBoardMembers
+      .map(bm => bm.position_id)
+      .filter(Boolean);
+    if (positionIds.length === 0) return [];
+
+    const positions = await Promise.all(positionIds.map(pid => positionRepo.findById(pid)));
 
     const result = [];
 
-    // Include existing granted_permissions (string-based permissions)
-    if (Array.isArray(position.granted_permissions) && position.granted_permissions.length) {
-      result.push(...position.granted_permissions.filter(p => typeof p === 'string' && p.trim()));
+    for (const position of positions) {
+      if (!position) continue;
+
+      if (Array.isArray(position.granted_permissions) && position.granted_permissions.length) {
+        result.push(...position.granted_permissions.filter(p => typeof p === 'string' && p.trim()));
+      }
     }
 
     // Known sidebar modules - used for defaults when module_permissions is empty
@@ -58,12 +66,21 @@ const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => {
     const FIXED_VIEW_ONLY = ['dashboard', 'audit_trail'];
     const FIXED_VIEW_EDIT = ['approval_workflow', 'human_resources'];
 
+    // Merge module_permissions from all positions (most permissive wins)
     const permsMap = {};
-    if (Array.isArray(position.module_permissions) && position.module_permissions.length) {
-      for (const mp of position.module_permissions) {
-        if (!mp || !mp.module_id) continue;
-        const mod = mp.module_id.toString();
-        permsMap[mod] = { view: !!mp.view, edit: !!mp.edit, delete: !!mp.delete };
+    for (const position of positions) {
+      if (!position) continue;
+      if (Array.isArray(position.module_permissions) && position.module_permissions.length) {
+        for (const mp of position.module_permissions) {
+          if (!mp || !mp.module_id) continue;
+          const mod = mp.module_id.toString();
+          if (!permsMap[mod]) {
+            permsMap[mod] = { view: false, edit: false, delete: false };
+          }
+          if (mp.view) permsMap[mod].view = true;
+          if (mp.edit) permsMap[mod].edit = true;
+          if (mp.delete) permsMap[mod].delete = true;
+        }
       }
     }
 
@@ -75,7 +92,6 @@ const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => {
         if (permsMap[mod].delete) result.push(`module:${mod}:delete`);
       } else {
         // No permissions set - use defaults
-        const isFixedViewOnly = FIXED_VIEW_ONLY.includes(mod);
         const isFixedViewEdit = FIXED_VIEW_EDIT.includes(mod);
         result.push(`module:${mod}:view`);
         if (isFixedViewEdit) result.push(`module:${mod}:edit`);
@@ -340,6 +356,37 @@ export class AuthService {
 
         logWarn('Login failed - invalid password', { userId: user._id, orgId });
         throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
+      }
+
+      // Check if all of this user's positions have been transferred
+      if (!user.is_org_owner) {
+        try {
+          const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+          const bmRepo = new BoardMemberRepository(tenantDb);
+          const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+          const orgRepo = new OrganizationRepository(tenantDb);
+          const org = await orgRepo.findOne();
+          if (org) {
+            const BoardMemberModel = bmRepo.BoardMember;
+            const allBmRecords = await BoardMemberModel.find({
+              user_id: user._id,
+              org_id: org._id
+            }).lean();
+            const hasActive = allBmRecords.some(bm => bm.is_active && bm.status !== 'transferred');
+            const hasTransferred = allBmRecords.some(bm => bm.status === 'transferred');
+            if (allBmRecords.length > 0 && !hasActive && hasTransferred) {
+              logWarn('Login blocked - all positions transferred', { userId: user._id, orgId });
+              throw new AppError(
+                'Your position has been transferred to another person as part of a Business Continuity transfer. Please contact your administrator.',
+                403,
+                'POSITION_TRANSFERRED'
+              );
+            }
+          }
+        } catch (err) {
+          if (err.code === 'POSITION_TRANSFERRED') throw err;
+          logError('Error checking transfer status during login', err, { userId: user._id });
+        }
       }
 
       // Update last login

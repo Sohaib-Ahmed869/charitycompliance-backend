@@ -116,6 +116,7 @@ export const updateProfileCompletionStep = asyncHandler(async (req, res) => {
   
   // Validate stepKey
   const validSteps = [
+    'org_details_complete',
     'documents_complete',
     'responsible_people_complete',
     'activities_complete',

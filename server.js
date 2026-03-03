@@ -8,6 +8,7 @@ import app, { initializeApp } from './src/app.js';
 import dotenv from 'dotenv';
 import { closeRouterDB } from './src/config/database.js';
 import { closeAllConnections } from './src/db/connectionManager.js';
+import emailService from './src/services/emailService.js';
 import { logError, logInfo, logWarn } from './src/utils/logger.js';
 
 dotenv.config();
@@ -22,6 +23,8 @@ const startServer = async () => {
 
     const server = app.listen(PORT, () => {
       logInfo('Server started', { port: PORT, environment: process.env.NODE_ENV || 'development' });
+      // Verify SMTP on startup and log result (non-blocking)
+      emailService.initialize().catch(() => {});
     });
 
     const gracefulShutdown = async (signal) => {

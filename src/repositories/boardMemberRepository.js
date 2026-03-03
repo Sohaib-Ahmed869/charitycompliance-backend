@@ -91,6 +91,14 @@ export class BoardMemberRepository {
     });
   }
 
+  async findAllActiveByUserId(userId, orgId) {
+    return await this.BoardMember.find({
+      user_id: userId,
+      org_id: orgId,
+      is_active: true
+    }).lean();
+  }
+
   async findByInvitationToken(token) {
     return await this.BoardMember.findOne({
       invitation_token: token,

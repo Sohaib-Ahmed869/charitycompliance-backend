@@ -102,6 +102,42 @@ const expenseSchema = new mongoose.Schema({
   payment_reference: {
     type: String
   },
+  assigned_to: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true
+  },
+  payment_method: {
+    type: String,
+    enum: ['Bank Transfer', 'Cash', 'Check', 'Credit Card', 'Debit Card', 'Online Payment', 'Other']
+  },
+  payment_proof: {
+    type: String // File path/URL
+  },
+  payment_proof_name: {
+    type: String
+  },
+  payment_date: {
+    type: Date
+  },
+  payment_notes: {
+    type: String
+  },
+  is_asset_purchase: {
+    type: Boolean,
+    default: false
+  },
+  asset_details: {
+    asset_name: String,
+    asset_category: String,
+    asset_type: String,
+    vendor_name: String,
+    model: String,
+    serial_number: String,
+    processor: String,
+    ram: String,
+    storage: String
+  },
   metadata: {
     type: mongoose.Schema.Types.Mixed
   }

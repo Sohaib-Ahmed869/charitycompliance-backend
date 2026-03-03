@@ -47,4 +47,12 @@ export class PolicyAcknowledgementRepository {
       .sort({ acknowledged_at: -1 })
       .lean();
   }
+
+  async findByUserId(userId) {
+    return this.PolicyAcknowledgement.find({ user_id: userId }).lean();
+  }
+
+  async deleteByUserId(userId) {
+    return this.PolicyAcknowledgement.deleteMany({ user_id: userId });
+  }
 }
