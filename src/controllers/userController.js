@@ -38,8 +38,6 @@ export const listTeamMembers = asyncHandler(async (req, res) => {
     const userIdStr = user._id?.toString();
     const boardMember = boardMemberByUserId.get(userIdStr);
     const profileKey = boardMember?.profile_picture_key || user.profile_picture_key;
-    const positionId = boardMember?.position_id?._id?.toString?.() || boardMember?.position_id?.toString?.() || null;
-    const department = boardMember?.department || null;
     let avatar = null;
 
     if (profileKey) {
@@ -55,9 +53,7 @@ export const listTeamMembers = asyncHandler(async (req, res) => {
       firstName: user.first_name || '',
       lastName: user.last_name || '',
       email: user.email || '',
-      avatar,
-      positionId,
-      department
+      avatar
     };
   }));
 

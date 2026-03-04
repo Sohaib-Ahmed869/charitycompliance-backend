@@ -17,6 +17,7 @@ import { NotificationRepository } from '../repositories/notificationRepository.j
 import { PositionRepository } from '../repositories/positionRepository.js';
 import { UserPositionRepository } from '../repositories/userPositionRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
+import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logInfo, logError } from '../utils/logger.js';
 import emailService from './emailService.js';
@@ -515,6 +516,26 @@ export class BcpService {
       throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
     }
 
+    // Auto-resolve user IDs from board_members when not provided
+    if (!transferData.from_user_id || !transferData.to_user_id) {
+      const bmRepo = new BoardMemberRepository(tenantDb);
+      const boardMembers = await bmRepo.findByOrgId(org._id);
+
+      if (!transferData.from_user_id && transferData.from_position_id) {
+        const bm = boardMembers.find(m =>
+          m.position_id?.toString() === transferData.from_position_id.toString()
+        );
+        if (bm?.user_id) transferData.from_user_id = bm.user_id;
+      }
+
+      if (!transferData.to_user_id && transferData.to_position_id) {
+        const bm = boardMembers.find(m =>
+          m.position_id?.toString() === transferData.to_position_id.toString()
+        );
+        if (bm?.user_id) transferData.to_user_id = bm.user_id;
+      }
+    }
+
     const transfer = await repo.create({
       ...transferData,
       org_id: org._id,
@@ -635,6 +656,45 @@ export class BcpService {
     };
 
     const transfer = await repo.addApproval(transferId, approvalData);
+
+    // ─── Auto-resolve user IDs from board_members when missing ───
+    // This handles transfers created before user-ID auto-fill was added,
+    // or when the frontend couldn't match users to positions.
+    if (transfer.status === 'active' && transfer.to_position_id && !transfer.to_user_id) {
+      const org = await orgRepo.findOne();
+      if (org) {
+        const boardMemberRepo = new BoardMemberRepository(tenantDb);
+        const boardMembers = await boardMemberRepo.findByOrgId(org._id);
+
+        const updates = {};
+        if (!transfer.from_user_id && transfer.from_position_id) {
+          const fromBm = boardMembers.find(m =>
+            m.position_id?.toString() === String(transfer.from_position_id)
+          );
+          if (fromBm?.user_id) {
+            transfer.from_user_id = fromBm.user_id;
+            updates.from_user_id = fromBm.user_id;
+          }
+        }
+        if (!transfer.to_user_id && transfer.to_position_id) {
+          const toBm = boardMembers.find(m =>
+            m.position_id?.toString() === String(transfer.to_position_id)
+          );
+          if (toBm?.user_id) {
+            transfer.to_user_id = toBm.user_id;
+            updates.to_user_id = toBm.user_id;
+          }
+        }
+        if (Object.keys(updates).length) {
+          await repo.update(transferId, updates);
+          logInfo('Auto-resolved missing user IDs on transfer activation', {
+            transferId,
+            resolvedFromUser: !!updates.from_user_id,
+            resolvedToUser: !!updates.to_user_id
+          });
+        }
+      }
+    }
 
     if (transfer.status === 'active' && transfer.to_position_id && transfer.to_user_id) {
       const org = await orgRepo.findOne();
@@ -809,15 +869,21 @@ export class BcpService {
                 await trainingRepo.updateEnrollment(existing._id, { status: 'assigned', completed_at: null });
                 reset++;
               } else {
-                await trainingRepo.createEnrollment({
+                const newEnrollment = await trainingRepo.createEnrollment({
                   training_program_id: program._id,
                   board_member_id: toBoardMember._id,
                   status: 'assigned'
                 });
+                // Create completion records for every resource in this program
+                // (mirrors getMyTraining auto-init so register list counts work immediately)
+                const resourceIds = await trainingRepo.getResourceIdsByProgram(program._id);
+                for (const resId of resourceIds) {
+                  await trainingRepo.upsertCompletion(newEnrollment._id, resId, {});
+                }
                 created++;
               }
             }
-            logInfo('[TRANSFER STEP 3] Training enrollments shifted', { transferId, created, reset });
+            logInfo('[TRANSFER STEP 3] Training enrollments shifted (with completion records)', { transferId, created, reset });
           } else if (!toBoardMember) {
             logInfo('[TRANSFER STEP 3] SKIPPED - to-user is not a board member, cannot create enrollments', { transferId });
           }
@@ -837,6 +903,40 @@ export class BcpService {
           } catch (err) {
             logError('[TRANSFER STEP 4a] Failed to clear policy acks', err, { transferId });
           }
+        }
+
+        // ─── 4a-ii) Assign from-position's policies to to-user ───
+        // The to-user needs to acknowledge all policies that target the from-position
+        try {
+          const { default: policySchema } = await import('../db/schemas/platform/policySchema.js');
+          const PolicyModel = tenantDb.models.Policy || tenantDb.model('Policy', policySchema);
+          // Find policies owned by or targeting the from-position's board_member
+          const BoardMemberModel = boardMemberRepo.BoardMember;
+          const toBmForFromPos = await BoardMemberModel.findOne({
+            user_id: toUserOid,
+            position_id: fromPosOid,
+            org_id: org._id,
+            is_active: true
+          });
+          if (toBmForFromPos) {
+            const allPolicies = await PolicyModel.find({ org_id: org._id, status: { $in: ['active', 'published', 'approved'] } }).select('_id').lean();
+            let policyAckCreated = 0;
+            for (const policy of allPolicies) {
+              const alreadyAcked = await policyAckRepo.findOneByPolicyAndUser(policy._id, toUserOid);
+              if (!alreadyAcked) {
+                // Don't auto-acknowledge — just ensure the to-user is aware they need to.
+                // Policy acknowledgement will be required when they view the policy.
+                policyAckCreated++;
+              }
+            }
+            logInfo('[TRANSFER STEP 4a-ii] Policies needing acknowledgement by to-user', {
+              transferId,
+              totalPolicies: allPolicies.length,
+              needsAck: policyAckCreated
+            });
+          }
+        } catch (err) {
+          logError('[TRANSFER STEP 4a-ii] Failed to check policy assignments', err, { transferId });
         }
 
         // ─── 4b) Transfer policy ownership from old board_member to new board_member ───
@@ -918,17 +1018,62 @@ export class BcpService {
           }
         }
 
-        // ─── 5) Shift workflows: swap approver user in pending requests for the transferred position ───
+        // ─── 5) Shift workflows: swap position, user, department in matrices + pending requests ───
         try {
-          await this._shiftWorkflowPositions(tenantDb, org._id, fromPosOid, fromUserOid, toUserOid, transferId);
+          const fromDeptOid = transfer.from_department_id ? new mongoose.Types.ObjectId(String(transfer.from_department_id)) : null;
+          const toDeptOid = transfer.to_department_id ? new mongoose.Types.ObjectId(String(transfer.to_department_id)) : null;
+          await this._shiftWorkflowPositions(tenantDb, org._id, {
+            fromPosOid, toPosOid, fromUserOid, toUserOid, fromDeptOid, toDeptOid
+          }, transferId);
         } catch (err) {
           logError('[TRANSFER STEP 5] Failed to shift workflow positions', err, { transferId, stack: err.stack });
         }
 
-        // ─── 6) Notifications + emails (fire-and-forget) ───
+        // ─── 6) Suspend from-user (only if no remaining active positions) & force immediate logout ───
+        if (fromUserOid) {
+          try {
+            const BoardMemberModel = boardMemberRepo.BoardMember;
+            const remainingActive = await BoardMemberModel.countDocuments({
+              user_id: fromUserOid,
+              org_id: org._id,
+              is_active: true
+            });
+            if (remainingActive === 0) {
+              const userRepo = new UserRepository(tenantDb);
+              await userRepo.update(fromUserOid, { status: 'suspended' });
+              logInfo('[TRANSFER STEP 6] From-user suspended (no remaining active positions)', {
+                transferId,
+                fromUserId: String(fromUserOid)
+              });
+            } else {
+              logInfo('[TRANSFER STEP 6] From-user NOT suspended (still has active positions)', {
+                transferId,
+                fromUserId: String(fromUserOid),
+                remainingActive
+              });
+            }
+            // Always clear the auth middleware transfer cache so checks are fresh
+            const { clearTransferCacheForUser } = await import('../middleware/auth.js');
+            if (typeof clearTransferCacheForUser === 'function') {
+              clearTransferCacheForUser(String(fromUserOid), this.orgId);
+            }
+          } catch (err) {
+            logError('[TRANSFER STEP 6] Failed to handle from-user suspension', err, { transferId });
+          }
+        }
+
+        // ─── 7) Notifications + emails (fire-and-forget) ───
         this._sendTransferNotifications(tenantDb, transfer, org).catch(err =>
-          logError('[TRANSFER STEP 6] Failed to send notifications', err, { transferId })
+          logError('[TRANSFER STEP 7] Failed to send notifications', err, { transferId })
         );
+
+        // ─── 8) Mark transfer as completed ───
+        try {
+          await repo.update(transferId, { status: 'completed' });
+          logInfo('[TRANSFER STEP 8] Transfer marked as completed', { transferId });
+        } catch (err) {
+          logError('[TRANSFER STEP 8] Failed to mark transfer completed', err, { transferId });
+        }
 
         logInfo('=== AUTHORITY TRANSFER POST-APPROVAL COMPLETE ===', { transferId });
       } else {
@@ -950,6 +1095,163 @@ export class BcpService {
     const tenantDb = await this.getTenantDb();
     const repo = new BcpAuthorityTransferRepository(tenantDb);
     return await repo.update(transferId, updateData);
+  }
+
+  /**
+   * Revoke an authority transfer — reverses all transfer effects.
+   * Re-activates from-user's position, deactivates to-user's transferred position,
+   * unsuspends from-user, and marks transfer as 'revoked'.
+   */
+  async revokeAuthorityTransfer(transferId, revokedBy) {
+    const tenantDb = await this.getTenantDb();
+    const repo = new BcpAuthorityTransferRepository(tenantDb);
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const boardMemberRepo = new BoardMemberRepository(tenantDb);
+    const userPositionRepo = new UserPositionRepository(tenantDb);
+
+    const transfer = await repo.findById(transferId);
+    if (!transfer) {
+      throw new AppError('Transfer not found', 404, 'NOT_FOUND');
+    }
+    if (transfer.status !== 'active' && transfer.status !== 'completed') {
+      throw new AppError(`Cannot revoke a transfer with status "${transfer.status}"`, 400, 'INVALID_STATUS');
+    }
+
+    const org = await orgRepo.findOne();
+    if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+    const fromPosOid = new mongoose.Types.ObjectId(String(transfer.from_position_id._id || transfer.from_position_id));
+    const fromUserOid = transfer.from_user_id?._id || transfer.from_user_id
+      ? new mongoose.Types.ObjectId(String(transfer.from_user_id._id || transfer.from_user_id))
+      : null;
+    const toUserOid = transfer.to_user_id?._id || transfer.to_user_id
+      ? new mongoose.Types.ObjectId(String(transfer.to_user_id._id || transfer.to_user_id))
+      : null;
+
+    logInfo('=== AUTHORITY TRANSFER REVOCATION START ===', {
+      transferId,
+      fromUserId: fromUserOid ? String(fromUserOid) : null,
+      toUserId: toUserOid ? String(toUserOid) : null
+    });
+
+    const BoardMemberModel = boardMemberRepo.BoardMember;
+    const UserPositionModel = userPositionRepo.UserPosition;
+
+    // ── R1) Re-activate from-user's board_member + user_position ──
+    if (fromUserOid) {
+      try {
+        const bmResult = await BoardMemberModel.updateMany(
+          { user_id: fromUserOid, position_id: fromPosOid, org_id: org._id, is_active: false, status: 'transferred' },
+          { $set: { is_active: true, status: 'active' } }
+        );
+        const upResult = await UserPositionModel.updateMany(
+          { user_id: fromUserOid, position_id: fromPosOid, is_active: false },
+          { $set: { is_active: true, effective_to: null } }
+        );
+        logInfo('[REVOKE R1] Re-activated from-user position', {
+          transferId, bmModified: bmResult.modifiedCount, upModified: upResult.modifiedCount
+        });
+      } catch (err) {
+        logError('[REVOKE R1] Failed to re-activate from-user position', err, { transferId });
+      }
+    }
+
+    // ── R2) Deactivate to-user's transferred board_member ──
+    if (toUserOid) {
+      try {
+        const bmResult = await BoardMemberModel.updateMany(
+          { user_id: toUserOid, position_id: fromPosOid, org_id: org._id, is_active: true },
+          { $set: { is_active: false, status: 'revoked' } }
+        );
+        const upResult = await UserPositionModel.updateMany(
+          { user_id: toUserOid, position_id: fromPosOid, is_active: true },
+          { $set: { is_active: false, effective_to: new Date() } }
+        );
+        logInfo('[REVOKE R2] Deactivated to-user transferred position', {
+          transferId, bmModified: bmResult.modifiedCount, upModified: upResult.modifiedCount
+        });
+      } catch (err) {
+        logError('[REVOKE R2] Failed to deactivate to-user position', err, { transferId });
+      }
+    }
+
+    // ── R3) Unsuspend from-user if they were suspended ──
+    if (fromUserOid) {
+      try {
+        const userRepo = new UserRepository(tenantDb);
+        const fromUser = await userRepo.findById(fromUserOid);
+        if (fromUser && fromUser.status === 'suspended') {
+          await userRepo.update(fromUserOid, { status: 'active' });
+          logInfo('[REVOKE R3] From-user unsuspended', { transferId, fromUserId: String(fromUserOid) });
+        }
+        // Clear transfer cache
+        const { clearTransferCacheForUser } = await import('../middleware/auth.js');
+        if (typeof clearTransferCacheForUser === 'function') {
+          clearTransferCacheForUser(String(fromUserOid), this.orgId);
+        }
+      } catch (err) {
+        logError('[REVOKE R3] Failed to unsuspend from-user', err, { transferId });
+      }
+    }
+
+    // Also clear cache for to-user since their positions changed
+    if (toUserOid) {
+      try {
+        const { clearTransferCacheForUser } = await import('../middleware/auth.js');
+        if (typeof clearTransferCacheForUser === 'function') {
+          clearTransferCacheForUser(String(toUserOid), this.orgId);
+        }
+      } catch (_) { /* ignore */ }
+    }
+
+    // ── R4) Mark transfer as revoked ──
+    const updatedTransfer = await repo.update(transferId, {
+      status: 'revoked',
+      revoked_by: revokedBy,
+      revoked_at: new Date()
+    });
+
+    // ── R5) Send revocation notifications ──
+    try {
+      const notifRepo = new NotificationRepository(tenantDb);
+      const userRepo = new UserRepository(tenantDb);
+      const positionRepo = new PositionRepository(tenantDb);
+      const position = await positionRepo.findById(fromPosOid);
+      const positionTitle = position?.title || 'the position';
+      const notifications = [];
+
+      if (fromUserOid) {
+        notifications.push({
+          user_id: fromUserOid,
+          type: 'authority_transfer_revoked',
+          title: `Position restored – ${positionTitle}`,
+          message: `Your ${positionTitle} role has been restored. The previous authority transfer has been revoked.`,
+          link: '/bcp',
+          related_entity_id: transfer._id,
+          related_entity_type: 'authority_transfer'
+        });
+      }
+      if (toUserOid) {
+        notifications.push({
+          user_id: toUserOid,
+          type: 'authority_transfer_revoked',
+          title: `Role revoked – ${positionTitle}`,
+          message: `The ${positionTitle} role that was transferred to you has been revoked. The original holder has been restored.`,
+          link: '/bcp',
+          related_entity_id: transfer._id,
+          related_entity_type: 'authority_transfer'
+        });
+      }
+      if (notifications.length) {
+        await notifRepo.createMany(notifications);
+      }
+    } catch (err) {
+      logError('[REVOKE R5] Failed to send notifications', err, { transferId });
+    }
+
+    logInfo('=== AUTHORITY TRANSFER REVOCATION COMPLETE ===', { transferId });
+    return updatedTransfer;
   }
 
   async getExpiringAuthorityTransfers(daysAhead = 14) {
@@ -1012,51 +1314,103 @@ export class BcpService {
     };
   }
 
-  async _shiftWorkflowPositions(tenantDb, orgId, fromPosOid, fromUserOid, toUserOid, transferId) {
+  async _shiftWorkflowPositions(tenantDb, orgId, ids, transferId) {
     const orgOid = new mongoose.Types.ObjectId(String(orgId));
-    const fromOid = new mongoose.Types.ObjectId(String(fromPosOid));
-    const fromUid = fromUserOid ? new mongoose.Types.ObjectId(String(fromUserOid)) : null;
-    const toUid = toUserOid ? new mongoose.Types.ObjectId(String(toUserOid)) : null;
+    const fromPos = new mongoose.Types.ObjectId(String(ids.fromPosOid));
+    const toPos = new mongoose.Types.ObjectId(String(ids.toPosOid));
+    const fromUid = ids.fromUserOid ? new mongoose.Types.ObjectId(String(ids.fromUserOid)) : null;
+    const toUid = ids.toUserOid ? new mongoose.Types.ObjectId(String(ids.toUserOid)) : null;
+    const fromDept = ids.fromDeptOid ? new mongoose.Types.ObjectId(String(ids.fromDeptOid)) : null;
+    const toDept = ids.toDeptOid ? new mongoose.Types.ObjectId(String(ids.toDeptOid)) : null;
 
-    // Approval Matrices: NO changes needed.
-    // Matrices reference positions, not users. The position still exists with a new holder.
-    logInfo('[TRANSFER STEP 5a] Approval matrices - no position swap needed (position unchanged, holder changed)', {
+    logInfo('[TRANSFER STEP 5] Shifting workflow positions (user-only, preserving position refs)', {
       transferId,
-      fromPositionId: String(fromOid)
+      fromPos: String(fromPos),
+      toPos: String(toPos),
+      fromUid: fromUid ? String(fromUid) : null,
+      toUid: toUid ? String(toUid) : null
     });
 
-    // Pending Approval Requests: swap approver_user_id where the step references the
-    // transferred position. The position_id stays the same — only the person changes.
-    if (!toUid) {
-      logInfo('[TRANSFER STEP 5b] SKIPPED - no to-user ID', { transferId });
-      return;
+    // ─── 5a) Approval Matrices: update ONLY user_id (keep position_id as from-position) ───
+    // The to-user now holds the from-position (assigned in step 2), so workflows
+    // referencing that position will naturally route to the to-user. We only need
+    // to update explicit user_id references.
+    const { ApprovalMatrixRepository } = await import('../repositories/approvalMatrixRepository.js');
+    const matrixRepo = new ApprovalMatrixRepository(tenantDb);
+    const ApprovalMatrix = matrixRepo.ApprovalMatrix;
+
+    let matrixRulesResult = { matchedCount: 0, modifiedCount: 0 };
+    let matrixDefaultResult = { matchedCount: 0, modifiedCount: 0 };
+
+    if (toUid && fromUid) {
+      // Only update user_id references — keep position_id unchanged so the
+      // to-user inherits the from-position's role without losing the position link
+      const matrixElemSet = { 'rules.$[].requires_approval_from.$[elem].user_id': toUid };
+
+      matrixRulesResult = await ApprovalMatrix.updateMany(
+        { org_id: orgOid, 'rules.requires_approval_from.user_id': fromUid },
+        { $set: matrixElemSet },
+        { arrayFilters: [{ 'elem.user_id': fromUid }] }
+      );
+
+      // Also swap default_approver user_id if it references the from-user
+      matrixDefaultResult = await ApprovalMatrix.updateMany(
+        { org_id: orgOid, 'default_approver.user_id': fromUid },
+        { $set: { 'default_approver.user_id': toUid } }
+      );
     }
 
+    logInfo('[TRANSFER STEP 5a] Approval matrices updated (user refs only)', {
+      transferId,
+      rulesMatched: matrixRulesResult.matchedCount,
+      rulesModified: matrixRulesResult.modifiedCount,
+      defaultMatched: matrixDefaultResult.matchedCount,
+      defaultModified: matrixDefaultResult.modifiedCount
+    });
+
+    // ─── 5b) Approval Requests: update ONLY user_id in pending steps (keep position_id) ───
+    // The to-user now holds the from-position, so keeping the position reference
+    // correct and only swapping the user ensures the to-user can approve.
     const { ApprovalRequestRepository } = await import('../repositories/approvalRequestRepository.js');
     const requestRepo = new ApprovalRequestRepository(tenantDb);
     const ApprovalRequest = requestRepo.ApprovalRequest;
 
-    const stepUpdate = { 'approval_steps.$[step].approver_user_id': toUid };
+    let pendingResult = { matchedCount: 0, modifiedCount: 0 };
+    let allStepsResult = { matchedCount: 0, modifiedCount: 0 };
 
-    const requestResult = await ApprovalRequest.updateMany(
-      {
-        org_id: orgOid,
-        status: 'pending',
-        'approval_steps': {
-          $elemMatch: { approver_position_id: fromOid, status: 'pending' }
-        }
-      },
-      { $set: stepUpdate },
-      { arrayFilters: [{ 'step.approver_position_id': fromOid, 'step.status': 'pending' }] }
-    );
+    if (toUid && fromUid) {
+      // Update pending steps: only swap user_id, keep position_id as from-position
+      const pendingStepSet = { 'approval_steps.$[step].approver_user_id': toUid };
 
-    logInfo('[TRANSFER STEP 5b] Pending approval requests - swapped approver_user_id', {
+      pendingResult = await ApprovalRequest.updateMany(
+        {
+          org_id: orgOid,
+          status: 'pending',
+          'approval_steps': { $elemMatch: { approver_user_id: fromUid, status: 'pending' } }
+        },
+        { $set: pendingStepSet },
+        { arrayFilters: [{ 'step.approver_user_id': fromUid, 'step.status': 'pending' }] }
+      );
+
+      // Also update already-approved steps so historical display is correct
+      const approvedStepSet = { 'approval_steps.$[step].approver_user_id': toUid };
+
+      allStepsResult = await ApprovalRequest.updateMany(
+        {
+          org_id: orgOid,
+          'approval_steps.approver_user_id': fromUid
+        },
+        { $set: approvedStepSet },
+        { arrayFilters: [{ 'step.approver_user_id': fromUid }] }
+      );
+    }
+
+    logInfo('[TRANSFER STEP 5b] Approval requests updated (user refs only)', {
       transferId,
-      positionId: String(fromOid),
-      fromUserId: fromUid ? String(fromUid) : null,
-      toUserId: String(toUid),
-      matched: requestResult.matchedCount,
-      modified: requestResult.modifiedCount
+      pendingMatched: pendingResult.matchedCount,
+      pendingModified: pendingResult.modifiedCount,
+      allStepsMatched: allStepsResult.matchedCount,
+      allStepsModified: allStepsResult.modifiedCount
     });
   }
 
@@ -1111,28 +1465,26 @@ export class BcpService {
 
     if (fromUser?.email) {
       emailPromises.push(
-        emailService.sendAuthorityTransferEmail({
+        emailService.sendEmail({
           to: fromUser.email,
-          recipientName: fromName,
-          isFromUser: true,
-          positionTitle,
-          otherPersonName: toName,
-          transferCode,
-          effectiveDate: transfer.effective_date
+          subject: `Position Transferred – ${positionTitle} [${transferCode}]`,
+          html: `<p>Hi ${fromName},</p>
+<p>Your responsibilities for <strong>${positionTitle}</strong> have been transferred to <strong>${toName}</strong> effective ${transfer.effective_date ? new Date(transfer.effective_date).toLocaleDateString() : 'immediately'}.</p>
+<p>Your access to associated workflows and approvals for this position has been revoked.</p>
+<p>Transfer Reference: <strong>${transferCode}</strong></p>`
         })
       );
     }
 
     if (toUser?.email) {
       emailPromises.push(
-        emailService.sendAuthorityTransferEmail({
+        emailService.sendEmail({
           to: toUser.email,
-          recipientName: toName,
-          isFromUser: false,
-          positionTitle,
-          otherPersonName: fromName,
-          transferCode,
-          effectiveDate: transfer.effective_date
+          subject: `New Role Assigned – ${positionTitle} [${transferCode}]`,
+          html: `<p>Hi ${toName},</p>
+<p>You have been assigned the <strong>${positionTitle}</strong> role, previously held by <strong>${fromName}</strong>, effective ${transfer.effective_date ? new Date(transfer.effective_date).toLocaleDateString() : 'immediately'}.</p>
+<p>Please complete any assigned trainings and policy acknowledgements.</p>
+<p>Transfer Reference: <strong>${transferCode}</strong></p>`
         })
       );
     }

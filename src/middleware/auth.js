@@ -16,6 +16,15 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 const _transferCache = new Map();
 const TRANSFER_CACHE_TTL = 30_000; // 30s
 
+/**
+ * Clear the transfer-block cache for a specific user so the middleware
+ * picks up the status change on their very next API call (immediate logout).
+ */
+export function clearTransferCacheForUser(userId, orgId) {
+  const cacheKey = `${userId}:${orgId}`;
+  _transferCache.delete(cacheKey);
+}
+
 async function checkTransferredUser(userId, orgId) {
   const cacheKey = `${userId}:${orgId}`;
   const cached = _transferCache.get(cacheKey);
@@ -146,6 +155,26 @@ export const authenticate = async (req, res, next) => {
             success: false,
             error: {
               message: 'Your position has been transferred to another person as part of a Business Continuity transfer. Please contact your administrator.',
+              code: 'POSITION_TRANSFERRED'
+            }
+          });
+        }
+      } catch (_) {
+        // Don't block auth if the check fails
+      }
+
+      // Also check if user account is suspended (set during BCP transfer activation)
+      try {
+        const { getTenantConnection } = await import('../db/connectionManager.js');
+        const { UserRepository } = await import('../repositories/userRepository.js');
+        const tenantDb = await getTenantConnection(decoded.orgId);
+        const userRepo = new UserRepository(tenantDb);
+        const usr = await userRepo.findById(decoded.userId);
+        if (usr && usr.status === 'suspended') {
+          return res.status(403).json({
+            success: false,
+            error: {
+              message: 'Your account has been suspended as part of a Business Continuity transfer. Please contact your administrator.',
               code: 'POSITION_TRANSFERRED'
             }
           });

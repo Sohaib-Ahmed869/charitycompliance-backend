@@ -93,8 +93,6 @@ export class MeetingService {
       attendees: meetingData.attendees || [],
       external_attendees: meetingData.external_attendees || [],
       status: 'scheduled',
-      recurrence_rule: meetingData.recurrence_rule || 'none',
-      recurrence_series_id: meetingData.recurrence_series_id || null,
       board_meeting_info: meetingData.board_meeting_info || null,
       general_meeting_info: meetingData.general_meeting_info || null,
       resolution_meeting_info: meetingData.resolution_meeting_info || null
@@ -102,149 +100,103 @@ export class MeetingService {
 
     logInfo('Meeting created', { meetingId: meeting._id, type: meetingData.meeting_type, createdBy });
 
-    if (meeting.meeting_type === 'board_trustee' && (meeting.recurrence_rule === 'monthly' || meeting.recurrence_rule === 'quarterly')) {
-      await meetingRepo.update(meeting._id, { recurrence_series_id: meeting._id });
-      meeting.recurrence_series_id = meeting._id;
-    }
-
-    // Send notifications and emails in background so API can return immediately and the modal can close
+    // Send notifications and emails to attendees
     const hasInternalAttendees = meeting.attendees && meeting.attendees.length > 0;
     const hasExternalAttendees = meeting.external_attendees && meeting.external_attendees.length > 0;
-
+    
     if (hasInternalAttendees || hasExternalAttendees) {
-      const meetingId = meeting._id;
-      const tenantDbRef = tenantDb;
-      const runInBackground = async () => {
-        try {
-          const notificationRepoBg = new NotificationRepository(tenantDbRef);
-          const creatorUser = await userRepo.findById(createdBy);
-          const creatorName = creatorUser ? `${creatorUser.first_name || ''} ${creatorUser.last_name || ''}`.trim() : 'Someone';
+      try {
+        // Get creator info
+        const creatorUser = await userRepo.findById(createdBy);
+        const creatorName = creatorUser ? `${creatorUser.first_name || ''} ${creatorUser.last_name || ''}`.trim() : 'Someone';
 
-          const attendeeUserIds = meeting.attendees.map(a => a.user_id).filter(Boolean);
-          const attendeeUsers = [];
-          for (const userId of attendeeUserIds) {
-            const user = await userRepo.findById(userId);
-            if (user) attendeeUsers.push(user);
-          }
+        // Get all internal attendee user IDs
+        const attendeeUserIds = meeting.attendees.map(a => a.user_id).filter(Boolean);
 
-          const internalNames = attendeeUsers.map(u => `${u.first_name || ''} ${u.last_name || ''}`.trim()).filter(Boolean);
-          const externalNames = (meeting.external_attendees || []).map(ea => ea.name).filter(Boolean);
-          const attendeeNames = [...internalNames, ...externalNames];
+        // Fetch all internal attendee users
+        const attendeeUsers = [];
+        for (const userId of attendeeUserIds) {
+          const user = await userRepo.findById(userId);
+          if (user) attendeeUsers.push(user);
+        }
 
-          const notifications = attendeeUserIds.map(uid => ({
-            user_id: uid,
-            type: 'meeting_invitation',
-            title: 'Meeting Invitation',
-            message: `You've been invited to "${meeting.title}" on ${new Date(meeting.date).toLocaleDateString()}`,
-            link: `/meetings/${meetingId}`,
-            related_entity_id: meetingId,
-            related_entity_type: 'meeting'
-          }));
+        // Get all attendee names for email (internal + external)
+        const internalNames = attendeeUsers.map(u => `${u.first_name || ''} ${u.last_name || ''}`.trim()).filter(Boolean);
+        const externalNames = (meeting.external_attendees || []).map(ea => ea.name).filter(Boolean);
+        const attendeeNames = [...internalNames, ...externalNames];
 
-          if (notifications.length > 0) {
-            await notificationRepoBg.createMany(notifications);
-            logInfo('Meeting notifications created', { meetingId, count: notifications.length });
-          }
+        // Create notifications for all attendees
+        const notifications = attendeeUserIds.map(userId => ({
+          user_id: userId,
+          type: 'meeting_invitation',
+          title: 'Meeting Invitation',
+          message: `You've been invited to "${meeting.title}" on ${new Date(meeting.date).toLocaleDateString()}`,
+          link: `/meetings/${meeting._id}`,
+          related_entity_id: meeting._id,
+          related_entity_type: 'meeting'
+        }));
 
-          const agenda = meetingData.agenda || [];
-          for (const user of attendeeUsers) {
-            if (user.email) {
-              try {
-                await emailService.sendMeetingInvitationEmail({
-                  to: user.email,
-                  recipientName: `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Team Member',
-                  meetingTitle: meeting.title,
-                  meetingDate: meeting.date,
-                  durationMinutes: meeting.duration_minutes,
-                  location: meeting.location,
-                  meetingLink: meeting.meeting_link,
-                  agenda,
-                  attendeeNames,
-                  organizerName: creatorName,
-                  meetingId: meetingId.toString()
-                });
-              } catch (emailErr) {
-                logError('Failed to send meeting invitation email', emailErr, { userId: user._id });
-              }
+        if (notifications.length > 0) {
+          await notificationRepo.createMany(notifications);
+          logInfo('Meeting notifications created', { meetingId: meeting._id, count: notifications.length });
+        }
+
+        // Send emails to internal attendees
+        const agenda = meetingData.agenda || [];
+        for (const user of attendeeUsers) {
+          if (user.email) {
+            try {
+              await emailService.sendMeetingInvitationEmail({
+                to: user.email,
+                recipientName: `${user.first_name || ''} ${user.last_name || ''}`.trim() || 'Team Member',
+                meetingTitle: meeting.title,
+                meetingDate: meeting.date,
+                durationMinutes: meeting.duration_minutes,
+                location: meeting.location,
+                meetingLink: meeting.meeting_link,
+                agenda,
+                attendeeNames,
+                organizerName: creatorName,
+                meetingId: meeting._id.toString()
+              });
+            } catch (emailErr) {
+              logError('Failed to send meeting invitation email', emailErr, { userId: user._id });
             }
           }
-
-          for (const extAttendee of (meeting.external_attendees || [])) {
-            if (extAttendee.email) {
-              try {
-                const result = await emailService.sendMeetingInvitationEmail({
-                  to: extAttendee.email,
-                  recipientName: extAttendee.name || 'Guest',
-                  meetingTitle: meeting.title,
-                  meetingDate: meeting.date,
-                  durationMinutes: meeting.duration_minutes,
-                  location: meeting.location,
-                  meetingLink: meeting.meeting_link,
-                  agenda,
-                  attendeeNames,
-                  organizerName: creatorName,
-                  meetingId: meetingId.toString(),
-                  isExternal: true
-                });
-                if (result?.skipped) {
-                  logInfo('Meeting invitation email skipped for external attendee', {
-                    meetingId,
-                    email: extAttendee.email,
-                    reason: result.reason || 'unknown'
-                  });
-                } else {
-                  logInfo('Meeting invitation email sent to external attendee', { meetingId, email: extAttendee.email });
-                }
-              } catch (emailErr) {
-                logError('Failed to send meeting invitation email to external attendee', emailErr, {
-                  email: extAttendee.email
-                });
-              }
+        }
+        
+        // Send emails to external attendees
+        for (const extAttendee of (meeting.external_attendees || [])) {
+          if (extAttendee.email) {
+            try {
+              await emailService.sendMeetingInvitationEmail({
+                to: extAttendee.email,
+                recipientName: extAttendee.name || 'Guest',
+                meetingTitle: meeting.title,
+                meetingDate: meeting.date,
+                durationMinutes: meeting.duration_minutes,
+                location: meeting.location,
+                meetingLink: meeting.meeting_link,
+                agenda,
+                attendeeNames,
+                organizerName: creatorName,
+                meetingId: meeting._id.toString(),
+                isExternal: true
+              });
+              logInfo('Meeting invitation email sent to external attendee', { 
+                meetingId: meeting._id, 
+                email: extAttendee.email 
+              });
+            } catch (emailErr) {
+              logError('Failed to send meeting invitation email to external attendee', emailErr, { 
+                email: extAttendee.email 
+              });
             }
           }
-        } catch (notifyErr) {
-          logError('Failed to send meeting notifications', notifyErr, { meetingId });
         }
-      };
-      runInBackground().catch((err) => logError('Background meeting notifications/emails error', err, { meetingId: meeting._id }));
-    }
-
-    // Board/Trustee recurring: generate upcoming instances so they show for all
-    if (meeting.meeting_type === 'board_trustee' && meeting.recurrence_rule && meeting.recurrence_rule !== 'none') {
-      const seriesId = meeting._id;
-      const runGenerate = async () => {
-        try {
-          const meetingRepoBg = new MeetingRepository(tenantDb);
-          const baseDate = new Date(meeting.date);
-          const count = meeting.recurrence_rule === 'monthly' ? 11 : 3;
-          const addMonths = meeting.recurrence_rule === 'monthly' ? 1 : 3;
-          for (let i = 1; i <= count; i++) {
-            const nextDate = new Date(baseDate);
-            nextDate.setMonth(nextDate.getMonth() + addMonths * i);
-            await meetingRepoBg.create({
-              org_id: meeting.org_id,
-              created_by: createdBy,
-              meeting_type: 'board_trustee',
-              title: meeting.title,
-              description: meeting.description,
-              date: nextDate,
-              duration_minutes: meeting.duration_minutes || 60,
-              location: meeting.location,
-              meeting_link: meeting.meeting_link,
-              attendees: meeting.attendees || [],
-              external_attendees: meeting.external_attendees || [],
-              status: 'scheduled',
-              recurrence_rule: meeting.recurrence_rule,
-              recurrence_series_id: seriesId,
-              board_meeting_info: meeting.board_meeting_info || meetingData.board_meeting_info || null
-            });
-          }
-          logInfo('Recurring board meeting instances generated', { seriesId, count, rule: meeting.recurrence_rule });
-        } catch (err) {
-          logError('Generate recurring meeting instances failed', err, { meetingId: meeting._id });
-        }
-      };
-      runGenerate().catch((e) => logError('Recurring instances error', e, { meetingId: meeting._id }));
+      } catch (notifyErr) {
+        logError('Failed to send meeting notifications', notifyErr, { meetingId: meeting._id });
+      }
     }
 
     return meeting;

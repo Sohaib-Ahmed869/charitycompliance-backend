@@ -358,6 +358,16 @@ export class AuthService {
         throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
       }
 
+      // Block login if user account is suspended (set during BCP authority transfer)
+      if (!user.is_org_owner && user.status === 'suspended') {
+        logWarn('Login blocked - user account suspended (BCP transfer)', { userId: user._id, orgId });
+        throw new AppError(
+          'Your account has been suspended as part of a Business Continuity transfer. Please contact your administrator.',
+          403,
+          'POSITION_TRANSFERRED'
+        );
+      }
+
       // Check if all of this user's positions have been transferred
       if (!user.is_org_owner) {
         try {
@@ -513,19 +523,33 @@ export class AuthService {
 
       const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
       const boardMemberRepo = new BoardMemberRepository(tenantDb);
-      const boardMember = await boardMemberRepo.findByUserId(userObj._id, org._id);
-      if (boardMember) {
-        responseUser.position = boardMember.custom_position_title || boardMember.position || null;
-        if (boardMember.profile_picture_key) {
+
+      // Get ALL active board_member records (user may hold multiple positions after BCP transfer)
+      const allBoardMembers = await boardMemberRepo.findAllActiveByUserId(userObj._id, org._id);
+      if (allBoardMembers && allBoardMembers.length > 0) {
+        // Primary position = first record (original position)
+        const primaryBm = allBoardMembers[0];
+        responseUser.position = primaryBm.custom_position_title || primaryBm.position || null;
+
+        // All positions array for sidebar display
+        responseUser.positions = allBoardMembers.map(bm => ({
+          id: bm.position_id?.toString?.() || bm.position_id,
+          title: bm.custom_position_title || bm.position || 'Position'
+        }));
+
+        // Profile picture from any board_member that has one
+        const bmWithPic = allBoardMembers.find(bm => bm.profile_picture_key);
+        if (bmWithPic) {
           try {
             const { getFileUrl } = await import('../services/s3Service.js');
-            responseUser.profile_picture_url = await getFileUrl(boardMember.profile_picture_key, 604800);
+            responseUser.profile_picture_url = await getFileUrl(bmWithPic.profile_picture_key, 604800);
           } catch (err) {
             logError('Failed to resolve profile picture URL', err, { userId: userObj._id });
           }
         }
       } else if (userObj.is_org_owner) {
         responseUser.position = 'Admin';
+        responseUser.positions = [{ id: null, title: 'Admin' }];
         const userProfileKey = rawUser.profile_picture_key;
         if (userProfileKey) {
           try {

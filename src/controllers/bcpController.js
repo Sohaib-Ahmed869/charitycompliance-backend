@@ -7,6 +7,11 @@
 import { BcpService } from '../services/bcpService.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
+import { getTenantConnection } from '../db/connectionManager.js';
+import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
+import { OrganizationRepository } from '../repositories/organizationRepository.js';
+import { getMasterKeyHex } from '../config/encryption.js';
+import { decryptBoardMemberFields } from '../utils/decryptBoardMember.js';
 
 // ==================== EMERGENCY TEAM ====================
 
@@ -337,6 +342,43 @@ export const getAuthorityTransfers = asyncHandler(async (req, res) => {
   const bcpService = new BcpService(req.orgId);
   const transfers = await bcpService.getAuthorityTransfers(req.query);
 
+  // Resolve person names from board_members
+  // (User model fields are encrypted; .lean() skips decryptor getters)
+  try {
+    const tenantDb = await getTenantConnection(req.orgId);
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (org) {
+      const bmRepo = new BoardMemberRepository(tenantDb);
+      const boardMembers = await bmRepo.findByOrgId(org._id, true); // includeInactive=true so transferred users still resolve
+      const keyHex = getMasterKeyHex();
+
+      // Build user_id → person name map (primary) and position_id → person name map (fallback)
+      const userNameMap = new Map();
+      const posNameMap = new Map();
+      for (const bm of boardMembers) {
+        const plain = bm.toObject ? bm.toObject() : { ...bm };
+        if (keyHex) decryptBoardMemberFields(plain, keyHex);
+        const name = `${plain.given_names || ''} ${plain.family_name || ''}`.trim();
+        if (!name) continue;
+        if (bm.user_id) userNameMap.set(bm.user_id.toString(), name);
+        if (bm.position_id && bm.is_active) posNameMap.set(bm.position_id.toString(), name);
+      }
+
+      for (const t of transfers) {
+        // Try user_id first (accurate), then fall back to position_id
+        const fromUserId = t.from_user_id?._id?.toString() || t.from_user_id?.toString();
+        const toUserId = t.to_user_id?._id?.toString() || t.to_user_id?.toString();
+        const fromPosId = t.from_position_id?._id?.toString() || t.from_position_id?.toString();
+        const toPosId = t.to_position_id?._id?.toString() || t.to_position_id?.toString();
+        t.from_person_name = (fromUserId && userNameMap.get(fromUserId)) || posNameMap.get(fromPosId) || null;
+        t.to_person_name = (toUserId && userNameMap.get(toUserId)) || posNameMap.get(toPosId) || null;
+      }
+    }
+  } catch (_) {
+    // Non-fatal: names will fall back to '—' in the UI
+  }
+
   res.json({ success: true, data: transfers });
 });
 
@@ -377,6 +419,13 @@ export const approveAuthorityTransfer = asyncHandler(async (req, res) => {
 export const updateAuthorityTransfer = asyncHandler(async (req, res) => {
   const bcpService = new BcpService(req.orgId);
   const transfer = await bcpService.updateAuthorityTransfer(req.params.transferId, req.body);
+
+  res.json({ success: true, data: transfer });
+});
+
+export const revokeAuthorityTransfer = asyncHandler(async (req, res) => {
+  const bcpService = new BcpService(req.orgId);
+  const transfer = await bcpService.revokeAuthorityTransfer(req.params.transferId, req.user.userId);
 
   res.json({ success: true, data: transfer });
 });

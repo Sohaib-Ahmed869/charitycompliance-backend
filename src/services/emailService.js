@@ -197,63 +197,35 @@ class EmailService {
     if (this.initFailed && this.lastInitAttempt) {
       const timeSinceLastAttempt = Date.now() - this.lastInitAttempt;
       if (timeSinceLastAttempt < 5 * 60 * 1000) {
-        logInfo('SMTP init skipped - cooldown after previous failure', {
-          secondsRemaining: Math.ceil((5 * 60 * 1000 - timeSinceLastAttempt) / 1000)
-        });
         return; // Skip re-init, still in cooldown
       }
     }
 
     this.lastInitAttempt = Date.now();
 
-    const smtpHost = process.env.SMTP_HOST;
-    const smtpPort = parseInt(process.env.SMTP_PORT) || 587;
-    const connTimeout = parseInt(process.env.SMTP_VERIFY_TIMEOUT_MS) || 20000;
-
-    logInfo('SMTP connection attempt', {
-      host: smtpHost,
-      port: smtpPort,
-      user: process.env.EMAIL_USER,
-      secure: smtpPort === 465,
-      timeoutMs: connTimeout
-    });
-
     try {
-      const socketTimeout = parseInt(process.env.SMTP_SOCKET_TIMEOUT_MS) || 60000;
       this.transporter = nodemailer.createTransport({
-        host: smtpHost,
-        port: smtpPort,
-        secure: smtpPort === 465,
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT) || 587,
+        secure: process.env.SMTP_PORT === '465', // true for 465, false for other ports
         auth: {
           user: process.env.EMAIL_USER,
           pass: process.env.EMAIL_PASS
         },
-        connectionTimeout: connTimeout,
-        greetingTimeout: connTimeout,
-        socketTimeout
+        connectionTimeout: 10000, // 10s - don't hang on bad SMTP config
+        greetingTimeout: 10000
       });
 
-      // Verify connection (with timeout - avoid hanging on unreachable SMTP).
-      // Set SMTP_SKIP_VERIFY=true to skip verify and try sending anyway (helps when Gmail verify is slow).
-      const skipVerify = process.env.SMTP_SKIP_VERIFY === 'true' || process.env.SMTP_SKIP_VERIFY === '1';
-      if (!skipVerify) {
-        await Promise.race([
-          this.transporter.verify(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP verify timeout')), connTimeout))
-        ]);
-      } else {
-        logInfo('SMTP verify skipped (SMTP_SKIP_VERIFY=true)', { host: smtpHost, port: smtpPort });
-      }
+      // Verify connection (with timeout - avoid hanging on unreachable SMTP)
+      await Promise.race([
+        this.transporter.verify(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP verify timeout')), 10000))
+      ]);
       this.initialized = true;
       this.initFailed = false;
-      logInfo('SMTP connection verified successfully', { host: smtpHost, port: smtpPort });
+      logInfo('Email service initialized successfully');
     } catch (error) {
-      logError('SMTP connection failed', error, {
-        host: smtpHost,
-        port: smtpPort,
-        timeoutMs: connTimeout,
-        errorType: error?.message === 'SMTP verify timeout' ? 'timeout' : 'connection_error'
-      });
+      logError('Failed to initialize email service', error);
       this.initFailed = true;
       throw error;
     }
@@ -279,7 +251,7 @@ class EmailService {
         await this.initialize();
       } catch (initError) {
         logError('Email skipped - initialization failed', initError, { to, subject });
-        logInfo('SMTP config at failure', {
+        logError('SMTP config at failure', {
           SMTP_HOST: process.env.SMTP_HOST,
           SMTP_PORT: process.env.SMTP_PORT,
           EMAIL_USER: process.env.EMAIL_USER,
@@ -291,8 +263,8 @@ class EmailService {
 
     // If still not initialized after attempt (config missing, cooldown, etc.)
     if (!this.initialized) {
-      logError('Email skipped - service not available', new Error('SMTP not initialized'), { to, subject });
-      logInfo('SMTP config at unavailable', {
+      logError('Email skipped - service not available', { to, subject });
+      logError('SMTP config at unavailable', {
         SMTP_HOST: process.env.SMTP_HOST,
         SMTP_PORT: process.env.SMTP_PORT,
         EMAIL_USER: process.env.EMAIL_USER,
@@ -310,7 +282,7 @@ class EmailService {
         text: text || html.replace(/<[^>]*>/g, '') // Strip HTML for text version
       };
 
-      const sendTimeout = parseInt(process.env.SMTP_SEND_TIMEOUT_MS) || 60000;
+      const sendTimeout = parseInt(process.env.SMTP_SEND_TIMEOUT_MS) || 30000;
       const result = await Promise.race([
         this.transporter.sendMail(mailOptions),
         new Promise((_, reject) => setTimeout(() => reject(new Error(`SMTP send timeout (${sendTimeout / 1000}s)`)), sendTimeout))
@@ -543,60 +515,6 @@ class EmailService {
       buttonText: 'View Meeting Notes',
       buttonLink: viewMeetingLink,
       infoBoxLines: ["Stay updated with the latest meeting notes."]
-    });
-
-    return this.sendEmail({ to, subject, html });
-  }
-  /**
-   * Send authority transfer notification emails to both from-user and to-user
-   */
-  async sendAuthorityTransferEmail({ to, recipientName, isFromUser, positionTitle, otherPersonName, transferCode, effectiveDate }) {
-    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const bcpLink = `${baseUrl}/bcp`;
-
-    const formattedDate = effectiveDate
-      ? new Date(effectiveDate).toLocaleDateString('en-AU', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
-      : 'Effective immediately';
-
-    const subject = isFromUser
-      ? `Authority Transfer – Your ${positionTitle} Responsibilities Have Been Transferred`
-      : `Authority Transfer – You Have Been Assigned the ${positionTitle} Role`;
-
-    const bodyHtml = isFromUser
-      ? `
-        <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
-        <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">This is to inform you that your responsibilities for the <strong>${positionTitle}</strong> position have been transferred to <strong>${otherPersonName}</strong>.</p>
-        <div style="background: #FEF3C7; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
-          <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #92400E;">Position Privileges Revoked</p>
-          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #78350F;"><strong>Position:</strong> ${positionTitle}</p>
-          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #78350F;"><strong>Transferred to:</strong> ${otherPersonName}</p>
-          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #78350F;"><strong>Effective:</strong> ${formattedDate}</p>
-          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #78350F;"><strong>Transfer Code:</strong> ${transferCode}</p>
-        </div>
-        <p style="margin: 16px 0 0 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Your access to workflows and approvals associated with this position has been revoked. Please contact your administrator if you have any questions.</p>
-      `
-      : `
-        <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
-        <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">You have been assigned the responsibilities of the <strong>${positionTitle}</strong> position, previously held by <strong>${otherPersonName}</strong>.</p>
-        <div style="background: #D1FAE5; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
-          <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #065F46;">New Role Assigned</p>
-          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #064E3B;"><strong>Position:</strong> ${positionTitle}</p>
-          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #064E3B;"><strong>Previously held by:</strong> ${otherPersonName}</p>
-          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #064E3B;"><strong>Effective:</strong> ${formattedDate}</p>
-          <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #064E3B;"><strong>Transfer Code:</strong> ${transferCode}</p>
-        </div>
-        <p style="margin: 16px 0 0 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Any trainings and policy acknowledgements associated with this role have been assigned to you. Please complete them at your earliest convenience.</p>
-      `;
-
-    const html = buildEmailTemplate({
-      heading: isFromUser ? 'Authority Transferred' : 'New Role Assigned',
-      headingHighlight: isFromUser ? 'Authority' : 'New',
-      bodyHtml,
-      buttonText: 'View Business Continuity',
-      buttonLink: bcpLink,
-      infoBoxLines: isFromUser
-        ? ["Your position privileges have been transferred as part of the Business Continuity Plan.", "Contact your administrator if you believe this is an error."]
-        : ["You now have new responsibilities under the Business Continuity Plan.", "Please review your assigned trainings and policies."]
     });
 
     return this.sendEmail({ to, subject, html });
