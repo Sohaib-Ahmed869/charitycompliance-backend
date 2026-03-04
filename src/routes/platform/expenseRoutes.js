@@ -9,11 +9,26 @@ import * as expenseController from '../../controllers/expenseController.js';
 import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { uploadSingle, handleUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
 
 // All expense routes require authentication and tenant resolution
 router.use(authAndResolveTenant);
+
+// Upload expense file to S3
+router.post(
+  '/upload',
+  uploadSingle,
+  handleUploadError,
+  expenseController.uploadExpenseFile
+);
+
+// Get signed URL for an expense file
+router.get(
+  '/file-url',
+  expenseController.getExpenseFileUrl
+);
 
 // Create expense
 router.post(
