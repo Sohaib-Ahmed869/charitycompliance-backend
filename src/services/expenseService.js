@@ -275,7 +275,8 @@ export class ExpenseService {
     }
 
     // Check if user is assigned to this expense
-    if (expense.assigned_to && expense.assigned_to.toString() !== userId.toString()) {
+    const assignedId = expense.assigned_to?._id || expense.assigned_to;
+    if (assignedId && assignedId.toString() !== userId.toString()) {
       throw new AppError('You are not assigned to process this payment', 403, 'UNAUTHORIZED');
     }
 
