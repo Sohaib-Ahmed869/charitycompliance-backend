@@ -411,7 +411,9 @@ export class BcpAuthorityTransferRepository {
     
     const workflowApproved = transfer.approvals.some(a => a.role === 'workflow' && a.approved);
     const trusteeApproved = transfer.approvals.some(a => a.role === 'trustee' && a.approved);
-    if (workflowApproved || !transfer.requires_trustee_approval || trusteeApproved) {
+    const hasAnyApproval = transfer.approvals.some(a => a.approved === true);
+    // Only activate if at least one approval is positive AND requirements are met
+    if (hasAnyApproval && (workflowApproved || (!transfer.requires_trustee_approval && hasAnyApproval) || trusteeApproved)) {
       await this.BcpAuthorityTransfer.findByIdAndUpdate(id, { status: 'active' });
       transfer.status = 'active';
     }

@@ -190,4 +190,9 @@ router.post('/transfers/:transferId/approve',
   bcpController.approveAuthorityTransfer
 );
 
+router.post('/transfers/:transferId/revoke',
+  param('transferId').isMongoId().withMessage('Invalid transfer ID'),
+  bcpController.revokeAuthorityTransfer
+);
+
 export default router;

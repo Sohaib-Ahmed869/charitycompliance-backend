@@ -136,7 +136,11 @@ const expenseSchema = new mongoose.Schema({
     serial_number: String,
     processor: String,
     ram: String,
-    storage: String
+    storage: String,
+    ownership_custodian: String,
+    acquisition_details: String,
+    evidence_attachment: String,
+    evidence_attachment_name: String
   },
   metadata: {
     type: mongoose.Schema.Types.Mixed

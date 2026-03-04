@@ -7,6 +7,7 @@
 import { ExpenseService } from '../services/expenseService.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
+import { uploadToS3, getFileUrl as s3GetFileUrl } from '../services/s3Service.js';
 
 export const createExpense = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
@@ -185,5 +186,56 @@ export const submitPaymentProof = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: expense
+  });
+});
+
+/**
+ * Upload a file for an expense (invoice, evidence, payment proof)
+ * Uploads to S3 and returns the S3 key
+ */
+export const uploadExpenseFile = asyncHandler(async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'FILE_REQUIRED', message: 'File is required' }
+    });
+  }
+
+  const orgId = req.orgId;
+  const { key } = await uploadToS3(
+    req.file.buffer,
+    req.file.originalname,
+    req.file.mimetype,
+    orgId,
+    'expenses'
+  );
+
+  res.json({
+    success: true,
+    data: {
+      key,
+      fileName: req.file.originalname,
+      size: req.file.size,
+      mimeType: req.file.mimetype
+    }
+  });
+});
+
+/**
+ * Get a signed URL to view/download an expense file
+ */
+export const getExpenseFileUrl = asyncHandler(async (req, res) => {
+  const { key } = req.query;
+  if (!key) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'KEY_REQUIRED', message: 'File key is required' }
+    });
+  }
+
+  const url = await s3GetFileUrl(key, 3600); // 1 hour expiry
+  res.json({
+    success: true,
+    data: { url }
   });
 });
