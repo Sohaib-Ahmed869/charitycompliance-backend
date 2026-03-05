@@ -29,7 +29,7 @@ router.post(
     body('category')
       .trim()
       .notEmpty()
-      .isIn(['Computer', 'Printer', 'Network', 'Server', 'Mobile', 'Furniture', 'Software', 'Other'])
+      .isIn(['Computer', 'Printer', 'Network', 'Server', 'Mobile', 'Furniture', 'Software', 'Hardware', 'Subscription', 'Domain', 'Cloud Service', 'Other'])
       .withMessage('Valid category is required'),
     body('type')
       .trim()
@@ -57,7 +57,7 @@ router.get(
       .withMessage('Invalid status'),
     query('category')
       .optional()
-      .isIn(['Computer', 'Printer', 'Network', 'Server', 'Mobile', 'Furniture', 'Software', 'Other'])
+      .isIn(['Computer', 'Printer', 'Network', 'Server', 'Mobile', 'Furniture', 'Software', 'Hardware', 'Subscription', 'Domain', 'Cloud Service', 'Other'])
       .withMessage('Invalid category'),
     query('assigned_to')
       .optional()
@@ -102,7 +102,7 @@ router.put(
       .withMessage('Asset name cannot be empty'),
     body('category')
       .optional()
-      .isIn(['Computer', 'Printer', 'Network', 'Server', 'Mobile', 'Furniture', 'Software', 'Other'])
+      .isIn(['Computer', 'Printer', 'Network', 'Server', 'Mobile', 'Furniture', 'Software', 'Hardware', 'Subscription', 'Domain', 'Cloud Service', 'Other'])
       .withMessage('Invalid category'),
     body('status')
       .optional()
