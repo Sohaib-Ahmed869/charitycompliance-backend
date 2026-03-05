@@ -519,7 +519,9 @@ export const getRegisterList = asyncHandler(async (req, res) => {
         trainingCompleted: totalCompleted,
         trainingTotal: totalRequired,
         lastActivity: lastActivity || null,
-        profile_picture_url
+        profile_picture_url,
+        wwcc_status: bm.wwcc?.status || 'not_uploaded',
+        police_check_status: bm.police_check?.status || 'not_uploaded'
       };
     })
   );
@@ -770,6 +772,8 @@ export const getPersonTrainingRecord = asyncHandler(async (req, res) => {
         role: bmObj.position || bmObj.custom_position_title || '—',
         category: categoryLabel
       },
+      wwcc: bmObj.wwcc || { status: 'not_uploaded' },
+      police_check: bmObj.police_check || { status: 'not_uploaded' },
       trainingStatus: records.length,
       records
     }

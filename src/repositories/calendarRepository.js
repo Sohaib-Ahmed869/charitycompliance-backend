@@ -12,6 +12,7 @@ import boardMemberSchema from '../db/schemas/platform/boardMemberSchema.js';
 import fundingAgreementSchema from '../db/schemas/platform/fundingAgreementSchema.js';
 import activitySchema from '../db/schemas/platform/activitySchema.js';
 import documentSchema from '../db/schemas/platform/documentSchema.js';
+import meetingSchema from '../db/schemas/platform/meetingSchema.js';
 
 export class CalendarRepository {
   constructor(tenantDb) {
@@ -25,6 +26,7 @@ export class CalendarRepository {
     this.FundingAgreement = tenantDb.models.FundingAgreement || tenantDb.model('FundingAgreement', fundingAgreementSchema);
     this.Activity = tenantDb.models.Activity || tenantDb.model('Activity', activitySchema);
     this.Document = tenantDb.models.Document || tenantDb.model('Document', documentSchema);
+    this.Meeting = tenantDb.models.Meeting || tenantDb.model('Meeting', meetingSchema);
   }
 
   /**
@@ -296,6 +298,31 @@ export class CalendarRepository {
     return await this.FundingAgreement.find(query)
       .select('_id agreement_title partner_name end_date')
       .sort({ end_date: 1 })
+      .lean();
+  }
+
+  /**
+   * Find meetings for calendar display
+   */
+  async findMeetings(orgId, options = {}) {
+    const query = {
+      org_id: orgId,
+      status: { $nin: ['cancelled'] }
+    };
+
+    if (options.start_date || options.end_date) {
+      query.date = {};
+      if (options.start_date) {
+        query.date.$gte = new Date(options.start_date);
+      }
+      if (options.end_date) {
+        query.date.$lte = new Date(options.end_date);
+      }
+    }
+
+    return await this.Meeting.find(query)
+      .select('_id title date duration_minutes location meeting_link meeting_type status attendees')
+      .sort({ date: 1 })
       .lean();
   }
 

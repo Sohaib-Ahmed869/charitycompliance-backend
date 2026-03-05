@@ -160,6 +160,36 @@ const boardMemberSchema = new mongoose.Schema({
     type: String,
     default: null,
     trim: true
+  },
+
+  /** Working With Children Check certificate */
+  wwcc: {
+    file_key: { type: String, default: null },
+    file_name: { type: String, default: null },
+    file_type: { type: String, default: null },
+    uploaded_at: { type: Date, default: null },
+    expiry_date: { type: Date, default: null },
+    card_number: { type: String, default: null, trim: true },
+    status: {
+      type: String,
+      enum: ['not_uploaded', 'valid', 'expired'],
+      default: 'not_uploaded'
+    }
+  },
+
+  /** Police Check certificate */
+  police_check: {
+    file_key: { type: String, default: null },
+    file_name: { type: String, default: null },
+    file_type: { type: String, default: null },
+    uploaded_at: { type: Date, default: null },
+    expiry_date: { type: Date, default: null },
+    certificate_number: { type: String, default: null, trim: true },
+    status: {
+      type: String,
+      enum: ['not_uploaded', 'valid', 'expired'],
+      default: 'not_uploaded'
+    }
   }
 }, {
   timestamps: true,

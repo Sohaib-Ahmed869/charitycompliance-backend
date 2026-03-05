@@ -8,6 +8,7 @@ import express from 'express';
 import * as boardMemberController from '../../controllers/boardMemberController.js';
 import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
+import { uploadSingle, handleUploadError } from '../../middleware/upload.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 
 const router = express.Router();
@@ -181,6 +182,54 @@ router.delete(
   ],
   validate,
   boardMemberController.deleteBoardMember
+);
+
+// ── WWCC upload / view / delete ──
+router.post(
+  '/:boardMemberId/wwcc',
+  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
+  validate,
+  uploadSingle,
+  handleUploadError,
+  boardMemberController.uploadWwcc
+);
+
+router.get(
+  '/:boardMemberId/wwcc/view',
+  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
+  validate,
+  boardMemberController.viewWwcc
+);
+
+router.delete(
+  '/:boardMemberId/wwcc',
+  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
+  validate,
+  boardMemberController.deleteWwcc
+);
+
+// ── Police Check upload / view / delete ──
+router.post(
+  '/:boardMemberId/police-check',
+  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
+  validate,
+  uploadSingle,
+  handleUploadError,
+  boardMemberController.uploadPoliceCheck
+);
+
+router.get(
+  '/:boardMemberId/police-check/view',
+  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
+  validate,
+  boardMemberController.viewPoliceCheck
+);
+
+router.delete(
+  '/:boardMemberId/police-check',
+  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
+  validate,
+  boardMemberController.deletePoliceCheck
 );
 
 export default router;

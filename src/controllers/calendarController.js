@@ -65,6 +65,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
   let boardMemberEvents = [];
   let fundingEvents = [];
   let documentEvents = [];
+  let meetingEvents = [];
 
   try {
     customEvents = await calendarRepo.findByUserId(userId, dateOptions);
@@ -162,6 +163,32 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
   }
   } // if (orgObjectId)
 
+  try {
+    // Get meetings (org-wide, visible to all members) - uses orgId slug, not ObjectId
+    const meetings = await calendarRepo.findMeetings(orgId, dateOptions);
+    meetingEvents = meetings.map(m => {
+      const typeLabel = { board_trustee: 'Board/Trustee', general: 'General', resolution: 'Resolution' }[m.meeting_type] || 'Meeting';
+      return {
+        id: m._id?.toString(),
+        _id: m._id,
+        title: `${typeLabel} Meeting: ${m.title}`,
+        date: toISODate(m.date) || m.date,
+        type: 'meeting',
+        description: m.location ? `Location: ${m.location}` : (m.meeting_link ? 'Online Meeting' : 'Meeting'),
+        is_custom: false,
+        source: 'meeting',
+        source_id: m._id,
+        duration_minutes: m.duration_minutes,
+        meeting_link: m.meeting_link,
+        meeting_type: m.meeting_type,
+        status: m.status
+      };
+    });
+    logInfo('Meeting events retrieved', { orgId, count: meetingEvents.length });
+  } catch (error) {
+    logError('Error retrieving meeting events', { orgId, error: error.message });
+  }
+
   // Combine all events - ensure dates are ISO strings for consistent frontend parsing
   const allEvents = [
     ...customEvents.map(e => ({
@@ -179,7 +206,8 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
     ...trainingEvents.map(t => ({ ...t, date: toISODate(t.date) || t.date })),
     ...boardMemberEvents,
     ...fundingEvents,
-    ...documentEvents
+    ...documentEvents,
+    ...meetingEvents
   ];
 
   // Sort by date

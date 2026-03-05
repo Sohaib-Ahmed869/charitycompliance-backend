@@ -13,7 +13,7 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
 import { AppError } from '../middleware/errorHandler.js';
 import emailService from '../services/emailService.js';
-import { getFileUrl } from '../services/s3Service.js';
+import { getFileUrl, uploadToS3 } from '../services/s3Service.js';
 import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 
@@ -481,4 +481,136 @@ export const updatePosition = asyncHandler(async (req, res) => {
       granted_permissions: updated.granted_permissions || []
     }
   });
+});
+
+// ─── WWCC Certificate ───────────────────────────────────────────────
+
+export const uploadWwcc = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+  if (!req.file) throw new AppError('No file uploaded', 400, 'NO_FILE');
+
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const member = await boardMemberRepo.findById(boardMemberId);
+  if (!member) throw new AppError('Board member not found', 404, 'NOT_FOUND');
+
+  const { buffer, originalname, mimetype } = req.file;
+  const { key } = await uploadToS3(buffer, originalname, mimetype, orgId, 'wwcc');
+
+  const expiryDate = req.body.expiry_date ? new Date(req.body.expiry_date) : null;
+  const cardNumber = req.body.card_number || null;
+
+  const wwccData = {
+    file_key: key,
+    file_name: originalname,
+    file_type: mimetype,
+    uploaded_at: new Date(),
+    expiry_date: expiryDate,
+    card_number: cardNumber,
+    status: expiryDate && expiryDate < new Date() ? 'expired' : 'valid'
+  };
+
+  await boardMemberRepo.update(boardMemberId, { wwcc: wwccData });
+
+  logInfo('WWCC certificate uploaded', { boardMemberId, orgId });
+
+  res.json({ success: true, data: wwccData });
+});
+
+export const viewWwcc = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const member = await boardMemberRepo.findById(boardMemberId);
+  if (!member) throw new AppError('Board member not found', 404, 'NOT_FOUND');
+  if (!member.wwcc?.file_key) throw new AppError('No WWCC certificate on file', 404, 'NO_FILE');
+
+  const url = await getFileUrl(member.wwcc.file_key, 3600);
+  res.json({ success: true, data: { url, file_name: member.wwcc.file_name, file_type: member.wwcc.file_type } });
+});
+
+export const deleteWwcc = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const member = await boardMemberRepo.findById(boardMemberId);
+  if (!member) throw new AppError('Board member not found', 404, 'NOT_FOUND');
+
+  await boardMemberRepo.update(boardMemberId, {
+    wwcc: { file_key: null, file_name: null, file_type: null, uploaded_at: null, expiry_date: null, card_number: null, status: 'not_uploaded' }
+  });
+
+  logInfo('WWCC certificate deleted', { boardMemberId, orgId });
+  res.json({ success: true, message: 'WWCC certificate removed' });
+});
+
+// ─── Police Check Certificate ────────────────────────────────────────
+
+export const uploadPoliceCheck = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+  if (!req.file) throw new AppError('No file uploaded', 400, 'NO_FILE');
+
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const member = await boardMemberRepo.findById(boardMemberId);
+  if (!member) throw new AppError('Board member not found', 404, 'NOT_FOUND');
+
+  const { buffer, originalname, mimetype } = req.file;
+  const { key } = await uploadToS3(buffer, originalname, mimetype, orgId, 'police-check');
+
+  const expiryDate = req.body.expiry_date ? new Date(req.body.expiry_date) : null;
+  const certificateNumber = req.body.certificate_number || null;
+
+  const policeData = {
+    file_key: key,
+    file_name: originalname,
+    file_type: mimetype,
+    uploaded_at: new Date(),
+    expiry_date: expiryDate,
+    certificate_number: certificateNumber,
+    status: expiryDate && expiryDate < new Date() ? 'expired' : 'valid'
+  };
+
+  await boardMemberRepo.update(boardMemberId, { police_check: policeData });
+
+  logInfo('Police check certificate uploaded', { boardMemberId, orgId });
+
+  res.json({ success: true, data: policeData });
+});
+
+export const viewPoliceCheck = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const member = await boardMemberRepo.findById(boardMemberId);
+  if (!member) throw new AppError('Board member not found', 404, 'NOT_FOUND');
+  if (!member.police_check?.file_key) throw new AppError('No police check certificate on file', 404, 'NO_FILE');
+
+  const url = await getFileUrl(member.police_check.file_key, 3600);
+  res.json({ success: true, data: { url, file_name: member.police_check.file_name, file_type: member.police_check.file_type } });
+});
+
+export const deletePoliceCheck = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const member = await boardMemberRepo.findById(boardMemberId);
+  if (!member) throw new AppError('Board member not found', 404, 'NOT_FOUND');
+
+  await boardMemberRepo.update(boardMemberId, {
+    police_check: { file_key: null, file_name: null, file_type: null, uploaded_at: null, expiry_date: null, certificate_number: null, status: 'not_uploaded' }
+  });
+
+  logInfo('Police check certificate deleted', { boardMemberId, orgId });
+  res.json({ success: true, message: 'Police check certificate removed' });
 });
