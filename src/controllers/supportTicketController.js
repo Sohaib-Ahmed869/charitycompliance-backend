@@ -8,6 +8,7 @@ import { SupportTicketService } from '../services/supportTicketService.js';
 import { asyncHandler, AppError } from '../middleware/errorHandler.js';
 import { logInfo, logError } from '../utils/logger.js';
 import { lookupTenant } from '../db/router.js';
+import { uploadToS3, getFileUrl } from '../services/s3Service.js';
 
 // Get all tickets
 export const getTickets = asyncHandler(async (req, res) => {
@@ -58,7 +59,20 @@ export const createTicket = asyncHandler(async (req, res) => {
     country_code: req.headers['cf-ipcountry'] || req.headers['x-country-code'] || req.body.country_code || null
   };
 
-  const ticket = await ticketService.createTicket(req.body, userId, geoInfo);
+  // Handle file upload to S3 if present
+  let attachment = null;
+  if (req.file) {
+    const { buffer, originalname, mimetype, size } = req.file;
+    const { key } = await uploadToS3(buffer, originalname, mimetype, orgId, 'support-tickets');
+    attachment = {
+      file_name: originalname,
+      file_path: key,
+      file_size: size,
+      mime_type: mimetype
+    };
+  }
+
+  const ticket = await ticketService.createTicket(req.body, userId, geoInfo, attachment);
 
   res.status(201).json({
     success: true,
@@ -99,6 +113,7 @@ export const createPublicTicket = asyncHandler(async (req, res) => {
     description: req.body.description,
     category: req.body.category || 'general',
     priority: req.body.priority || 'medium',
+    module: req.body.module || undefined,
     reporter_name: req.body.reporter_name,
     reporter_email: req.body.reporter_email
   }, null, geoInfo);
@@ -265,6 +280,28 @@ export const deleteTicket = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     message: 'Ticket deleted successfully'
+  });
+});
+
+// Get attachment download URL
+export const getAttachmentUrl = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { ticketId, attachmentIndex } = req.params;
+  const ticketService = new SupportTicketService(orgId);
+
+  const ticket = await ticketService.getTicketById(ticketId);
+  const idx = parseInt(attachmentIndex, 10);
+
+  if (!ticket.attachments || !ticket.attachments[idx]) {
+    throw new AppError('Attachment not found', 404, 'ATTACHMENT_NOT_FOUND');
+  }
+
+  const attachment = ticket.attachments[idx];
+  const url = await getFileUrl(attachment.file_path);
+
+  res.json({
+    success: true,
+    data: { url, file_name: attachment.file_name, mime_type: attachment.mime_type }
   });
 });
 

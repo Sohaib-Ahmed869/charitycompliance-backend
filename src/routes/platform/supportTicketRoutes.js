@@ -9,6 +9,7 @@ import * as supportTicketController from '../../controllers/supportTicketControl
 import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { uploadSingle, handleUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
 
@@ -51,12 +52,15 @@ router.post(
       .trim(),
     body('category')
       .optional()
-      .isIn(['general', 'technical', 'billing', 'account', 'feedback', 'other'])
+      .isIn(['technical_error', 'bug_report', 'feature_request', 'access_issue', 'data_issue', 'general', 'other', 'technical', 'billing', 'account', 'feedback'])
       .withMessage('Invalid category'),
     body('priority')
       .optional()
       .isIn(['low', 'medium', 'high', 'critical'])
-      .withMessage('Invalid priority')
+      .withMessage('Invalid priority'),
+    body('module')
+      .optional()
+      .trim()
   ],
   validate,
   supportTicketController.createPublicTicket
@@ -135,6 +139,8 @@ router.get(
 // Create ticket (authenticated user)
 router.post(
   '/',
+  uploadSingle,
+  handleUploadError,
   [
     body('summary')
       .trim()
@@ -149,8 +155,12 @@ router.post(
       .withMessage('Invalid priority'),
     body('category')
       .optional()
-      .isIn(['general', 'technical', 'billing', 'account', 'feedback', 'other'])
-      .withMessage('Invalid category')
+      .isIn(['technical_error', 'bug_report', 'feature_request', 'access_issue', 'data_issue', 'general', 'other',
+             'technical', 'billing', 'account', 'feedback'])
+      .withMessage('Invalid category'),
+    body('module')
+      .optional()
+      .trim()
   ],
   validate,
   supportTicketController.createTicket
@@ -177,7 +187,8 @@ router.put(
       .withMessage('Invalid priority'),
     body('category')
       .optional()
-      .isIn(['general', 'technical', 'billing', 'account', 'feedback', 'other'])
+      .isIn(['technical_error', 'bug_report', 'feature_request', 'access_issue', 'data_issue', 'general', 'other',
+             'technical', 'billing', 'account', 'feedback'])
       .withMessage('Invalid category')
   ],
   validate,
@@ -235,6 +246,21 @@ router.post(
   ],
   validate,
   supportTicketController.addComment
+);
+
+// Get attachment download URL
+router.get(
+  '/:ticketId/attachments/:attachmentIndex/download',
+  [
+    param('ticketId')
+      .isMongoId()
+      .withMessage('Invalid ticket ID'),
+    param('attachmentIndex')
+      .isInt({ min: 0 })
+      .withMessage('Invalid attachment index')
+  ],
+  validate,
+  supportTicketController.getAttachmentUrl
 );
 
 // Delete ticket

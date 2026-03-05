@@ -23,7 +23,7 @@ export class SupportTicketService {
   /**
    * Create a new support ticket
    */
-  async createTicket(ticketData, userId = null, geoInfo = null) {
+  async createTicket(ticketData, userId = null, geoInfo = null, attachment = null) {
     const tenantDb = await this.getTenantDb();
     const ticketRepo = new SupportTicketRepository(tenantDb);
 
@@ -45,16 +45,24 @@ export class SupportTicketService {
       reporter.country_code = geoInfo.country_code;
     }
 
-    const ticket = await ticketRepo.create({
+    const ticketPayload = {
       org_id: this.orgId,
       ticket_number: ticketNumber,
       summary: ticketData.summary,
       description: ticketData.description,
       priority: ticketData.priority || 'medium',
       category: ticketData.category || 'general',
+      module: ticketData.module || null,
       reporter,
       status: 'new'
-    });
+    };
+
+    // Add attachment if provided
+    if (attachment) {
+      ticketPayload.attachments = [attachment];
+    }
+
+    const ticket = await ticketRepo.create(ticketPayload);
 
     logInfo('Support ticket created', { ticketId: ticket._id, ticketNumber });
 
