@@ -118,6 +118,18 @@ router.get(
   approvalController.getApprovalRequestById
 );
 
+// Download approval workflow PDF
+router.get(
+  '/:approvalRequestId/download-pdf',
+  [
+    param('approvalRequestId')
+      .isMongoId()
+      .withMessage('Invalid approval request ID')
+  ],
+  validate,
+  approvalController.downloadApprovalPDF
+);
+
 // Upload acknowledgement files
 router.post(
   '/upload-acknowledgement',
