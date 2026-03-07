@@ -5,10 +5,12 @@
  */
 
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 import { getTenantConnection } from '../db/connectionManager.js';
 import { getMasterKeyHex } from '../config/encryption.js';
 import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { OnboardingProgressRepository } from '../repositories/onboardingProgressRepository.js';
+import { UserRepository } from '../repositories/userRepository.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
 import { AppError } from '../middleware/errorHandler.js';
@@ -109,7 +111,7 @@ export const createBoardMember = asyncHandler(async (req, res) => {
   }
 
   const orgId = req.orgId;
-  const { invite, system_access, is_volunteer, ...boardMemberData } = req.body;
+  const { invite, system_access, is_volunteer, password, ...boardMemberData } = req.body;
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
   const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
@@ -173,6 +175,48 @@ export const createBoardMember = asyncHandler(async (req, res) => {
         orgId
       });
       // Don't fail the request if email fails - board member is still created
+    }
+  }
+
+  // Manual mode: create user with password directly (no invite email)
+  if (!invite && password && system_access !== false && boardMemberData.email) {
+    try {
+      const userRepo = new UserRepository(tenantDb);
+      const existing = await userRepo.findByEmail(boardMemberData.email);
+      if (existing) {
+        // Link existing user
+        await boardMemberRepo.update(boardMember._id, {
+          user_id: existing._id,
+          invitation_status: 'accepted',
+          invitation_accepted_at: new Date(),
+          has_system_access: true
+        });
+        logInfo('Board member linked to existing user (manual)', { boardMemberId: boardMember._id, userId: existing._id, orgId });
+      } else {
+        const SALT_ROUNDS = 12;
+        const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
+        const newUser = await userRepo.create({
+          email: boardMemberData.email,
+          password_hash,
+          first_name: boardMemberData.given_names,
+          last_name: boardMemberData.family_name,
+          status: 'active'
+        });
+        await boardMemberRepo.update(boardMember._id, {
+          user_id: newUser._id,
+          invitation_status: 'accepted',
+          invitation_accepted_at: new Date(),
+          has_system_access: true
+        });
+        logInfo('Board member user created manually', { boardMemberId: boardMember._id, userId: newUser._id, orgId });
+      }
+    } catch (userError) {
+      logError('Failed to create user for board member (manual)', userError, {
+        boardMemberId: boardMember._id,
+        email: boardMemberData.email,
+        orgId
+      });
+      // Board member is still created, but user creation failed
     }
   }
 
