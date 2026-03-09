@@ -103,6 +103,7 @@ import supportTicketRoutes from './routes/platform/supportTicketRoutes.js';
 import bcpRoutes from './routes/platform/bcpRoutes.js';
 import legalDocumentRoutes from './routes/platform/legalDocumentRoutes.js';
 import dashboardRoutes from './routes/platform/dashboardRoutes.js';
+import chatbotRoutes from './routes/platform/chatbotRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -134,6 +135,7 @@ app.use('/api/v1/platform/support-tickets', supportTicketRoutes);
 app.use('/api/v1/platform/bcp', bcpRoutes);
 app.use('/api/v1/platform/legal-documents', legalDocumentRoutes);
 app.use('/api/v1/platform/dashboard', dashboardRoutes);
+app.use('/api/v1/platform/chatbot', chatbotRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {
