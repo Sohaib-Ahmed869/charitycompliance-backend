@@ -1092,3 +1092,61 @@ export const getWorkflowParticipants = asyncHandler(async (req, res) => {
     data: participants
   });
 });
+
+/**
+ * Download Approval Workflow PDF
+ * GET /platform/approvals/:approvalRequestId/download-pdf
+ */
+export const downloadApprovalPDF = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { approvalRequestId } = req.params;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const orgRepo = new OrganizationRepository(tenantDb);
+
+  const org = await orgRepo.findOne();
+  const logoUrl = org?.logo_url || process.env.LOGO || '';
+
+  // Fetch approval request with full population
+  const ApprovalRequest = tenantDb.models.ApprovalRequest;
+  const approvalRequest = await ApprovalRequest.findById(approvalRequestId)
+    .populate('submitted_by', 'first_name last_name email is_org_owner')
+    .populate('approval_matrix_id', 'name')
+    .populate('approval_steps.approver_user_id', 'first_name last_name email is_org_owner')
+    .populate('approval_steps.approver_position_id', 'title')
+    .populate('approval_steps.approver_department_id', 'name')
+    .populate('rejection_reviews.rejected_by', 'first_name last_name email is_org_owner')
+    .populate('rejection_reviews.forwarded_to', 'first_name last_name email is_org_owner')
+    .lean();
+
+  if (!approvalRequest) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Approval request not found' } });
+  }
+
+  // Fetch related entity
+  let expense = null;
+  let risk = null;
+  const entityId = approvalRequest.entity_id?.toString();
+
+  if (entityId) {
+    if (approvalRequest.entity_type === 'expense') {
+      const expenseSchema = (await import('../db/schemas/platform/expenseSchema.js')).default;
+      const Expense = tenantDb.models.Expense || tenantDb.model('Expense', expenseSchema);
+      expense = await Expense.findById(entityId).lean();
+    } else if (approvalRequest.entity_type === 'risk') {
+      const riskRepo = new RiskRepository(tenantDb);
+      risk = await riskRepo.findById(entityId);
+    }
+  }
+
+  const { generateApprovalPDF } = await import('../services/approvalPdfService.js');
+  const pdfBuffer = await generateApprovalPDF(approvalRequest, expense, risk, logoUrl);
+
+  const fileName = `approval_${approvalRequest.request_type || 'request'}_${approvalRequestId}_${Date.now()}.pdf`;
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+  res.setHeader('Content-Length', pdfBuffer.length);
+  res.send(pdfBuffer);
+});

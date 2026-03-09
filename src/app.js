@@ -22,7 +22,7 @@ const app = express();
 
 // CORS Configuration
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:5173'],
+  origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:5173','http://localhost:5174'],
   credentials: true,
   optionsSuccessStatus: 200
 };
@@ -102,6 +102,7 @@ import meetingRoutes from './routes/platform/meetingRoutes.js';
 import supportTicketRoutes from './routes/platform/supportTicketRoutes.js';
 import bcpRoutes from './routes/platform/bcpRoutes.js';
 import legalDocumentRoutes from './routes/platform/legalDocumentRoutes.js';
+import dashboardRoutes from './routes/platform/dashboardRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -132,6 +133,7 @@ app.use('/api/v1/platform/meetings', meetingRoutes);
 app.use('/api/v1/platform/support-tickets', supportTicketRoutes);
 app.use('/api/v1/platform/bcp', bcpRoutes);
 app.use('/api/v1/platform/legal-documents', legalDocumentRoutes);
+app.use('/api/v1/platform/dashboard', dashboardRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

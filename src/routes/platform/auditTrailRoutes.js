@@ -14,4 +14,7 @@ router.use(authAndResolveTenant);
 // Admin-only access (admins have *:* permission)
 router.get('/list', requirePermission('module:audit_trail:view'), auditTrailController.getAuditTrail);
 
+// Download audit trail PDF for a single request
+router.get('/download/:requestId', requirePermission('module:audit_trail:view'), auditTrailController.downloadAuditTrailPDF);
+
 export default router;

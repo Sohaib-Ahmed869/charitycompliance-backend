@@ -216,11 +216,18 @@ class EmailService {
         greetingTimeout: 10000
       });
 
-      // Verify connection (with timeout - avoid hanging on unreachable SMTP)
-      await Promise.race([
-        this.transporter.verify(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP verify timeout')), 10000))
-      ]);
+      // Verify connection — but don't block init on it.
+      // Gmail SMTP can be slow on cold connects; verify() is optional.
+      try {
+        await Promise.race([
+          this.transporter.verify(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('SMTP verify timeout')), 10000))
+        ]);
+        logInfo('Email service SMTP verify succeeded');
+      } catch (verifyErr) {
+        logInfo('Email service SMTP verify failed (non-fatal, will attempt sends anyway)', { error: verifyErr.message });
+      }
+
       this.initialized = true;
       this.initFailed = false;
       logInfo('Email service initialized successfully');
