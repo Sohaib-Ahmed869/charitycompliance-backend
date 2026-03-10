@@ -146,7 +146,7 @@ const policySchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['draft', 'active', 'under_review', 'expired'],
+      enum: ['draft', 'active', 'under_review', 'expired', 'resubmission_required'],
       default: 'draft',
       index: true
     },

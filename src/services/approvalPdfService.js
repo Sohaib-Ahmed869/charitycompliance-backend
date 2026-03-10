@@ -78,6 +78,7 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
     const page = await browser.newPage();
 
     const steps = approvalRequest.approval_steps || [];
+    const previousAttempts = approvalRequest.previous_attempts || [];
     const title = REQUEST_TYPE_LABELS[approvalRequest.request_type] || toTitleCase(approvalRequest.request_type) || 'Approval Request';
     const category = GOVERNANCE_LABELS[approvalRequest.request_type] || 'Compliance';
     const submittedBy = approvalRequest.submitted_by
@@ -161,7 +162,16 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
         notes += `<div style="margin-top:3px;font-size:9px;color:#3B82F6;">📝 ${esc(step.acknowledgement_note)}</div>`;
       }
       if (step.acknowledgement_files?.length) {
-        notes += `<div style="margin-top:3px;font-size:9px;color:#6366F1;">📎 ${step.acknowledgement_files.length} file${step.acknowledgement_files.length !== 1 ? 's' : ''}: ${step.acknowledgement_files.map(f => esc(f.name || 'file')).join(', ')}</div>`;
+        const filesHTML = step.acknowledgement_files
+          .map((f) => {
+            const name = esc(f.name || 'file');
+            const url = f.url;
+            return url
+              ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${name}</a>`
+              : name;
+          })
+          .join(', ');
+        notes += `<div style="margin-top:3px;font-size:9px;color:#6366F1;">📎 ${step.acknowledgement_files.length} file${step.acknowledgement_files.length !== 1 ? 's' : ''}: ${filesHTML}</div>`;
       }
 
       stepRows += `<tr>
@@ -184,11 +194,22 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
           : '—';
         const posTitle = step.approver_position_id?.title || '—';
 
+        let filesHTML = '—';
+        if (step.acknowledgement_files?.length) {
+          filesHTML = step.acknowledgement_files.map(f => {
+            const name = esc(f.name || 'file');
+            const url = f.url;
+            return url
+              ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${name}</a>`
+              : name;
+          }).join(', ');
+        }
+
         ackRows += `<tr>
           <td>${esc(approverName)}</td>
           <td>${esc(posTitle)}</td>
           <td style="font-size:9px;">${esc(step.acknowledgement_note || '—')}</td>
-          <td style="font-size:9px;">${step.acknowledgement_files?.length ? step.acknowledgement_files.map(f => esc(f.name || 'file')).join(', ') : '—'}</td>
+          <td style="font-size:9px;">${filesHTML}</td>
         </tr>`;
       });
 
@@ -197,6 +218,66 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
         <table>
           <thead><tr><th>Approver</th><th>Position</th><th>Note</th><th>Files</th></tr></thead>
           <tbody>${ackRows}</tbody>
+        </table>
+      `;
+    }
+    
+    // ── Attempt history ──
+    let attemptsHTML = '';
+    if (previousAttempts.length > 0) {
+      const attemptRows = [];
+
+      previousAttempts.forEach((attempt, idx) => {
+        const snapshot = Array.isArray(attempt.steps_snapshot) ? attempt.steps_snapshot : [];
+        const rejectedStep = snapshot.find(s => s.status === 'rejected');
+        const approvedOnly = snapshot.length > 0 && snapshot.every(s => s.status === 'approved');
+        const lastApproved = snapshot.filter(s => s.status === 'approved').slice(-1)[0] || null;
+
+        let outcome = 'In Progress';
+        let actor = '—';
+        let at = null;
+
+        if (rejectedStep) {
+          outcome = 'Declined';
+          actor = rejectedStep.approver_user_id
+            ? `${rejectedStep.approver_user_id.first_name || ''} ${rejectedStep.approver_user_id.last_name || ''}`.trim() || '—'
+            : '—';
+          at = rejectedStep.rejected_at;
+        } else if (approvedOnly && lastApproved) {
+          outcome = 'Approved';
+          actor = lastApproved.approver_user_id
+            ? `${lastApproved.approver_user_id.first_name || ''} ${lastApproved.approver_user_id.last_name || ''}`.trim() || '—'
+            : '—';
+          at = lastApproved.approved_at;
+        }
+
+        attemptRows.push(`<tr>
+          <td>Attempt ${attempt.attempt_number || idx + 1}</td>
+          <td>${esc(outcome)}</td>
+          <td>${esc(actor)}</td>
+          <td style="font-size:9px;">${at ? `${formatDate(at)} ${formatTime(at)}` : '—'}</td>
+        </tr>`);
+      });
+
+      const finalOutcome = toTitleCase(approvalRequest.status);
+      const lastStep = steps.slice().reverse().find(s => s.approved_at || s.rejected_at) || null;
+      const finalActor = lastStep?.approver_user_id
+        ? `${lastStep.approver_user_id.first_name || ''} ${lastStep.approver_user_id.last_name || ''}`.trim() || '—'
+        : '—';
+      const finalAt = lastStep?.approved_at || lastStep?.rejected_at || approvalRequest.completed_at;
+
+      attemptRows.push(`<tr>
+        <td>Attempt ${previousAttempts.length + 1}</td>
+        <td>${esc(finalOutcome)}</td>
+        <td>${esc(finalActor)}</td>
+        <td style="font-size:9px;">${finalAt ? `${formatDate(finalAt)} ${formatTime(finalAt)}` : '—'}</td>
+      </tr>`);
+
+      attemptsHTML = `
+        <h2>Attempt History</h2>
+        <table>
+          <thead><tr><th>Attempt</th><th>Outcome</th><th>By</th><th>Date</th></tr></thead>
+          <tbody>${attemptRows.join('')}</tbody>
         </table>
       `;
     }
@@ -323,7 +404,7 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
   </style>
 </head>
 <body>
-  <div class="container">
+    <div class="container">
     <div class="header">
       ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo" />` : ''}
       <h1>Approval Workflow Report</h1>
@@ -355,6 +436,7 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
       <tbody>${stepRows}</tbody>
     </table>
 
+    ${attemptsHTML}
     ${ackHTML}
 
     <div class="footer">

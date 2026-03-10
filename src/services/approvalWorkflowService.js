@@ -20,6 +20,7 @@ import { OrganizationRepository } from '../repositories/organizationRepository.j
 import { ProjectRegisterService } from './projectRegisterService.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
+import emailService from './emailService.js';
 
 export class ApprovalWorkflowService {
   constructor(orgId) {
@@ -655,6 +656,18 @@ export class ApprovalWorkflowService {
       throw new AppError(`This step is already ${step.status}`, 400, 'STEP_ALREADY_PROCESSED');
     }
 
+    // If there is a pending escalation for this step, block decisions until opinion is received
+    const hasPendingEscalation = (request.escalations || []).some(
+      (e) => e.step_index === stepIndex && e.status === 'pending'
+    );
+    if (hasPendingEscalation) {
+      throw new AppError(
+        'This step has a pending escalation. Wait for the opinion before approving or declining.',
+        400,
+        'STEP_ESCALATED_PENDING'
+      );
+    }
+
     // Verify user is authorized to approve this step (by user_id or position)
     const userPositionIds = await this._getUserPositionIds(userId);
     const canApprove = this._canUserApproveStep(step, userId, userPositionIds);
@@ -682,12 +695,16 @@ export class ApprovalWorkflowService {
     };
 
     // Add acknowledgement data if provided
+    console.log('[Approval] acknowledgement received:', JSON.stringify(acknowledgement));
     if (acknowledgement) {
       if (acknowledgement.note) {
         updateData.acknowledgement_note = acknowledgement.note;
       }
       if (acknowledgement.files && Array.isArray(acknowledgement.files) && acknowledgement.files.length > 0) {
         updateData.acknowledgement_files = acknowledgement.files;
+        console.log('[Approval] Saving acknowledgement_files:', acknowledgement.files.length, 'files');
+      } else {
+        console.log('[Approval] No files in acknowledgement. files field:', acknowledgement.files);
       }
     }
 
@@ -1018,9 +1035,9 @@ export class ApprovalWorkflowService {
 
     // Also get pending rejection reviews for this user
     const pendingRejectionReviews = await approvalRequestRepo.findPendingRejectionReviews(userId);
-    const rejectionReviewRequestIds = new Set(
-      pendingRejectionReviews.map(r => String(r._id))
-    );
+
+    // Also get approvals where user has a pending escalation (opinion requested)
+    const pendingEscalations = await approvalRequestRepo.findPendingEscalationsForUser(userId);
 
     // Filter to only show steps that are pending for this user
     const approvalRequests = requests.map(request => {
@@ -1055,19 +1072,31 @@ export class ApprovalWorkflowService {
     const existingRequestIds = new Set(approvalRequests.map(r => String(r._id)));
     const additionalRejectionReviews = pendingRejectionReviews
       .filter(r => !existingRequestIds.has(String(r._id)))
+      .map(request => {
+        existingRequestIds.add(String(request._id));
+        return {
+          ...request.toObject(),
+          can_approve: false, // User can't approve steps, but can review rejection
+          has_pending_rejection_review: true
+        };
+      });
+
+    // Add pending escalations (opinion requested) that aren't already in the list
+    const additionalEscalations = pendingEscalations
+      .filter(r => !existingRequestIds.has(String(r._id)))
       .map(request => ({
         ...request.toObject(),
-        can_approve: false, // User can't approve steps, but can review rejection
-        has_pending_rejection_review: true
+        can_approve: false,
+        has_pending_escalation: true
       }));
 
-    return [...approvalRequests, ...additionalRejectionReviews];
+    return [...approvalRequests, ...additionalRejectionReviews, ...additionalEscalations];
   }
 
   /**
    * Forward a rejection for review to another workflow participant
    */
-  async forwardRejectionForReview(approvalRequestId, stepIndex, rejectedBy, forwardToUserId, rejectionComments) {
+  async forwardRejectionForReview(approvalRequestId, stepIndex, rejectedBy, forwardToUserId, rejectionComments, acknowledgement = null) {
     const tenantDb = await this.getTenantDb();
     this._ensureTenantModels(tenantDb);
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
@@ -1105,6 +1134,13 @@ export class ApprovalWorkflowService {
       step_index: stepIndex,
       rejection_comments: rejectionComments,
       review_status: 'pending',
+      rejection_files: (acknowledgement?.files || []).map(f => ({
+        name: f.name || '',
+        size: f.size || 0,
+        file_type: f.type || f.file_type || '',
+        url: f.url || '',
+        key: f.key || ''
+      })),
       original_step_data: {
         level: step.level,
         approver_user_id: step.approver_user_id,
@@ -1140,6 +1176,129 @@ export class ApprovalWorkflowService {
     });
 
     return updatedRequest;
+  }
+
+  /**
+   * Escalate a step to another user for their opinion (comments/files) without changing approver
+   */
+  async escalateForOpinion(approvalRequestId, stepIndex, escalatedByUserId, escalateToUserId, comments, files = []) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const notificationRepo = new NotificationRepository(tenantDb);
+
+    const request = await approvalRequestRepo.findById(approvalRequestId);
+    if (!request) {
+      throw new AppError('Approval request not found', 404, 'APPROVAL_REQUEST_NOT_FOUND');
+    }
+
+    const steps = request.approval_steps || [];
+    if (!steps[stepIndex]) {
+      throw new AppError('Approval step not found', 404, 'APPROVAL_STEP_NOT_FOUND');
+    }
+
+    // Create escalation entry
+    const escalation = {
+      step_index: stepIndex,
+      escalated_by: escalatedByUserId,
+      escalated_to: escalateToUserId,
+      status: 'pending',
+      comments: null,
+      files: (files || []).map((f) => ({
+        name: f.name || '',
+        size: f.size || 0,
+        file_type: f.file_type || f.type || '',
+        url: f.url || '',
+        key: f.key || ''
+      })),
+      created_at: new Date(),
+      responded_at: null
+    };
+
+    const updated = await approvalRequestRepo.updateWithOps(approvalRequestId, {
+      $push: { escalations: escalation }
+    });
+
+    // Notify escalated user
+    try {
+      await notificationRepo.create({
+        user_id: escalateToUserId,
+        type: 'approval_pending',
+        title: 'Opinion requested on workflow',
+        message: 'A workflow approver has requested your input before they decide.',
+        link: `/approvals/${approvalRequestId}`,
+        related_entity_id: approvalRequestId,
+        related_entity_type: 'approval_request',
+        read: false,
+        created_at: new Date()
+      });
+    } catch (err) {
+      logError('Failed to create escalation notification', { error: err });
+    }
+
+    return updated;
+  }
+
+  /**
+   * Respond to an escalation (add opinion and optional files)
+   */
+  async respondToEscalation(approvalRequestId, escalationId, responderUserId, comments, files = []) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const notificationRepo = new NotificationRepository(tenantDb);
+
+    const request = await approvalRequestRepo.findById(approvalRequestId);
+    if (!request) {
+      throw new AppError('Approval request not found', 404, 'APPROVAL_REQUEST_NOT_FOUND');
+    }
+
+    const escalation = (request.escalations || []).id(escalationId);
+    if (!escalation) {
+      throw new AppError('Escalation not found', 404, 'ESCALATION_NOT_FOUND');
+    }
+
+    // Only the intended user can respond (handle both populated and unpopulated escalated_to)
+    const escalatedToId = escalation.escalated_to?._id || escalation.escalated_to;
+    if (!escalatedToId || String(escalatedToId) !== String(responderUserId)) {
+      throw new AppError('You are not authorized to respond to this escalation', 403, 'UNAUTHORIZED');
+    }
+
+    if (escalation.status === 'responded') {
+      throw new AppError('Escalation already responded to', 400, 'ESCALATION_ALREADY_RESPONDED');
+    }
+
+    escalation.status = 'responded';
+    escalation.comments = comments;
+    escalation.responded_at = new Date();
+    escalation.files = (files || []).map((f) => ({
+      name: f.name || '',
+      size: f.size || 0,
+      file_type: f.file_type || f.type || '',
+      url: f.url || '',
+      key: f.key || ''
+    }));
+
+    await request.save();
+
+    // Notify original approver that opinion is ready
+    try {
+      await notificationRepo.create({
+        user_id: escalation.escalated_by,
+        type: 'approval_pending',
+        title: 'Escalation response received',
+        message: 'The person you escalated to has added their opinion. You can now decide on the workflow.',
+        link: `/approvals/${approvalRequestId}`,
+        related_entity_id: approvalRequestId,
+        related_entity_type: 'approval_request',
+        read: false,
+        created_at: new Date()
+      });
+    } catch (err) {
+      logError('Failed to create escalation response notification', { error: err });
+    }
+
+    return request;
   }
 
   /**
@@ -1194,33 +1353,120 @@ export class ApprovalWorkflowService {
       reviewData
     );
 
-    // Clear current rejection review ID and update status
-    // Business rules:
-    // - accept_rejection -> resume workflow (back to pending)
-    // - reject_rejection -> workflow is rejected
-    const newStatus = reviewAction === 'accept_rejection' ? 'pending' : 'rejected';
+    if (reviewAction === 'accept_rejection') {
+      // Uphold decline: return to submitter for resubmission. Save current attempt to history.
+      const steps = request.approval_steps || [];
+      const stepsSnapshot = steps.map((s) => {
+        const plain = s.toObject ? s.toObject() : { ...s };
+        return plain;
+      });
+      const attemptNum = (request.previous_attempts?.length || 0) + 1;
 
-    await approvalRequestRepo.update(approvalRequestId, {
-      current_rejection_review_id: null,
-      status: newStatus
-    });
+      await approvalRequestRepo.updateWithOps(approvalRequestId, {
+        $set: {
+          current_rejection_review_id: null,
+          status: 'returned_for_resubmission'
+        },
+        $push: {
+          previous_attempts: {
+            attempt_number: attemptNum,
+            steps_snapshot: stepsSnapshot,
+            saved_at: new Date(),
+            reason: 'rejection_upheld'
+          }
+        }
+      });
+
+      // For policies: update policy status so it shows in Policies & Procedures
+      if (request.entity_type === 'policy') {
+        try {
+          const policyRepo = new PolicyRepository(tenantDb);
+          await policyRepo.update(request.entity_id, { status: 'resubmission_required' });
+          logInfo('Policy status updated to resubmission_required', { policyId: request.entity_id });
+        } catch (policyErr) {
+          logError('Failed to update policy status for resubmission', { error: policyErr });
+        }
+      }
+    } else {
+      // reject_rejection: Override decline — resume workflow at the same step (decliner's step goes back to pending)
+      const stepIndex = currentReview.step_index;
+      const steps = request.approval_steps || [];
+      const newSteps = steps.map((s, idx) => {
+        const plain = s.toObject ? s.toObject() : { ...s };
+        if (idx !== stepIndex) return plain;
+        return {
+          ...plain,
+          status: 'pending',
+          approved_at: null,
+          rejected_at: null,
+          rejection_reason: null,
+          comments: null,
+          acknowledgement_note: null,
+          acknowledgement_files: [],
+          ip_address: null,
+          user_agent: null
+        };
+      });
+      await approvalRequestRepo.update(approvalRequestId, {
+        current_rejection_review_id: null,
+        status: 'pending',
+        approval_steps: newSteps
+      });
+    }
 
     // Send notification back to original rejector
     try {
+      const submittedById = request.submitted_by?._id || request.submitted_by;
+      const approvalLink = `/approvals/${approvalRequestId}`;
+
       await notificationRepo.create({
-        org_id: request.org_id,
         user_id: currentReview.rejected_by,
-        type: 'approval',
+        type: 'workflow_rejected',
         title: reviewAction === 'accept_rejection'
           ? 'Rejection Accepted'
-          : 'Rejection Confirmed',
+          : 'Rejection Overridden',
         message: reviewAction === 'accept_rejection'
-          ? 'Your rejection has been reviewed and the workflow has resumed.'
-          : 'Your rejection has been reviewed and the request is now fully rejected.',
-        entity_type: request.entity_type,
-        entity_id: request.entity_id,
+          ? 'Your decline has been upheld. The submitter will edit and resubmit.'
+          : 'Your decline was overridden. The workflow has resumed.',
+        link: approvalLink,
+        related_entity_id: approvalRequestId,
+        related_entity_type: 'approval_request',
         created_at: new Date()
       });
+      if (reviewAction === 'accept_rejection') {
+        await notificationRepo.create({
+          user_id: submittedById,
+          type: 'returned_for_resubmission',
+          title: 'Returned for Resubmission',
+          message: 'Your request was declined and the decline was upheld. Please review comments, make changes if needed, and resubmit.',
+          link: approvalLink,
+          related_entity_id: approvalRequestId,
+          related_entity_type: 'approval_request',
+          created_at: new Date()
+        });
+
+        // Send email for policy resubmission
+        if (request.entity_type === 'policy') {
+          try {
+            const submitter = request.submitted_by;
+            const policyRepo = new PolicyRepository(tenantDb);
+            const policy = await policyRepo.findById(request.entity_id);
+            const submitterEmail = submitter?.email;
+            const submitterName = [submitter?.first_name, submitter?.last_name].filter(Boolean).join(' ') || 'there';
+            const policyTitle = policy?.title || 'Policy';
+            if (submitterEmail) {
+              await emailService.sendPolicyResubmissionRequiredEmail({
+                to: submitterEmail,
+                recipientName: submitterName,
+                policyTitle,
+                approvalRequestId
+              });
+            }
+          } catch (emailErr) {
+            logError('Failed to send policy resubmission email', { error: emailErr });
+          }
+        }
+      }
     } catch (notifError) {
       logError('Failed to send rejection review notification', { error: notifError });
     }
@@ -1229,11 +1475,71 @@ export class ApprovalWorkflowService {
       approvalRequestId,
       reviewerUserId,
       reviewAction,
-      newStatus
+      newStatus: reviewAction === 'accept_rejection' ? 'returned_for_resubmission' : 'pending'
     });
 
     const updatedRequest = await approvalRequestRepo.findById(approvalRequestId);
     return updatedRequest;
+  }
+
+  /**
+   * Resubmit approval request (submitter re-runs workflow after decline was upheld)
+   */
+  async resubmitForApproval(approvalRequestId, submitterUserId) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const request = await approvalRequestRepo.findById(approvalRequestId);
+    if (!request) {
+      throw new AppError('Approval request not found', 404, 'APPROVAL_REQUEST_NOT_FOUND');
+    }
+
+    if (request.status !== 'returned_for_resubmission') {
+      throw new AppError('Request is not in resubmission state', 400, 'INVALID_STATUS');
+    }
+
+    const submittedById = request.submitted_by?._id || request.submitted_by;
+    if (String(submittedById) !== String(submitterUserId)) {
+      throw new AppError('Only the submitter can resubmit', 403, 'UNAUTHORIZED');
+    }
+
+    const steps = request.approval_steps || [];
+    // Build fresh step objects (no _id) so the workflow truly restarts from step 1
+    const newSteps = steps.map((s) => {
+      const plain = s.toObject ? s.toObject() : { ...s };
+      return {
+        level: plain.level,
+        approver_user_id: plain.approver_user_id,
+        approver_position_id: plain.approver_position_id,
+        approver_department_id: plain.approver_department_id,
+        is_department_head: plain.is_department_head ?? false,
+        status: 'pending'
+      };
+    });
+
+    await approvalRequestRepo.updateWithOps(approvalRequestId, {
+      $set: {
+        status: 'pending',
+        approval_steps: newSteps,
+        current_rejection_review_id: null,
+        completed_at: null
+      }
+    });
+
+    // For policies: set back to under_review when workflow is re-running
+    if (request.entity_type === 'policy') {
+      try {
+        const policyRepo = new PolicyRepository(tenantDb);
+        await policyRepo.update(request.entity_id, { status: 'under_review' });
+      } catch (e) {
+        logError('Failed to update policy status on resubmit', { error: e });
+      }
+    }
+
+    logInfo('Approval request resubmitted', { approvalRequestId, submitterUserId });
+
+    return await approvalRequestRepo.findById(approvalRequestId);
   }
 
   /**

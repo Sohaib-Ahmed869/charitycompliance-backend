@@ -253,6 +253,18 @@ router.post(
   approvalController.forwardRejection
 );
 
+// Resubmit approval (submitter re-runs workflow after decline upheld)
+router.post(
+  '/:approvalRequestId/resubmit',
+  [
+    param('approvalRequestId')
+      .isMongoId()
+      .withMessage('Invalid approval request ID')
+  ],
+  validate,
+  approvalController.resubmitApproval
+);
+
 // Review rejection (accept or reject the rejection)
 router.post(
   '/:approvalRequestId/review-rejection',
@@ -273,6 +285,47 @@ router.post(
   ],
   validate,
   approvalController.reviewRejection
+);
+
+// Escalate to another user for opinion (does not change approver)
+router.post(
+  '/:approvalRequestId/escalate',
+  [
+    param('approvalRequestId')
+      .isMongoId()
+      .withMessage('Invalid approval request ID'),
+    body('stepIndex')
+      .isInt({ min: 0 })
+      .withMessage('Step index must be a non-negative integer'),
+    body('escalateToUserId')
+      .isMongoId()
+      .withMessage('Valid escalate-to user ID is required'),
+    body('comments')
+      .trim()
+      .notEmpty()
+      .withMessage('Comments are required')
+  ],
+  validate,
+  approvalController.escalateForOpinion
+);
+
+// Respond to an escalation request
+router.post(
+  '/:approvalRequestId/escalations/:escalationId/respond',
+  [
+    param('approvalRequestId')
+      .isMongoId()
+      .withMessage('Invalid approval request ID'),
+    param('escalationId')
+      .isMongoId()
+      .withMessage('Invalid escalation ID'),
+    body('comments')
+      .trim()
+      .notEmpty()
+      .withMessage('Comments are required')
+  ],
+  validate,
+  approvalController.respondToEscalation
 );
 
 export default router;
