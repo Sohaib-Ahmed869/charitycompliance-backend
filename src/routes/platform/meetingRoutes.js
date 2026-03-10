@@ -164,6 +164,17 @@ router.post(
   meetingController.uploadDocument
 );
 
+// Stream meeting document (must be before GET /documents to avoid route collision)
+router.get(
+  '/:meetingId/documents/:documentIndex/stream',
+  [
+    param('meetingId').isMongoId().withMessage('Invalid meeting ID'),
+    param('documentIndex').isInt({ min: 0 }).withMessage('Invalid document index'),
+  ],
+  validate,
+  meetingController.streamMeetingDocument
+);
+
 // Get meeting documents
 router.get(
   '/:meetingId/documents',
@@ -192,6 +203,43 @@ router.patch(
   ],
   validate,
   meetingController.toggleNoteCompletion
+);
+
+// Upload document to internal note
+router.post(
+  '/:meetingId/internal-notes/:noteId/documents',
+  [
+    param('meetingId').isMongoId().withMessage('Invalid meeting ID'),
+    param('noteId').isMongoId().withMessage('Invalid note ID'),
+  ],
+  validate,
+  uploadSingle,
+  handleUploadError,
+  meetingController.uploadNoteDocument
+);
+
+// Delete document from internal note
+router.delete(
+  '/:meetingId/internal-notes/:noteId/documents/:documentIndex',
+  [
+    param('meetingId').isMongoId().withMessage('Invalid meeting ID'),
+    param('noteId').isMongoId().withMessage('Invalid note ID'),
+    param('documentIndex').isInt({ min: 0 }).withMessage('Invalid document index'),
+  ],
+  validate,
+  meetingController.deleteNoteDocument
+);
+
+// Stream internal note document
+router.get(
+  '/:meetingId/internal-notes/:noteId/documents/:documentIndex/stream',
+  [
+    param('meetingId').isMongoId().withMessage('Invalid meeting ID'),
+    param('noteId').isMongoId().withMessage('Invalid note ID'),
+    param('documentIndex').isInt({ min: 0 }).withMessage('Invalid document index'),
+  ],
+  validate,
+  meetingController.streamNoteDocument
 );
 
 export default router;

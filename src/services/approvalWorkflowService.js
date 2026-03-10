@@ -1487,7 +1487,7 @@ export class ApprovalWorkflowService {
   /**
    * Resubmit approval request (submitter re-runs workflow after decline was upheld)
    */
-  async resubmitForApproval(approvalRequestId, submitterUserId) {
+  async resubmitForApproval(approvalRequestId, submitterUserId, changeControlNote = null) {
     const tenantDb = await this.getTenantDb();
     this._ensureTenantModels(tenantDb);
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
@@ -1520,14 +1520,32 @@ export class ApprovalWorkflowService {
       };
     });
 
-    await approvalRequestRepo.updateWithOps(approvalRequestId, {
+    // If submitter provided a change control note, attach it to the latest previous_attempt
+    let updatedPreviousAttempts = request.previous_attempts || [];
+    if (changeControlNote && updatedPreviousAttempts.length > 0) {
+      const lastIdx = updatedPreviousAttempts.length - 1;
+      const last = updatedPreviousAttempts[lastIdx];
+      const plainLast = last?.toObject ? last.toObject() : { ...last };
+      plainLast.change_control = changeControlNote;
+      updatedPreviousAttempts = updatedPreviousAttempts.map((att, idx) => {
+        if (idx !== lastIdx) return att;
+        return plainLast;
+      });
+    }
+
+    const updateOps = {
       $set: {
         status: 'pending',
         approval_steps: newSteps,
         current_rejection_review_id: null,
         completed_at: null
       }
-    });
+    };
+    if (changeControlNote && updatedPreviousAttempts.length > 0) {
+      updateOps.$set.previous_attempts = updatedPreviousAttempts;
+    }
+
+    await approvalRequestRepo.updateWithOps(approvalRequestId, updateOps);
 
     // For policies: set back to under_review when workflow is re-running
     if (request.entity_type === 'policy') {
@@ -1536,6 +1554,26 @@ export class ApprovalWorkflowService {
         await policyRepo.update(request.entity_id, { status: 'under_review' });
       } catch (e) {
         logError('Failed to update policy status on resubmit', { error: e });
+      }
+    } else if (request.entity_type === 'risk') {
+      // For risks: bump version to capture change and keep history
+      try {
+        const { RiskRepository } = await import('../repositories/riskRepository.js');
+        const { incrementVersion } = await import('../repositories/policyRepository.js');
+        const riskRepo = new RiskRepository(tenantDb);
+        const risk = await riskRepo.findById(request.entity_id);
+        if (risk) {
+          const currentVersion = risk.version || 'v1.0';
+          const newVersion = incrementVersion(currentVersion);
+          await riskRepo.update(request.entity_id, { version: newVersion });
+          logInfo('Risk version incremented on resubmit', {
+            riskId: request.entity_id,
+            from: currentVersion,
+            to: newVersion
+          });
+        }
+      } catch (e) {
+        logError('Failed to update risk version on resubmit', { error: e });
       }
     }
 

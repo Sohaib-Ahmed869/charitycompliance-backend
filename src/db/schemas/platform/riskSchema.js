@@ -107,6 +107,11 @@ const riskSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ApprovalRequest'
   },
+  /** Simple semantic version for risk (v1.0, v1.1, etc.) */
+  version: {
+    type: String,
+    default: 'v1.0'
+  },
   submitted_by: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

@@ -1238,9 +1238,10 @@ export const resubmitApproval = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user.userId;
   const { approvalRequestId } = req.params;
+  const { change_control } = req.body || {};
 
   const workflowService = new ApprovalWorkflowService(orgId);
-  const result = await workflowService.resubmitForApproval(approvalRequestId, userId);
+  const result = await workflowService.resubmitForApproval(approvalRequestId, userId, change_control);
 
   res.json({
     success: true,

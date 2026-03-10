@@ -243,7 +243,9 @@ const approvalRequestSchema = new mongoose.Schema({
     attempt_number: { type: Number },
     steps_snapshot: { type: mongoose.Schema.Types.Mixed },
     saved_at: { type: Date, default: Date.now },
-    reason: { type: String, default: 'rejection_upheld' }
+    reason: { type: String, default: 'rejection_upheld' },
+    /** Optional change control note entered by submitter when resubmitting */
+    change_control: { type: String }
   }],
   /** Ad‑hoc escalations for opinions (does not change approver of the step) */
   escalations: [{

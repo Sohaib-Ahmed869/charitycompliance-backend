@@ -42,10 +42,28 @@ router.get(
 );
 
 router.get(
+  '/export/pdf',
+  [
+    query('status').optional().isIn(['draft', 'pending', 'under_treatment', 'approved', 'resolved', 'rejected', 'closed']),
+    query('category').optional().trim(),
+    query('search').optional().trim()
+  ],
+  validate,
+  riskController.exportRiskRegisterPdf
+);
+
+router.get(
   '/:riskId',
   [param('riskId').isMongoId().withMessage('Invalid risk ID')],
   validate,
   riskController.getRiskById
+);
+
+router.get(
+  '/:riskId/pdf',
+  [param('riskId').isMongoId().withMessage('Invalid risk ID')],
+  validate,
+  riskController.exportRiskPdf
 );
 
 router.put(

@@ -12,7 +12,7 @@ import { BoardMemberRepository } from '../repositories/boardMemberRepository.js'
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { NotificationRepository } from '../repositories/notificationRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
-import { getFileUrl } from '../services/s3Service.js';
+import { getFileUrl, getFileStream, uploadToS3 } from '../services/s3Service.js';
 import emailService from '../services/emailService.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logInfo, logError } from '../utils/logger.js';
@@ -267,6 +267,41 @@ export class MeetingService {
         })
       );
       meetingWithPictures.meeting_documents = documentsWithUrls;
+    }
+
+    // Generate signed URLs for internal notes documents
+    if (meetingWithPictures.internal_notes && meetingWithPictures.internal_notes.length > 0) {
+      meetingWithPictures.internal_notes = await Promise.all(
+        meetingWithPictures.internal_notes.map(async (note) => {
+          const noteObj = note.toObject ? note.toObject() : { ...note };
+          
+          if (noteObj.documents && noteObj.documents.length > 0) {
+            const docsWithUrls = await Promise.all(
+              noteObj.documents.map(async (doc) => {
+                try {
+                  const docObj = doc.toObject ? doc.toObject() : { ...doc };
+                  const url = await getFileUrl(docObj.file_path, 3600);
+                  return {
+                    ...docObj,
+                    url
+                  };
+                } catch (err) {
+                  logError('Failed to generate URL for note document', err, { documentId: doc._id });
+                  return {
+                    ...doc.toObject ? doc.toObject() : { ...doc },
+                    url: null
+                  };
+                }
+              })
+            );
+            return {
+              ...noteObj,
+              documents: docsWithUrls
+            };
+          }
+          return noteObj;
+        })
+      );
     }
 
     return meetingWithPictures;
@@ -574,10 +609,19 @@ export class MeetingService {
       throw new AppError('Meeting not found', 404, 'MEETING_NOT_FOUND');
     }
 
+    let key = file.key || file.path;
+    if (!key && file.buffer) {
+      const result = await uploadToS3(file.buffer, file.originalname, file.mimetype, this.orgId, 'meetings');
+      key = result.key;
+    }
+    if (!key) {
+      throw new AppError('File upload failed', 500, 'UPLOAD_FAILED');
+    }
+
     const meetingDocuments = meeting.meeting_documents || [];
     meetingDocuments.push({
       file_name: file.originalname,
-      file_path: file.key || file.path,
+      file_path: key,
       file_size: file.size,
       mime_type: file.mimetype,
       uploaded_by: userId,
@@ -670,6 +714,129 @@ export class MeetingService {
     }
 
     internalNotes[noteIndex].completed = !internalNotes[noteIndex].completed;
+
+    return await meetingRepo.update(meetingId, {
+      internal_notes: internalNotes,
+      updated_at: new Date()
+    });
+  }
+
+  /**
+   * Upload a document to a specific internal note
+   */
+  async uploadNoteDocument(meetingId, noteId, file, userId) {
+    const tenantDb = await this.getTenantDb();
+    const meetingRepo = new MeetingRepository(tenantDb);
+
+    const meeting = await meetingRepo.findById(meetingId);
+    if (!meeting) {
+      throw new AppError('Meeting not found', 404, 'MEETING_NOT_FOUND');
+    }
+
+    const internalNotes = meeting.internal_notes || [];
+    const noteIndex = internalNotes.findIndex(n => n._id.toString() === noteId);
+    
+    if (noteIndex === -1) {
+      throw new AppError('Note not found', 404, 'NOTE_NOT_FOUND');
+    }
+
+    // Initialize documents array if it doesn't exist
+    if (!internalNotes[noteIndex].documents) {
+      internalNotes[noteIndex].documents = [];
+    }
+
+    let key = file.key || file.path;
+    if (!key && file.buffer) {
+      const result = await uploadToS3(file.buffer, file.originalname, file.mimetype, this.orgId, 'meetings');
+      key = result.key;
+    }
+    if (!key) {
+      throw new AppError('File upload failed', 500, 'UPLOAD_FAILED');
+    }
+
+    // Add the document to the note's documents array
+    internalNotes[noteIndex].documents.push({
+      file_name: file.originalname,
+      file_path: key,
+      file_size: file.size,
+      mime_type: file.mimetype,
+      uploaded_at: new Date()
+    });
+
+    logInfo('Document uploaded to internal note', { meetingId, noteId, fileName: file.originalname });
+
+    return await meetingRepo.update(meetingId, {
+      internal_notes: internalNotes,
+      updated_at: new Date()
+    });
+  }
+
+  /**
+   * Stream meeting document by index
+   */
+  async streamMeetingDocument(meetingId, documentIndex, rangeHeader = null) {
+    const tenantDb = await this.getTenantDb();
+    const meetingRepo = new MeetingRepository(tenantDb);
+    const meeting = await meetingRepo.findById(meetingId);
+    if (!meeting) {
+      throw new AppError('Meeting not found', 404, 'MEETING_NOT_FOUND');
+    }
+    const docs = meeting.meeting_documents || [];
+    const doc = docs[documentIndex];
+    if (!doc?.file_path) {
+      throw new AppError('Document not found', 404, 'DOCUMENT_NOT_FOUND');
+    }
+    return getFileStream(doc.file_path, rangeHeader);
+  }
+
+  /**
+   * Stream internal note document by noteId and documentIndex
+   */
+  async streamNoteDocument(meetingId, noteId, documentIndex, rangeHeader = null) {
+    const tenantDb = await this.getTenantDb();
+    const meetingRepo = new MeetingRepository(tenantDb);
+    const meeting = await meetingRepo.findById(meetingId);
+    if (!meeting) {
+      throw new AppError('Meeting not found', 404, 'MEETING_NOT_FOUND');
+    }
+    const noteIndex = (meeting.internal_notes || []).findIndex(n => n._id.toString() === noteId);
+    if (noteIndex === -1 || !meeting.internal_notes[noteIndex].documents?.[documentIndex]) {
+      throw new AppError('Document not found', 404, 'DOCUMENT_NOT_FOUND');
+    }
+    const doc = meeting.internal_notes[noteIndex].documents[documentIndex];
+    if (!doc?.file_path) {
+      throw new AppError('Document not found', 404, 'DOCUMENT_NOT_FOUND');
+    }
+    return getFileStream(doc.file_path, rangeHeader);
+  }
+
+  /**
+   * Delete a document from an internal note
+   */
+  async deleteNoteDocument(meetingId, noteId, documentIndex) {
+    const tenantDb = await this.getTenantDb();
+    const meetingRepo = new MeetingRepository(tenantDb);
+
+    const meeting = await meetingRepo.findById(meetingId);
+    if (!meeting) {
+      throw new AppError('Meeting not found', 404, 'MEETING_NOT_FOUND');
+    }
+
+    const internalNotes = meeting.internal_notes || [];
+    const noteIndex = internalNotes.findIndex(n => n._id.toString() === noteId);
+    
+    if (noteIndex === -1) {
+      throw new AppError('Note not found', 404, 'NOTE_NOT_FOUND');
+    }
+
+    if (!internalNotes[noteIndex].documents || !internalNotes[noteIndex].documents[documentIndex]) {
+      throw new AppError('Document not found', 404, 'DOCUMENT_NOT_FOUND');
+    }
+
+    // Remove the document
+    internalNotes[noteIndex].documents.splice(documentIndex, 1);
+
+    logInfo('Document deleted from internal note', { meetingId, noteId, documentIndex });
 
     return await meetingRepo.update(meetingId, {
       internal_notes: internalNotes,

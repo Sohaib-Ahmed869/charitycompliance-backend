@@ -159,6 +159,106 @@ export const deleteRisk = asyncHandler(async (req, res) => {
   });
 });
 
+export const exportRiskPdf = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { riskId } = req.params;
+
+  const riskService = new RiskService(orgId);
+  const rawRisk = await riskService.getRiskById(riskId);
+  if (!rawRisk) {
+    throw new AppError('Risk not found', 404, 'RISK_NOT_FOUND');
+  }
+
+  // Clone so we can safely enhance attachments / treatments
+  const risk = rawRisk && typeof rawRisk === 'object'
+    ? (rawRisk.toObject ? { ...rawRisk.toObject() } : { ...rawRisk })
+    : rawRisk;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  const logoUrl = org?.logo_url || process.env.LOGO || '';
+
+  // Resolve S3 keys to signed URLs for attachments & evidence
+  const { getFileUrl } = await import('../services/s3Service.js');
+
+  const attachments = await Promise.all(
+    (risk.attachments || []).map(async (att) => {
+      let url = null;
+      if (att.file_path) {
+        try {
+          url = await getFileUrl(att.file_path, 604800);
+        } catch {
+          url = null;
+        }
+      }
+      return { ...att, url };
+    })
+  );
+
+  const treatments = await Promise.all(
+    (risk.treatments || []).map(async (t) => {
+      const evidence = await Promise.all(
+        (t.evidence || []).map(async (ev) => {
+          let url = null;
+          if (ev.file_path) {
+            try {
+              url = await getFileUrl(ev.file_path, 604800);
+            } catch {
+              url = null;
+            }
+          }
+          return { ...ev, url };
+        })
+      );
+      return { ...t, evidence };
+    })
+  );
+
+  const { generateRiskDetailPDF } = await import('../services/riskPdfService.js');
+  const buffer = await generateRiskDetailPDF(
+    {
+      risk: { ...risk, attachments, treatments },
+      org
+    },
+    logoUrl
+  );
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="risk-${riskId}.pdf"`);
+  res.send(buffer);
+});
+
+export const exportRiskRegisterPdf = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const filters = {
+    status: req.query.status,
+    category: req.query.category,
+    search: req.query.search
+  };
+
+  const riskService = new RiskService(orgId);
+  const risks = await riskService.getRisks(filters);
+
+  const tenantDb = await getTenantConnection(orgId);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  const logoUrl = org?.logo_url || process.env.LOGO || '';
+
+  const { generateRiskRegisterPDF } = await import('../services/riskPdfService.js');
+  const buffer = await generateRiskRegisterPDF(
+    {
+      risks,
+      org
+    },
+    logoUrl
+  );
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'attachment; filename="risk-register.pdf"');
+  res.send(buffer);
+});
+
 /** Add a treatment to a risk - triggers approval workflow */
 export const addTreatment = asyncHandler(async (req, res) => {
   const orgId = req.orgId;

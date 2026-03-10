@@ -78,6 +78,35 @@ router.get(
 // --- My training (member's assigned courses) ---
 router.get('/me', validate, trainingController.getMyTraining);
 
+// Report data for exports
+router.get(
+  '/programs/:programId/report-data',
+  [param('programId').isMongoId().withMessage('Invalid program ID')],
+  validate,
+  trainingController.getProgramReportData
+);
+
+router.get(
+  '/enrollments/:enrollmentId/report-data',
+  [param('enrollmentId').isMongoId().withMessage('Invalid enrollment ID')],
+  validate,
+  trainingController.getEnrollmentReportData
+);
+
+router.get(
+  '/programs/:programId/pdf',
+  [param('programId').isMongoId().withMessage('Invalid program ID')],
+  validate,
+  trainingController.exportProgramPdf
+);
+
+router.get(
+  '/enrollments/:enrollmentId/pdf',
+  [param('enrollmentId').isMongoId().withMessage('Invalid enrollment ID')],
+  validate,
+  trainingController.exportEnrollmentPdf
+);
+
 // --- Update resource progress (video/PDF tracking) ---
 router.patch(
   '/enrollments/:enrollmentId/completions/:resourceId',
@@ -91,6 +120,26 @@ router.patch(
   ],
   validate,
   trainingController.updateResourceProgress
+);
+
+// --- Post-training survey ---
+router.patch(
+  '/enrollments/:enrollmentId/survey',
+  [
+    param('enrollmentId').isMongoId().withMessage('Invalid enrollment ID'),
+    body('rating').optional().isInt({ min: 1, max: 5 }).withMessage('rating must be between 1 and 5'),
+    body('clarity')
+      .optional()
+      .isIn(['very_clear', 'somewhat_clear', 'confusing'])
+      .withMessage('clarity must be very_clear, somewhat_clear, or confusing'),
+    body('relevance')
+      .optional()
+      .isIn(['very_relevant', 'somewhat_relevant', 'not_relevant'])
+      .withMessage('relevance must be very_relevant, somewhat_relevant, or not_relevant'),
+    body('comments').optional().isString().isLength({ max: 2000 })
+  ],
+  validate,
+  trainingController.saveEnrollmentSurvey
 );
 
 // --- Programs ---

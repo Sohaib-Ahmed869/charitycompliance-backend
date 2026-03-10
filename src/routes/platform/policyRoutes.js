@@ -21,7 +21,7 @@ router.get(
 router.get(
   '/',
   [
-    query('status').optional().isIn(['draft', 'active', 'under_review', 'expired', 'pending_review']).withMessage('Invalid status'),
+    query('status').optional().isIn(['draft', 'active', 'under_review', 'expired', 'pending_review', 'resubmission_required']).withMessage('Invalid status'),
     query('category').optional().trim(),
     query('search').optional().trim()
   ],
@@ -107,7 +107,7 @@ router.post(
     body('effective_date').optional().isISO8601().withMessage('Invalid effective date'),
     body('review_cycle').optional().isIn(['3 months', '6 months', '12 months', '24 months', 'other']).withMessage('Invalid review cycle'),
     body('review_date').optional().isISO8601().withMessage('Invalid review date'),
-    body('status').optional().isIn(['draft', 'active', 'under_review', 'expired']).withMessage('Invalid status')
+    body('status').optional().isIn(['draft', 'active', 'under_review', 'expired', 'resubmission_required']).withMessage('Invalid status')
   ],
   validate,
   policyController.createPolicy
@@ -125,7 +125,7 @@ router.put(
     body('effective_date').optional().isISO8601().withMessage('Invalid effective date'),
     body('review_cycle').optional().isIn(['3 months', '6 months', '12 months', '24 months', 'other']),
     body('review_date').optional().isISO8601().withMessage('Invalid review date'),
-    body('status').optional().isIn(['draft', 'active', 'under_review', 'expired'])
+    body('status').optional().isIn(['draft', 'active', 'under_review', 'expired', 'resubmission_required'])
   ],
   validate,
   policyController.updatePolicy
