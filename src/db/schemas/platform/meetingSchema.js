@@ -97,7 +97,8 @@ const meetingSchema = new mongoose.Schema({
       type: String,
       enum: ['invited', 'confirmed', 'declined', 'attended'],
       default: 'invited'
-    }
+    },
+    rsvp_token: { type: String, trim: true }
   }],
   
   // External attendees (non-system users, identified by email)
@@ -121,7 +122,8 @@ const meetingSchema = new mongoose.Schema({
       type: String,
       enum: ['invited', 'confirmed', 'declined', 'attended'],
       default: 'invited'
-    }
+    },
+    rsvp_token: { type: String, trim: true }
   }],
   
   created_by: {

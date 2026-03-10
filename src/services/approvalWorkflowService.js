@@ -1203,14 +1203,16 @@ export class ApprovalWorkflowService {
       escalated_by: escalatedByUserId,
       escalated_to: escalateToUserId,
       status: 'pending',
-      comments: null,
-      files: (files || []).map((f) => ({
+      request_comments: comments || null,
+      request_files: (files || []).map((f) => ({
         name: f.name || '',
         size: f.size || 0,
         file_type: f.file_type || f.type || '',
         url: f.url || '',
         key: f.key || ''
       })),
+      comments: null,
+      files: [],
       created_at: new Date(),
       responded_at: null
     };

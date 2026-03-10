@@ -4,7 +4,9 @@
  * Business logic for meeting management
  */
 
+import crypto from 'crypto';
 import { getTenantConnection } from '../db/connectionManager.js';
+import { registerMeetingOrgLookup } from '../db/router.js';
 import { MeetingRepository } from '../repositories/meetingRepository.js';
 import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
@@ -80,6 +82,18 @@ export class MeetingService {
     const userRepo = new UserRepository(tenantDb);
     const notificationRepo = new NotificationRepository(tenantDb);
 
+    // Generate RSVP tokens for attendees
+    const attendeesWithTokens = (meetingData.attendees || []).map(a => ({
+      user_id: a.user_id,
+      attendance_status: 'invited',
+      rsvp_token: crypto.randomBytes(32).toString('hex')
+    }));
+    const externalWithTokens = (meetingData.external_attendees || []).map(e => ({
+      ...e,
+      attendance_status: 'invited',
+      rsvp_token: crypto.randomBytes(32).toString('hex')
+    }));
+
     const meeting = await meetingRepo.create({
       org_id: this.orgId,
       created_by: createdBy,
@@ -90,8 +104,8 @@ export class MeetingService {
       duration_minutes: meetingData.duration_minutes || 60,
       location: meetingData.location,
       meeting_link: meetingData.meeting_link,
-      attendees: meetingData.attendees || [],
-      external_attendees: meetingData.external_attendees || [],
+      attendees: attendeesWithTokens,
+      external_attendees: externalWithTokens,
       status: 'scheduled',
       board_meeting_info: meetingData.board_meeting_info || null,
       general_meeting_info: meetingData.general_meeting_info || null,
@@ -99,6 +113,9 @@ export class MeetingService {
     });
 
     logInfo('Meeting created', { meetingId: meeting._id, type: meetingData.meeting_type, createdBy });
+
+    // Register meeting->org for public RSVP lookup
+    await registerMeetingOrgLookup(meeting._id.toString(), this.orgId);
 
     // Send notifications and emails to attendees
     const hasInternalAttendees = meeting.attendees && meeting.attendees.length > 0;
@@ -143,8 +160,11 @@ export class MeetingService {
 
         // Send emails to internal attendees
         const agenda = meetingData.agenda || [];
+        const attendeeByUserId = new Map((meeting.attendees || []).map(a => [a.user_id?.toString(), a]));
         for (const user of attendeeUsers) {
           if (user.email) {
+            const attendeeRec = attendeeByUserId.get(user._id.toString());
+            const rsvpToken = attendeeRec?.rsvp_token;
             try {
               await emailService.sendMeetingInvitationEmail({
                 to: user.email,
@@ -157,14 +177,15 @@ export class MeetingService {
                 agenda,
                 attendeeNames,
                 organizerName: creatorName,
-                meetingId: meeting._id.toString()
+                meetingId: meeting._id.toString(),
+                rsvpToken
               });
             } catch (emailErr) {
               logError('Failed to send meeting invitation email', emailErr, { userId: user._id });
             }
           }
         }
-        
+
         // Send emails to external attendees
         for (const extAttendee of (meeting.external_attendees || [])) {
           if (extAttendee.email) {
@@ -181,7 +202,8 @@ export class MeetingService {
                 attendeeNames,
                 organizerName: creatorName,
                 meetingId: meeting._id.toString(),
-                isExternal: true
+                isExternal: true,
+                rsvpToken: extAttendee.rsvp_token
               });
               logInfo('Meeting invitation email sent to external attendee', { 
                 meetingId: meeting._id, 
@@ -266,6 +288,26 @@ export class MeetingService {
       meeting_notes: notes,
       updated_at: new Date()
     });
+  }
+
+  /**
+   * RSVP by token (public - no auth) - used when attendee clicks Accept/Decline in email
+   */
+  async rsvpByToken(meetingId, token, response) {
+    const tenantDb = await this.getTenantDb();
+    const meetingRepo = new MeetingRepository(tenantDb);
+
+    const meeting = await meetingRepo.findById(meetingId);
+    if (!meeting) {
+      throw new AppError('Meeting not found', 404, 'MEETING_NOT_FOUND');
+    }
+
+    const status = response === 'accept' ? 'confirmed' : 'declined';
+    const updated = await meetingRepo.updateAttendanceByToken(meetingId, token, status);
+    if (!updated) {
+      throw new AppError('Invalid or expired RSVP link', 400, 'INVALID_RSVP_TOKEN');
+    }
+    return updated;
   }
 
   /**

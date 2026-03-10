@@ -5,8 +5,33 @@
  */
 
 import { MeetingService } from '../services/meetingService.js';
+import { getOrgByMeetingId } from '../db/router.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
+
+/**
+ * Public RSVP - no auth. Attendee clicks Accept/Decline link in email.
+ * Redirects to frontend confirmation page.
+ */
+export const rsvpByToken = asyncHandler(async (req, res) => {
+  const { meetingId, token, response } = req.params;
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+  if (!['accept', 'decline'].includes(response)) {
+    return res.redirect(`${frontendUrl}/meetings/rsvp-done?error=invalid`);
+  }
+
+  const orgId = await getOrgByMeetingId(meetingId);
+  if (!orgId) {
+    return res.redirect(`${frontendUrl}/meetings/rsvp-done?error=not_found`);
+  }
+
+  const meetingService = new MeetingService(orgId);
+  await meetingService.rsvpByToken(meetingId, token, response);
+
+  const status = response === 'accept' ? 'accepted' : 'declined';
+  return res.redirect(`${frontendUrl}/meetings/rsvp-done?status=${status}&meetingId=${meetingId}`);
+});
 
 export const createMeeting = asyncHandler(async (req, res) => {
   const errors = validationResult(req);

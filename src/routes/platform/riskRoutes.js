@@ -93,6 +93,25 @@ router.post(
   riskController.addTreatmentEvidence
 );
 
+router.post(
+  '/:riskId/attachments',
+  [param('riskId').isMongoId().withMessage('Invalid risk ID')],
+  validate,
+  uploadPolicySingle,
+  handlePolicyUploadError,
+  riskController.addRiskAttachment
+);
+
+router.get(
+  '/:riskId/attachments/:attachmentIndex/stream',
+  [
+    param('riskId').isMongoId().withMessage('Invalid risk ID'),
+    param('attachmentIndex').isInt({ min: 0 }).withMessage('Invalid attachment index')
+  ],
+  validate,
+  riskController.streamRiskAttachment
+);
+
 router.get(
   '/:riskId/treatments/:treatmentIndex/evidence/:evidenceIndex/stream',
   [

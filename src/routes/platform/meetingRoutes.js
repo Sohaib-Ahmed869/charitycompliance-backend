@@ -7,7 +7,19 @@ import { uploadSingle, handleUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
 
-// All meeting routes require authentication and tenant resolution
+// Public RSVP route (no auth) - attendee clicks Accept/Decline in email
+router.get(
+  '/public/rsvp/:meetingId/:token/:response',
+  [
+    param('meetingId').isMongoId().withMessage('Invalid meeting ID'),
+    param('token').notEmpty().withMessage('Token is required'),
+    param('response').isIn(['accept', 'decline']).withMessage('Response must be accept or decline'),
+  ],
+  validate,
+  meetingController.rsvpByToken
+);
+
+// All other meeting routes require authentication and tenant resolution
 router.use(authAndResolveTenant);
 
 // Create meeting

@@ -255,7 +255,15 @@ const approvalRequestSchema = new mongoose.Schema({
       enum: ['pending', 'responded'],
       default: 'pending'
     },
-    comments: { type: String }, // opinion from escalated person
+    request_comments: { type: String }, // escalator's question when creating escalation
+    request_files: [{
+      name: { type: String },
+      size: { type: Number },
+      file_type: { type: String },
+      url: { type: String },
+      key: { type: String }
+    }],
+    comments: { type: String }, // opinion/response from escalated person
     files: [{
       name: { type: String },
       size: { type: Number },

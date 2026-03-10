@@ -120,6 +120,14 @@ const riskSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  /** Attachments for the risk (documents, evidence, etc.) */
+  attachments: [{
+    file_path: { type: String },
+    file_name: { type: String },
+    file_size: { type: Number },
+    mime_type: { type: String },
+    uploaded_at: { type: Date, default: Date.now }
+  }],
   /** Treatments and controls for this risk */
   treatments: [{
     control_action: { type: String, trim: true, default: '' },
