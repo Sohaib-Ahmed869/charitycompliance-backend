@@ -526,6 +526,36 @@ class EmailService {
 
     return this.sendEmail({ to, subject, html });
   }
+
+  /**
+   * Send policy resubmission required email (when decline is upheld)
+   * @param {Object} params
+   * @param {string} params.to - Recipient email
+   * @param {string} params.recipientName - Recipient's name
+   * @param {string} params.policyTitle - Policy title
+   * @param {string} params.approvalRequestId - Approval request ID for link
+   */
+  async sendPolicyResubmissionRequiredEmail({ to, recipientName, policyTitle, approvalRequestId }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const viewLink = `${baseUrl}/approvals/${approvalRequestId}`;
+
+    const subject = `Resubmission Required: ${policyTitle}`;
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
+      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Your policy <strong>${policyTitle}</strong> was declined and the decline has been upheld. Please review the comments, make any needed changes, and resubmit for approval.</p>
+    `;
+
+    const html = buildEmailTemplate({
+      heading: 'Resubmission Required',
+      bodyHtml,
+      buttonText: 'Review & Resubmit',
+      buttonLink: viewLink,
+      infoBoxLines: ['You can view all feedback in the approval trail.', 'Edit the policy document if needed, then resubmit.']
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
 }
 
 export default new EmailService();

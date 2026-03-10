@@ -350,7 +350,7 @@ export const rejectRequest = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user.userId;
   const { approvalRequestId } = req.params;
-  const { stepIndex, comments } = req.body;
+  const { stepIndex, comments, acknowledgement } = req.body;
 
   if (!comments || comments.trim().length === 0) {
     return res.status(400).json({
@@ -373,7 +373,8 @@ export const rejectRequest = asyncHandler(async (req, res) => {
     'rejected',
     comments,
     ipAddress,
-    userAgent
+    userAgent,
+    acknowledgement || null
   );
 
   res.json({
@@ -403,7 +404,54 @@ export const getApprovalRequestById = asyncHandler(async (req, res) => {
     });
   }
 
+  // Convert to plain object
   const doc = approvalRequest.toObject ? approvalRequest.toObject() : { ...approvalRequest };
+
+  // Ensure acknowledgement_files from raw Mongo doc are present (bypass any Mongoose quirks)
+  try {
+    const raw = await approvalRequestRepo.ApprovalRequest.collection.findOne(
+      { _id: approvalRequest._id },
+      { projection: { approval_steps: 1 } }
+    );
+    if (raw?.approval_steps && doc.approval_steps) {
+      raw.approval_steps.forEach((rawStep, idx) => {
+        if (rawStep.acknowledgement_files) {
+          doc.approval_steps[idx] = doc.approval_steps[idx] || {};
+          doc.approval_steps[idx].acknowledgement_files = rawStep.acknowledgement_files;
+        }
+      });
+    }
+  } catch (e) {
+    console.error('Failed to sync acknowledgement_files from raw doc:', e);
+  }
+
+  // Regenerate presigned URLs for acknowledgement files so they never expire
+  try {
+    const { getFileUrl } = await import('../services/s3Service.js');
+    for (const step of (doc.approval_steps || [])) {
+      if (step.acknowledgement_files?.length > 0) {
+        for (const file of step.acknowledgement_files) {
+          if (file.key) {
+            try { file.url = await getFileUrl(file.key); } catch { /* keep existing url */ }
+          }
+        }
+      }
+    }
+  } catch { /* s3 unavailable — keep stored urls */ }
+
+  // Regenerate presigned URLs for rejection_review files
+  try {
+    const { getFileUrl: getUrl } = await import('../services/s3Service.js');
+    for (const review of (doc.rejection_reviews || [])) {
+      if (review.rejection_files?.length > 0) {
+        for (const file of review.rejection_files) {
+          if (file.key) {
+            try { file.url = await getUrl(file.key); } catch { /* keep existing url */ }
+          }
+        }
+      }
+    }
+  } catch { /* s3 unavailable */ }
 
   // Compute can_approve and current_step_index for the current user
   if (userId && doc.status === 'pending') {
@@ -976,7 +1024,7 @@ export const forwardRejection = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user.userId;
   const { approvalRequestId } = req.params;
-  const { forwardToUserId, rejectionComments, stepIndex } = req.body;
+  const { forwardToUserId, rejectionComments, stepIndex, acknowledgement } = req.body;
 
   if (!rejectionComments || rejectionComments.trim().length === 0) {
     return res.status(400).json({
@@ -1004,7 +1052,8 @@ export const forwardRejection = asyncHandler(async (req, res) => {
     stepIndex,
     userId,
     forwardToUserId,
-    rejectionComments
+    rejectionComments,
+    acknowledgement || null
   );
 
   res.json({
@@ -1058,6 +1107,93 @@ export const reviewRejection = asyncHandler(async (req, res) => {
     reviewAction,
     reviewComments
   );
+
+  res.json({
+    success: true,
+    data: result
+  });
+});
+
+/**
+ * Escalate a step to another user for opinion (comments/files)
+ */
+export const escalateForOpinion = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        details: errors.array()
+      }
+    });
+  }
+
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { approvalRequestId } = req.params;
+  const { stepIndex, escalateToUserId, comments, files } = req.body;
+
+  const workflowService = new ApprovalWorkflowService(orgId);
+  const result = await workflowService.escalateForOpinion(
+    approvalRequestId,
+    stepIndex,
+    userId,
+    escalateToUserId,
+    comments,
+    files || []
+  );
+
+  res.json({
+    success: true,
+    data: result
+  });
+});
+
+/**
+ * Respond to an escalation request (add opinion and optional files)
+ */
+export const respondToEscalation = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        details: errors.array()
+      }
+    });
+  }
+
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { approvalRequestId, escalationId } = req.params;
+  const { comments, files } = req.body;
+
+  const workflowService = new ApprovalWorkflowService(orgId);
+  const result = await workflowService.respondToEscalation(
+    approvalRequestId,
+    escalationId,
+    userId,
+    comments,
+    files || []
+  );
+
+  res.json({
+    success: true,
+    data: result
+  });
+});
+
+export const resubmitApproval = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { approvalRequestId } = req.params;
+
+  const workflowService = new ApprovalWorkflowService(orgId);
+  const result = await workflowService.resubmitForApproval(approvalRequestId, userId);
 
   res.json({
     success: true,

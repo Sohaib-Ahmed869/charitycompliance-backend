@@ -59,7 +59,9 @@ export class ApprovalRequestRepository {
       .populate('approval_steps.approver_position_id', 'title')
       .populate('approval_steps.approver_department_id', 'name')
       .populate('rejection_reviews.rejected_by', 'first_name last_name email')
-      .populate('rejection_reviews.forwarded_to', 'first_name last_name email');
+      .populate('rejection_reviews.forwarded_to', 'first_name last_name email')
+      .populate('escalations.escalated_by', 'first_name last_name email')
+      .populate('escalations.escalated_to', 'first_name last_name email');
   }
 
   async findByEntityId(entityId, entityType) {
@@ -155,45 +157,38 @@ export class ApprovalRequestRepository {
     );
   }
 
+  /** Update with raw MongoDB operators ($set, $push, etc.) */
+  async updateWithOps(id, updateObj) {
+    return await this.ApprovalRequest.findByIdAndUpdate(id, updateObj, { new: true, runValidators: true });
+  }
+
   async updateApprovalStep(requestId, stepIndex, updateData) {
-    // Load the document first
     const request = await this.ApprovalRequest.findById(requestId);
-    if (!request) {
-      throw new Error('Approval request not found');
-    }
-    
-    if (!request.approval_steps[stepIndex]) {
-      throw new Error('Approval step not found');
-    }
+    if (!request) throw new Error('Approval request not found');
+    if (!request.approval_steps[stepIndex]) throw new Error('Approval step not found');
 
-    // Handle acknowledgement_files specially to avoid stringification
-    if (updateData.acknowledgement_files && Array.isArray(updateData.acknowledgement_files)) {
-      // Ensure each file object has the right structure
-      const files = updateData.acknowledgement_files.map(f => ({
-        name: f.name || '',
-        size: f.size || 0,
-        type: f.type || '',
-        url: f.url || '',
-        key: f.key || ''
-      }));
-      request.approval_steps[stepIndex].acknowledgement_files = files;
-    }
-
-    // Update other fields on the step
+    const $set = {};
     for (const [key, value] of Object.entries(updateData)) {
-      if (key !== 'acknowledgement_files') {
-        request.approval_steps[stepIndex][key] = value;
+      if (key === 'acknowledgement_files' && Array.isArray(value)) {
+        $set[`approval_steps.${stepIndex}.${key}`] = value.map(f => ({
+          name: f.name || '',
+          size: f.size || 0,
+          file_type: f.type || f.file_type || '',
+          url: f.url || '',
+          key: f.key || ''
+        }));
+      } else {
+        $set[`approval_steps.${stepIndex}.${key}`] = value;
       }
     }
 
-    // Mark the entire approval_steps array as modified so Mongoose knows to validate
-    request.markModified('approval_steps');
-    
-    // Save without running validators first, then check
-    const saved = await request.save({ validateBeforeSave: false });
-    
-    // Return the saved document directly - don't reload
-    return saved;
+    const result = await this.ApprovalRequest.collection.updateOne(
+      { _id: request._id },
+      { $set }
+    );
+    console.log('[updateApprovalStep] Native update result:', JSON.stringify({ matched: result.matchedCount, modified: result.modifiedCount, keys: Object.keys($set) }));
+
+    return await this.ApprovalRequest.findById(requestId);
   }
 
   async updateStatus(id, status, additionalData = {}) {
@@ -242,6 +237,26 @@ export class ApprovalRequestRepository {
     
     Object.assign(review, reviewData);
     return await request.save();
+  }
+
+  async findPendingEscalationsForUser(userId) {
+    return await this.ApprovalRequest.find({
+      status: 'pending',
+      escalations: {
+        $elemMatch: {
+          escalated_to: userId,
+          status: 'pending'
+        }
+      }
+    })
+      .populate('submitted_by', 'first_name last_name email')
+      .populate('approval_matrix_id', 'name')
+      .populate('approval_steps.approver_user_id', 'first_name last_name email')
+      .populate('approval_steps.approver_position_id', 'title')
+      .populate('approval_steps.approver_department_id', 'name')
+      .populate('escalations.escalated_by', 'first_name last_name email')
+      .populate('escalations.escalated_to', 'first_name last_name email')
+      .sort({ created_at: -1 });
   }
 
   async findPendingRejectionReviews(userId) {

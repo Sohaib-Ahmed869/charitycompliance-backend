@@ -93,14 +93,15 @@ export class PolicyRepository {
   }
 
   async getCounts(orgId) {
-    const [total, draft, active, underReview, expired] = await Promise.all([
+    const [total, draft, active, underReview, expired, resubmissionRequired] = await Promise.all([
       this.Policy.countDocuments({ org_id: orgId }),
       this.Policy.countDocuments({ org_id: orgId, status: 'draft' }),
       this.Policy.countDocuments({ org_id: orgId, status: 'active' }),
       this.Policy.countDocuments({ org_id: orgId, status: 'under_review' }),
-      this.Policy.countDocuments({ org_id: orgId, status: 'expired' })
+      this.Policy.countDocuments({ org_id: orgId, status: 'expired' }),
+      this.Policy.countDocuments({ org_id: orgId, status: 'resubmission_required' })
     ]);
-    return { total, draft, active, underReview, expired };
+    return { total, draft, active, underReview, expired, resubmissionRequired };
   }
 
   async getApprovals(policyId) {

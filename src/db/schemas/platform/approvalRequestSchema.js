@@ -55,14 +55,14 @@ const approvalStepSchema = new mongoose.Schema({
     type: String
   },
   acknowledgement_files: [{
-    name: String,
-    size: Number,
-    type: String,
-    url: String,
-    key: String
+    name: { type: String },
+    size: { type: Number },
+    file_type: { type: String },
+    url: { type: String },
+    key: { type: String }
   }],
   attachments: [{
-    type: String // File paths/URLs
+    type: String
   }],
   ip_address: {
     type: String
@@ -135,7 +135,7 @@ const approvalRequestSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'approved', 'rejected', 'cancelled', 'pending_rejection_review', 'rejection_accepted', 'paused_for_coi'],
+    enum: ['pending', 'approved', 'rejected', 'cancelled', 'pending_rejection_review', 'rejection_accepted', 'returned_for_resubmission', 'paused_for_coi'],
     default: 'pending',
     index: true
   },
@@ -215,6 +215,13 @@ const approvalRequestSchema = new mongoose.Schema({
     reviewed_at: {
       type: Date
     },
+    rejection_files: [{
+      name: { type: String },
+      size: { type: Number },
+      file_type: { type: String },
+      url: { type: String },
+      key: { type: String }
+    }],
     created_at: {
       type: Date,
       default: Date.now
@@ -230,7 +237,35 @@ const approvalRequestSchema = new mongoose.Schema({
   rejection_loop_count: {
     type: Number,
     default: 0
-  }
+  },
+  /** Snapshots of previous attempts (before resubmission) - preserves full history */
+  previous_attempts: [{
+    attempt_number: { type: Number },
+    steps_snapshot: { type: mongoose.Schema.Types.Mixed },
+    saved_at: { type: Date, default: Date.now },
+    reason: { type: String, default: 'rejection_upheld' }
+  }],
+  /** Ad‑hoc escalations for opinions (does not change approver of the step) */
+  escalations: [{
+    step_index: { type: Number, required: true },
+    escalated_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    escalated_to: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    status: {
+      type: String,
+      enum: ['pending', 'responded'],
+      default: 'pending'
+    },
+    comments: { type: String }, // opinion from escalated person
+    files: [{
+      name: { type: String },
+      size: { type: Number },
+      file_type: { type: String },
+      url: { type: String },
+      key: { type: String }
+    }],
+    created_at: { type: Date, default: Date.now },
+    responded_at: { type: Date }
+  }]
 }, {
   timestamps: true,
   collection: 'approval_requests'
