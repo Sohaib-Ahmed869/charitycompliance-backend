@@ -243,7 +243,9 @@ const approvalRequestSchema = new mongoose.Schema({
     attempt_number: { type: Number },
     steps_snapshot: { type: mongoose.Schema.Types.Mixed },
     saved_at: { type: Date, default: Date.now },
-    reason: { type: String, default: 'rejection_upheld' }
+    reason: { type: String, default: 'rejection_upheld' },
+    /** Optional change control note entered by submitter when resubmitting */
+    change_control: { type: String }
   }],
   /** Ad‑hoc escalations for opinions (does not change approver of the step) */
   escalations: [{
@@ -255,7 +257,15 @@ const approvalRequestSchema = new mongoose.Schema({
       enum: ['pending', 'responded'],
       default: 'pending'
     },
-    comments: { type: String }, // opinion from escalated person
+    request_comments: { type: String }, // escalator's question when creating escalation
+    request_files: [{
+      name: { type: String },
+      size: { type: Number },
+      file_type: { type: String },
+      url: { type: String },
+      key: { type: String }
+    }],
+    comments: { type: String }, // opinion/response from escalated person
     files: [{
       name: { type: String },
       size: { type: Number },

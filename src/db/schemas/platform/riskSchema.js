@@ -107,6 +107,11 @@ const riskSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ApprovalRequest'
   },
+  /** Simple semantic version for risk (v1.0, v1.1, etc.) */
+  version: {
+    type: String,
+    default: 'v1.0'
+  },
   submitted_by: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -120,6 +125,14 @@ const riskSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
+  /** Attachments for the risk (documents, evidence, etc.) */
+  attachments: [{
+    file_path: { type: String },
+    file_name: { type: String },
+    file_size: { type: Number },
+    mime_type: { type: String },
+    uploaded_at: { type: Date, default: Date.now }
+  }],
   /** Treatments and controls for this risk */
   treatments: [{
     control_action: { type: String, trim: true, default: '' },

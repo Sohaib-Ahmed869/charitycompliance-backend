@@ -6,6 +6,8 @@
 
 import { getTenantConnection } from '../db/connectionManager.js';
 import { RiskRepository } from '../repositories/riskRepository.js';
+import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
+import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { RiskService } from '../services/riskService.js';
 import { ApprovalWorkflowService } from '../services/approvalWorkflowService.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
@@ -13,6 +15,29 @@ import { validationResult } from 'express-validator';
 import { uploadToS3, getFileStream } from '../services/s3Service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
+
+/**
+ * Check if user can add risk treatment: admin (org owner) or head of department of the risk's department
+ */
+async function canUserAddTreatment(tenantDb, orgId, risk, userId, userRoles = []) {
+  if (!userId) return false;
+  const isAdmin = userRoles?.includes('admin');
+  if (isAdmin) return true;
+
+  const departmentId = risk.department_id?._id || risk.department_id;
+  if (!departmentId) return false;
+
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) return false;
+
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const deptHead = await boardMemberRepo.findDepartmentHeadByDepartmentId(org._id, departmentId);
+  if (!deptHead) return false;
+
+  const deptHeadUserId = deptHead.user_id?._id || deptHead.user_id;
+  return deptHeadUserId && String(deptHeadUserId) === String(userId);
+}
 
 export const createRisk = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
@@ -72,13 +97,26 @@ export const getRiskCounts = asyncHandler(async (req, res) => {
 export const getRiskById = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { riskId } = req.params;
+  const userId = req.user?.userId;
+  const userRoles = req.user?.roles || [];
 
   const riskService = new RiskService(orgId);
   const risk = await riskService.getRiskById(riskId);
 
+  let canAddTreatment = false;
+  if (userId && risk) {
+    const tenantDb = await getTenantConnection(orgId);
+    canAddTreatment = await canUserAddTreatment(tenantDb, orgId, risk, userId, userRoles);
+  }
+
+  const data = risk && typeof risk === 'object'
+    ? (risk.toObject ? { ...risk.toObject() } : { ...risk })
+    : {};
+  data.canAddTreatment = canAddTreatment;
+
   res.json({
     success: true,
-    data: risk
+    data
   });
 });
 
@@ -121,17 +159,130 @@ export const deleteRisk = asyncHandler(async (req, res) => {
   });
 });
 
+export const exportRiskPdf = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { riskId } = req.params;
+
+  const riskService = new RiskService(orgId);
+  const rawRisk = await riskService.getRiskById(riskId);
+  if (!rawRisk) {
+    throw new AppError('Risk not found', 404, 'RISK_NOT_FOUND');
+  }
+
+  // Clone so we can safely enhance attachments / treatments
+  const risk = rawRisk && typeof rawRisk === 'object'
+    ? (rawRisk.toObject ? { ...rawRisk.toObject() } : { ...rawRisk })
+    : rawRisk;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  const logoUrl = org?.logo_url || process.env.LOGO || '';
+
+  // Resolve S3 keys to signed URLs for attachments & evidence
+  const { getFileUrl } = await import('../services/s3Service.js');
+
+  const attachments = await Promise.all(
+    (risk.attachments || []).map(async (att) => {
+      let url = null;
+      if (att.file_path) {
+        try {
+          url = await getFileUrl(att.file_path, 604800);
+        } catch {
+          url = null;
+        }
+      }
+      return { ...att, url };
+    })
+  );
+
+  const treatments = await Promise.all(
+    (risk.treatments || []).map(async (t) => {
+      const evidence = await Promise.all(
+        (t.evidence || []).map(async (ev) => {
+          let url = null;
+          if (ev.file_path) {
+            try {
+              url = await getFileUrl(ev.file_path, 604800);
+            } catch {
+              url = null;
+            }
+          }
+          return { ...ev, url };
+        })
+      );
+      return { ...t, evidence };
+    })
+  );
+
+  const { generateRiskDetailPDF } = await import('../services/riskPdfService.js');
+  const buffer = await generateRiskDetailPDF(
+    {
+      risk: { ...risk, attachments, treatments },
+      org
+    },
+    logoUrl
+  );
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="risk-${riskId}.pdf"`);
+  res.send(buffer);
+});
+
+export const exportRiskRegisterPdf = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const filters = {
+    status: req.query.status,
+    category: req.query.category,
+    search: req.query.search
+  };
+
+  const riskService = new RiskService(orgId);
+  const risks = await riskService.getRisks(filters);
+
+  const tenantDb = await getTenantConnection(orgId);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  const logoUrl = org?.logo_url || process.env.LOGO || '';
+
+  const { generateRiskRegisterPDF } = await import('../services/riskPdfService.js');
+  const buffer = await generateRiskRegisterPDF(
+    {
+      risks,
+      org
+    },
+    logoUrl
+  );
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', 'attachment; filename="risk-register.pdf"');
+  res.send(buffer);
+});
+
 /** Add a treatment to a risk - triggers approval workflow */
 export const addTreatment = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { riskId } = req.params;
   const { control_action, owner, due_date } = req.body;
+  const userId = req.user?.userId;
+  const userRoles = req.user?.roles || [];
 
   const tenantDb = await getTenantConnection(orgId);
   const riskRepo = new RiskRepository(tenantDb);
   const risk = await riskRepo.findById(riskId);
   if (!risk) {
     return res.status(404).json({ success: false, error: { message: 'Risk not found' } });
+  }
+
+  const allowed = await canUserAddTreatment(tenantDb, orgId, risk, userId, userRoles);
+  if (!allowed) {
+    return res.status(403).json({
+      success: false,
+      error: {
+        message: 'Only an admin or the head of the risk\'s department can add treatments.',
+        code: 'FORBIDDEN_ADD_TREATMENT'
+      }
+    });
   }
 
   const updated = await riskRepo.addTreatment(riskId, {
@@ -219,6 +370,71 @@ export const addTreatmentEvidence = asyncHandler(async (req, res) => {
   });
 
   res.status(201).json({ success: true, data: updated });
+});
+
+/** Upload attachment for a risk */
+export const addRiskAttachment = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { riskId } = req.params;
+  if (!req.file) {
+    return res.status(400).json({ success: false, error: { message: 'Attachment file is required' } });
+  }
+
+  const tenantDb = await getTenantConnection(orgId);
+  const riskRepo = new RiskRepository(tenantDb);
+  const risk = await riskRepo.findById(riskId);
+  if (!risk) {
+    return res.status(404).json({ success: false, error: { message: 'Risk not found' } });
+  }
+
+  const { key } = await uploadToS3(
+    req.file.buffer,
+    req.file.originalname,
+    req.file.mimetype,
+    orgId,
+    'risk_attachment'
+  );
+
+  const updated = await riskRepo.addAttachment(riskId, {
+    file_path: key,
+    file_name: req.file.originalname,
+    file_size: req.file.size,
+    mime_type: req.file.mimetype
+  });
+
+  res.status(201).json({ success: true, data: updated });
+});
+
+/** Stream risk attachment file for viewing */
+export const streamRiskAttachment = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { riskId, attachmentIndex } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+  const riskRepo = new RiskRepository(tenantDb);
+  const risk = await riskRepo.findById(riskId);
+  if (!risk) {
+    throw new AppError('Risk not found', 404, 'NOT_FOUND');
+  }
+  const idx = parseInt(attachmentIndex, 10);
+  if (isNaN(idx) || idx < 0 || !risk.attachments?.[idx]) {
+    throw new AppError('Attachment not found', 404, 'NOT_FOUND');
+  }
+  const att = risk.attachments[idx];
+  if (!att?.file_path) {
+    throw new AppError('Attachment not found', 404, 'NOT_FOUND');
+  }
+  const rangeHeader = req.headers.range || null;
+  const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await getFileStream(att.file_path, rangeHeader);
+  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(att.file_name || 'attachment')}"`);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Accept-Ranges', 'bytes');
+  if (IsPartial && ContentRange) {
+    res.status(206);
+    res.setHeader('Content-Range', ContentRange);
+  }
+  if (ContentLength != null) res.setHeader('Content-Length', String(ContentLength));
+  Body.pipe(res);
 });
 
 /** Stream evidence file for viewing */

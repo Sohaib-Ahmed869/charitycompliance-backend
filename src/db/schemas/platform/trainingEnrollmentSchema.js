@@ -28,7 +28,15 @@ const trainingEnrollmentSchema = new mongoose.Schema({
     type: Date,
     default: Date.now
   },
-  completed_at: { type: Date }
+  completed_at: { type: Date },
+  /** Optional post-training survey filled by the participant */
+  post_training_survey: {
+    rating: { type: Number, min: 1, max: 5 },
+    clarity: { type: String, enum: ['very_clear', 'somewhat_clear', 'confusing'], default: undefined },
+    relevance: { type: String, enum: ['very_relevant', 'somewhat_relevant', 'not_relevant'], default: undefined },
+    comments: { type: String },
+    completed_at: { type: Date }
+  }
 }, {
   timestamps: true,
   collection: 'training_enrollments'

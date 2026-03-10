@@ -158,8 +158,47 @@ export const registerTenant = async (tenantData) => {
   }
 };
 
+/**
+ * Register meeting -> org mapping for public RSVP lookup
+ * @param {string} meetingId - Meeting ObjectId as string
+ * @param {string} orgId - Organization identifier
+ */
+export const registerMeetingOrgLookup = async (meetingId, orgId) => {
+  if (!meetingId || !orgId) return;
+  try {
+    const routerDB = getRouterConnection();
+    const col = routerDB.collection('meeting_org_lookup');
+    await col.updateOne(
+      { meetingId },
+      { $set: { meetingId, orgId: orgId.toLowerCase().trim(), updatedAt: new Date() } },
+      { upsert: true }
+    );
+  } catch (error) {
+    logError('Failed to register meeting org lookup', error, { meetingId, orgId });
+  }
+};
+
+/**
+ * Get orgId for a meeting (for public RSVP)
+ * @param {string} meetingId
+ * @returns {Promise<string|null>}
+ */
+export const getOrgByMeetingId = async (meetingId) => {
+  if (!meetingId) return null;
+  try {
+    const routerDB = getRouterConnection();
+    const doc = await routerDB.collection('meeting_org_lookup').findOne({ meetingId });
+    return doc?.orgId || null;
+  } catch (error) {
+    logError('Failed to lookup meeting org', error, { meetingId });
+    return null;
+  }
+};
+
 export default {
   lookupTenant,
   clearTenantCache,
-  registerTenant
+  registerTenant,
+  registerMeetingOrgLookup,
+  getOrgByMeetingId
 };

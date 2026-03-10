@@ -453,6 +453,20 @@ export const getApprovalRequestById = asyncHandler(async (req, res) => {
     }
   } catch { /* s3 unavailable */ }
 
+  // Regenerate presigned URLs for escalation files (request_files + response files)
+  try {
+    const { getFileUrl: getUrl } = await import('../services/s3Service.js');
+    for (const esc of (doc.escalations || [])) {
+      for (const arr of [esc.request_files || [], esc.files || []]) {
+        for (const file of arr) {
+          if (file.key) {
+            try { file.url = await getUrl(file.key); } catch { /* keep existing url */ }
+          }
+        }
+      }
+    }
+  } catch { /* s3 unavailable */ }
+
   // Compute can_approve and current_step_index for the current user
   if (userId && doc.status === 'pending') {
     const steps = doc.approval_steps || [];
@@ -477,6 +491,39 @@ export const getApprovalRequestById = asyncHandler(async (req, res) => {
   } else {
     doc.can_approve = false;
     doc.current_step_index = -1;
+  }
+
+  // Enrich submitted_by with position for Approval Progress display
+  if (doc.submitted_by) {
+    doc.submitted_by = { ...doc.submitted_by };
+    if (doc.submitted_by.is_org_owner) {
+      doc.submitted_by.position = 'Admin';
+    } else {
+      const submitterId = doc.submitted_by._id || doc.submitted_by;
+      try {
+        const { UserPositionRepository } = await import('../repositories/userPositionRepository.js');
+        const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+        const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+        const orgRepo = new OrganizationRepository(tenantDb);
+        const org = await orgRepo.findOne();
+        if (org) {
+          const userPositionRepo = new UserPositionRepository(tenantDb);
+          const positions = await userPositionRepo.findByUserId(submitterId);
+          const title = positions?.[0]?.position_id?.title;
+          if (title) {
+            doc.submitted_by.position = title;
+          } else {
+            const boardMemberRepo = new BoardMemberRepository(tenantDb);
+            const bms = await boardMemberRepo.BoardMember.find({ user_id: submitterId, org_id: org._id, is_active: true })
+              .populate('position_id')
+              .limit(1)
+              .lean();
+            const bmTitle = bms?.[0]?.position_id?.title || bms?.[0]?.custom_position_title || bms?.[0]?.position;
+            if (bmTitle) doc.submitted_by.position = bmTitle;
+          }
+        }
+      } catch (_) { /* keep existing */ }
+    }
   }
 
   res.json({
@@ -1191,9 +1238,10 @@ export const resubmitApproval = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user.userId;
   const { approvalRequestId } = req.params;
+  const { change_control } = req.body || {};
 
   const workflowService = new ApprovalWorkflowService(orgId);
-  const result = await workflowService.resubmitForApproval(approvalRequestId, userId);
+  const result = await workflowService.resubmitForApproval(approvalRequestId, userId, change_control);
 
   res.json({
     success: true,

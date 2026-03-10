@@ -5,8 +5,33 @@
  */
 
 import { MeetingService } from '../services/meetingService.js';
+import { getOrgByMeetingId } from '../db/router.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
+
+/**
+ * Public RSVP - no auth. Attendee clicks Accept/Decline link in email.
+ * Redirects to frontend confirmation page.
+ */
+export const rsvpByToken = asyncHandler(async (req, res) => {
+  const { meetingId, token, response } = req.params;
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+  if (!['accept', 'decline'].includes(response)) {
+    return res.redirect(`${frontendUrl}/meetings/rsvp-done?error=invalid`);
+  }
+
+  const orgId = await getOrgByMeetingId(meetingId);
+  if (!orgId) {
+    return res.redirect(`${frontendUrl}/meetings/rsvp-done?error=not_found`);
+  }
+
+  const meetingService = new MeetingService(orgId);
+  await meetingService.rsvpByToken(meetingId, token, response);
+
+  const status = response === 'accept' ? 'accepted' : 'declined';
+  return res.redirect(`${frontendUrl}/meetings/rsvp-done?status=${status}&meetingId=${meetingId}`);
+});
 
 export const createMeeting = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
@@ -293,4 +318,76 @@ export const toggleNoteCompletion = asyncHandler(async (req, res) => {
     success: true,
     data: meeting
   });
+});
+
+export const uploadNoteDocument = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { meetingId, noteId } = req.params;
+
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'FILE_REQUIRED', message: 'File is required' }
+    });
+  }
+
+  const meetingService = new MeetingService(orgId);
+  const meeting = await meetingService.uploadNoteDocument(meetingId, noteId, req.file, userId);
+
+  res.json({
+    success: true,
+    data: meeting,
+    message: 'Document uploaded to note successfully'
+  });
+});
+
+export const deleteNoteDocument = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { meetingId, noteId, documentIndex } = req.params;
+
+  const meetingService = new MeetingService(orgId);
+  const meeting = await meetingService.deleteNoteDocument(meetingId, noteId, parseInt(documentIndex));
+
+  res.json({
+    success: true,
+    data: meeting,
+    message: 'Document deleted from note successfully'
+  });
+});
+
+/** Stream meeting document for viewing/download */
+export const streamMeetingDocument = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { meetingId, documentIndex } = req.params;
+  const meetingService = new MeetingService(orgId);
+  const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await meetingService.streamMeetingDocument(meetingId, parseInt(documentIndex, 10), req.headers.range || null);
+  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
+  res.setHeader('Content-Disposition', 'inline');
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Accept-Ranges', 'bytes');
+  if (IsPartial && ContentRange) {
+    res.status(206);
+    res.setHeader('Content-Range', ContentRange);
+  }
+  if (ContentLength != null) res.setHeader('Content-Length', String(ContentLength));
+  Body.pipe(res);
+});
+
+/** Stream internal note document for viewing/download */
+export const streamNoteDocument = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { meetingId, noteId, documentIndex } = req.params;
+  const meetingService = new MeetingService(orgId);
+  const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await meetingService.streamNoteDocument(meetingId, noteId, parseInt(documentIndex, 10), req.headers.range || null);
+  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
+  res.setHeader('Content-Disposition', 'inline');
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Accept-Ranges', 'bytes');
+  if (IsPartial && ContentRange) {
+    res.status(206);
+    res.setHeader('Content-Range', ContentRange);
+  }
+  if (ContentLength != null) res.setHeader('Content-Length', String(ContentLength));
+  Body.pipe(res);
 });

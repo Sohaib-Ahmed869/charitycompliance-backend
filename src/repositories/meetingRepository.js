@@ -76,6 +76,38 @@ export class MeetingRepository {
       .lean();
   }
 
+  /**
+   * Update attendance by RSVP token (internal or external attendee)
+   * @param {string} meetingId
+   * @param {string} token
+   * @param {'confirmed'|'declined'} status
+   */
+  async updateAttendanceByToken(meetingId, token, status) {
+    if (!token || !['confirmed', 'declined'].includes(status)) return null;
+
+    // Try attendees first
+    const byAttendee = await this.Meeting.findOneAndUpdate(
+      { _id: meetingId, 'attendees.rsvp_token': token },
+      { $set: { 'attendees.$[elem].attendance_status': status } },
+      { new: true, arrayFilters: [{ 'elem.rsvp_token': token }] }
+    )
+      .populate('created_by', 'first_name last_name email')
+      .populate('attendees.user_id', 'first_name last_name email')
+      .lean();
+
+    if (byAttendee) return byAttendee;
+
+    // Try external_attendees
+    return await this.Meeting.findByIdAndUpdate(
+      meetingId,
+      { $set: { 'external_attendees.$[elem].attendance_status': status } },
+      { new: true, arrayFilters: [{ 'elem.rsvp_token': token }] }
+    )
+      .populate('created_by', 'first_name last_name email')
+      .populate('attendees.user_id', 'first_name last_name email')
+      .lean();
+  }
+
   async completeChecklistItem(meetingId, itemIndex) {
     return await this.Meeting.findByIdAndUpdate(
       meetingId,

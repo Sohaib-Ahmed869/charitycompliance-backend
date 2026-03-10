@@ -25,8 +25,9 @@ const CONTAINER_GRADIENT = 'linear-gradient(180deg, #FFFFFF 0%, #FDFCFE 50%, #FA
  * @param {string} options.buttonText - CTA button text
  * @param {string} options.buttonLink - CTA button href
  * @param {string[]} options.infoBoxLines - Info box lines (array of strings)
+ * @param {string} [options.rsvpButtonsHtml] - Optional RSVP Accept/Decline buttons HTML
  */
-function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, buttonLink, infoBoxLines }) {
+function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, buttonLink, infoBoxLines, rsvpButtonsHtml }) {
   const logoHtml = LOGO_URL
     ? `<img src="${LOGO_URL}" alt="${APP_NAME}" style="max-width: 160px; height: auto;" />`
     : `<span style="font-size: 32px; font-weight: 600; letter-spacing: 1px; color: #5B6B9D;">${APP_NAME.toLowerCase()}</span>`;
@@ -107,7 +108,7 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
                                     </td>
                                 </tr>
                             </table>
-                            
+                            ${rsvpButtonsHtml || ''}
                             <!-- Info Box -->
                             ${infoBoxContent ? `
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
@@ -437,9 +438,35 @@ class EmailService {
    * @param {string} params.organizerName - Name of meeting organizer
    * @param {string} params.meetingId - Meeting ID for link
    */
-  async sendMeetingInvitationEmail({ to, recipientName, meetingTitle, meetingDate, durationMinutes, location, meetingLink, agenda, attendeeNames, organizerName, meetingId, isExternal = false }) {
+  async sendMeetingInvitationEmail({ to, recipientName, meetingTitle, meetingDate, durationMinutes, location, meetingLink, agenda, attendeeNames, organizerName, meetingId, isExternal = false, rsvpToken }) {
     const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const apiBase = process.env.API_BASE_URL || process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`;
     const viewMeetingLink = `${baseUrl}/meetings/${meetingId}`;
+
+    let rsvpButtonsHtml = '';
+    if (rsvpToken && meetingId) {
+      const acceptUrl = `${apiBase}/api/v1/platform/meetings/public/rsvp/${meetingId}/${rsvpToken}/accept`;
+      const declineUrl = `${apiBase}/api/v1/platform/meetings/public/rsvp/${meetingId}/${rsvpToken}/decline`;
+      rsvpButtonsHtml = `
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td align="center" style="padding-bottom: 28px;">
+              <p style="margin: 0 0 12px 0; font-size: 12px; color: #6B7280;">Will you attend?</p>
+              <table cellpadding="0" cellspacing="0" border="0" align="center" style="border-collapse: separate; border-spacing: 12px;">
+                <tr>
+                  <td align="center" style="background: #10B981; border-radius: 50px; box-shadow: 0px 2px 8px rgba(16, 185, 129, 0.4);">
+                    <a href="${acceptUrl}" style="display: inline-block; padding: 12px 28px; text-decoration: none; color: #FFFFFF; font-size: 14px; font-weight: 600;">Yes, I'll attend</a>
+                  </td>
+                  <td align="center" style="background: #EF4444; border-radius: 50px; box-shadow: 0px 2px 8px rgba(239, 68, 68, 0.4);">
+                    <a href="${declineUrl}" style="display: inline-block; padding: 12px 28px; text-decoration: none; color: #FFFFFF; font-size: 14px; font-weight: 600;">No, I can't attend</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      `;
+    }
 
     const formattedDate = new Date(meetingDate).toLocaleDateString('en-AU', {
       weekday: 'long',
@@ -485,7 +512,8 @@ class EmailService {
       bodyHtml,
       buttonText: 'View Meeting',
       buttonLink: viewMeetingLink,
-      infoBoxLines: ["Please confirm your attendance.", "Add this meeting to your calendar."]
+      infoBoxLines: rsvpToken ? ['Click Accept or Decline above to let the organizer know.', 'Add this meeting to your calendar.'] : ['Please confirm your attendance.', 'Add this meeting to your calendar.'],
+      rsvpButtonsHtml
     });
 
     return this.sendEmail({ to, subject, html });

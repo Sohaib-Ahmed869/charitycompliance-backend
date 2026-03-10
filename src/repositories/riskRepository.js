@@ -110,6 +110,23 @@ export class RiskRepository {
     );
   }
 
+  /** Add attachment to a risk */
+  async addAttachment(riskId, attachment) {
+    const ev = {
+      file_path: attachment.file_path,
+      file_name: attachment.file_name,
+      file_size: attachment.file_size,
+      mime_type: attachment.mime_type,
+      uploaded_at: new Date()
+    };
+    await this.Risk.findByIdAndUpdate(
+      riskId,
+      { $push: { attachments: ev }, $set: { updated_at: new Date() } },
+      { new: true }
+    );
+    return await this.findById(riskId);
+  }
+
   /** Add evidence to a treatment */
   async addEvidenceToTreatment(riskId, treatmentIndex, evidence) {
     const risk = await this.Risk.findById(riskId);

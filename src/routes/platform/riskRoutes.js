@@ -42,10 +42,28 @@ router.get(
 );
 
 router.get(
+  '/export/pdf',
+  [
+    query('status').optional().isIn(['draft', 'pending', 'under_treatment', 'approved', 'resolved', 'rejected', 'closed']),
+    query('category').optional().trim(),
+    query('search').optional().trim()
+  ],
+  validate,
+  riskController.exportRiskRegisterPdf
+);
+
+router.get(
   '/:riskId',
   [param('riskId').isMongoId().withMessage('Invalid risk ID')],
   validate,
   riskController.getRiskById
+);
+
+router.get(
+  '/:riskId/pdf',
+  [param('riskId').isMongoId().withMessage('Invalid risk ID')],
+  validate,
+  riskController.exportRiskPdf
 );
 
 router.put(
@@ -91,6 +109,25 @@ router.post(
   uploadPolicySingle,
   handlePolicyUploadError,
   riskController.addTreatmentEvidence
+);
+
+router.post(
+  '/:riskId/attachments',
+  [param('riskId').isMongoId().withMessage('Invalid risk ID')],
+  validate,
+  uploadPolicySingle,
+  handlePolicyUploadError,
+  riskController.addRiskAttachment
+);
+
+router.get(
+  '/:riskId/attachments/:attachmentIndex/stream',
+  [
+    param('riskId').isMongoId().withMessage('Invalid risk ID'),
+    param('attachmentIndex').isInt({ min: 0 }).withMessage('Invalid attachment index')
+  ],
+  validate,
+  riskController.streamRiskAttachment
 );
 
 router.get(
