@@ -51,4 +51,27 @@ export class NotificationRepository {
   async getUnreadCount(userId) {
     return await this.Notification.countDocuments({ user_id: userId, read: false });
   }
+
+  /**
+   * Basic dedupe helper: has a similar notification been created today?
+   * Used for scheduled reminders to avoid duplicates on restarts.
+   */
+  async existsToday({ user_id, type, related_entity_id, message_contains }) {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(start);
+    end.setDate(end.getDate() + 1);
+
+    const query = {
+      user_id,
+      type,
+      related_entity_id,
+      created_at: { $gte: start, $lt: end }
+    };
+    if (message_contains) {
+      query.message = { $regex: message_contains.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+    }
+    const found = await this.Notification.findOne(query).select('_id').lean();
+    return !!found;
+  }
 }

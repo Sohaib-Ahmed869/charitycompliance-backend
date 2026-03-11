@@ -6,6 +6,40 @@
 
 import mongoose from 'mongoose';
 
+const paymentEntrySchema = new mongoose.Schema({
+  amount: {
+    type: Number,
+    min: 0
+  },
+  payment_method: {
+    type: String,
+    enum: ['Bank Transfer', 'Cash', 'Check', 'Credit Card', 'Debit Card', 'Online Payment', 'Other']
+  },
+  payment_proof: {
+    type: String // S3 key
+  },
+  payment_proof_name: {
+    type: String
+  },
+  payment_date: {
+    type: Date
+  },
+  payment_reference: {
+    type: String
+  },
+  payment_notes: {
+    type: String
+  },
+  created_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  created_at: {
+    type: Date,
+    default: Date.now
+  }
+}, { _id: true });
+
 const expenseSchema = new mongoose.Schema({
   org_id: {
     type: String,
@@ -106,6 +140,34 @@ const expenseSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     index: true
+  },
+  // New: payment processing workflow (processor enters details, reviewer accepts)
+  payment_processor_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true
+  },
+  payment_reviewer_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true
+  },
+  payment_stage: {
+    type: String,
+    enum: ['unassigned', 'processing', 'review', 'completed'],
+    default: 'unassigned',
+    index: true
+  },
+  payments: {
+    type: [paymentEntrySchema],
+    default: []
+  },
+  payment_review: {
+    status: { type: String, enum: ['accepted', 'changes_requested'] },
+    review_notes: { type: String },
+    signature_data: { type: String }, // base64 data URL from DigitalSignature
+    reviewed_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    reviewed_at: { type: Date }
   },
   payment_method: {
     type: String,

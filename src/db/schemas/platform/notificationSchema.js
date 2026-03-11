@@ -28,8 +28,13 @@ const notificationSchema = new mongoose.Schema({
       // Expenses
       'expense_payment_assignment_required',
       'expense_payment_assigned',
+      'expense_payment_processing_assigned',
+      'expense_payment_review_required',
+      'expense_payment_completed',
       // Complaints
-      'complaint_assigned'
+      'complaint_assigned',
+      // Registration & Licenses
+      'registration_license_expiry_reminder'
     ],
     required: true,
     index: true

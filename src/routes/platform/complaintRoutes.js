@@ -148,6 +148,70 @@ router.get(
 );
 
 // Resolution workflow routes
+// ─── Complaint workflow routing ──────────────────────────────────────────────
+router.post(
+  '/:complaintId/workflow/triage-complete',
+  [param('complaintId').notEmpty().withMessage('Complaint ID is required')],
+  validate,
+  complaintController.workflowTriageComplete
+);
+
+router.post(
+  '/:complaintId/workflow/dept-head-complete',
+  [param('complaintId').notEmpty().withMessage('Complaint ID is required')],
+  validate,
+  complaintController.workflowDeptHeadComplete
+);
+
+router.post(
+  '/:complaintId/workflow/set-major',
+  [
+    param('complaintId').notEmpty().withMessage('Complaint ID is required'),
+    body('is_major').isBoolean().withMessage('is_major must be a boolean'),
+  ],
+  validate,
+  complaintController.workflowSetMajor
+);
+
+router.post(
+  '/:complaintId/workflow/select-board-signoff',
+  [
+    param('complaintId').notEmpty().withMessage('Complaint ID is required'),
+    body('board_member_id').notEmpty().isMongoId().withMessage('Valid board_member_id is required'),
+  ],
+  validate,
+  complaintController.workflowSelectBoardSignoff
+);
+
+router.post(
+  '/:complaintId/workflow/escalate',
+  [
+    param('complaintId').notEmpty().withMessage('Complaint ID is required'),
+    body('to_user_id').notEmpty().isMongoId().withMessage('Valid to_user_id is required'),
+    body('reason').optional().trim(),
+  ],
+  validate,
+  complaintController.workflowEscalate
+);
+
+router.post(
+  '/:complaintId/workflow/deescalate',
+  [param('complaintId').notEmpty().withMessage('Complaint ID is required')],
+  validate,
+  complaintController.workflowDeescalate
+);
+
+router.post(
+  '/:complaintId/workflow/board-signoff',
+  [
+    param('complaintId').notEmpty().withMessage('Complaint ID is required'),
+    body('signature_data').notEmpty().isString().withMessage('signature_data is required'),
+    body('notes').optional().trim(),
+  ],
+  validate,
+  complaintController.workflowBoardSignoff
+);
+
 // Step 1: Save resolution details
 router.post(
   '/:complaintId/resolution-details',

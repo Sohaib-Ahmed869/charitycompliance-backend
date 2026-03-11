@@ -10,6 +10,7 @@ import { closeRouterDB } from './src/config/database.js';
 import { closeAllConnections } from './src/db/connectionManager.js';
 import emailService from './src/services/emailService.js';
 import { logError, logInfo, logWarn } from './src/utils/logger.js';
+import { startRegistrationLicenseReminderScheduler } from './src/services/registrationLicenseReminderService.js';
 
 dotenv.config();
 
@@ -25,6 +26,8 @@ const startServer = async () => {
       logInfo('Server started', { port: PORT, environment: process.env.NODE_ENV || 'development' });
       // Verify SMTP on startup and log result (non-blocking)
       emailService.initialize().catch(() => {});
+      // Start scheduled reminders (registration/license expiries)
+      startRegistrationLicenseReminderScheduler();
     });
 
     const gracefulShutdown = async (signal) => {

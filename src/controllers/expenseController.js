@@ -151,10 +151,66 @@ export const assignExpense = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user.userId;
   const { expenseId } = req.params;
-  const { assigned_to } = req.body;
+  const { assigned_to, payment_processor_id, payment_reviewer_id } = req.body;
 
   const expenseService = new ExpenseService(orgId);
-  const expense = await expenseService.assignExpense(expenseId, assigned_to, userId);
+  const expense = (payment_processor_id && payment_reviewer_id)
+    ? await expenseService.assignPaymentTeam(expenseId, payment_processor_id, payment_reviewer_id, userId)
+    : await expenseService.assignExpense(expenseId, assigned_to, userId);
+
+  res.json({
+    success: true,
+    data: expense
+  });
+});
+
+export const submitPaymentsForReview = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        details: errors.array()
+      }
+    });
+  }
+
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { expenseId } = req.params;
+  const payload = req.body;
+
+  const expenseService = new ExpenseService(orgId);
+  const expense = await expenseService.submitPaymentsForReview(expenseId, payload, userId);
+
+  res.json({
+    success: true,
+    data: expense
+  });
+});
+
+export const reviewPayments = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        details: errors.array()
+      }
+    });
+  }
+
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { expenseId } = req.params;
+  const payload = req.body;
+
+  const expenseService = new ExpenseService(orgId);
+  const expense = await expenseService.reviewPayments(expenseId, payload, userId);
 
   res.json({
     success: true,

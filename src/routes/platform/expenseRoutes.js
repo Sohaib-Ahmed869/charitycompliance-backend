@@ -174,11 +174,91 @@ router.post(
       .isMongoId()
       .withMessage('Invalid expense ID'),
     body('assigned_to')
+      .optional()
       .isMongoId()
-      .withMessage('Invalid user ID for assignment')
+      .withMessage('Invalid user ID for assignment'),
+    body('payment_processor_id')
+      .optional()
+      .isMongoId()
+      .withMessage('Invalid processor user ID'),
+    body('payment_reviewer_id')
+      .optional()
+      .isMongoId()
+      .withMessage('Invalid reviewer user ID'),
+    body()
+      .custom((value) => {
+        const hasLegacy = !!value?.assigned_to;
+        const hasTeam = !!value?.payment_processor_id && !!value?.payment_reviewer_id;
+        if (!hasLegacy && !hasTeam) {
+          throw new Error('Either assigned_to or both payment_processor_id and payment_reviewer_id are required');
+        }
+        return true;
+      })
   ],
   validate,
   expenseController.assignExpense
+);
+
+// Processor submits one or more payments for review
+router.post(
+  '/:expenseId/payments/submit',
+  [
+    param('expenseId')
+      .isMongoId()
+      .withMessage('Invalid expense ID'),
+    body('payments')
+      .isArray({ min: 1 })
+      .withMessage('payments must be a non-empty array'),
+    body('payments.*.payment_method')
+      .trim()
+      .notEmpty()
+      .withMessage('Payment method is required')
+      .isIn(['Bank Transfer', 'Cash', 'Check', 'Credit Card', 'Debit Card', 'Online Payment', 'Other'])
+      .withMessage('Invalid payment method'),
+    body('payments.*.payment_proof')
+      .trim()
+      .notEmpty()
+      .withMessage('Payment proof file is required'),
+    body('payments.*.payment_date')
+      .optional()
+      .isISO8601()
+      .withMessage('Invalid payment date format'),
+    body('payments.*.payment_reference')
+      .optional()
+      .trim(),
+    body('payments.*.payment_notes')
+      .optional()
+      .trim(),
+    body('payments.*.amount')
+      .optional()
+      .isFloat({ min: 0 })
+      .withMessage('Payment amount must be a positive number')
+  ],
+  validate,
+  expenseController.submitPaymentsForReview
+);
+
+// Reviewer accepts (or requests changes) for submitted payments
+router.post(
+  '/:expenseId/payments/review',
+  [
+    param('expenseId')
+      .isMongoId()
+      .withMessage('Invalid expense ID'),
+    body('action')
+      .optional()
+      .isIn(['accept', 'request_changes'])
+      .withMessage('Invalid action'),
+    body('review_notes')
+      .optional()
+      .trim(),
+    body('signature_data')
+      .optional()
+      .isString()
+      .withMessage('Invalid signature_data')
+  ],
+  validate,
+  expenseController.reviewPayments
 );
 
 // Submit payment proof
