@@ -7,6 +7,7 @@
 import { getTenantConnection } from '../db/connectionManager.js';
 import { ExpenseRepository } from '../repositories/expenseRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
+import { NotificationRepository } from '../repositories/notificationRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
 import { ApprovalWorkflowService } from './approvalWorkflowService.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -234,6 +235,7 @@ export class ExpenseService {
     const tenantDb = await this.getTenantDb();
     const expenseRepo = new ExpenseRepository(tenantDb);
     const userRepo = new UserRepository(tenantDb);
+    const notificationRepo = new NotificationRepository(tenantDb);
 
     const expense = await expenseRepo.findById(expenseId);
     if (!expense) {
@@ -257,6 +259,23 @@ export class ExpenseService {
     });
 
     logInfo('Expense assigned for payment', { expenseId, assignedTo: assignedToUserId, assignedBy: assigningUserId });
+
+    // Notify assigned user to process payment
+    try {
+      await notificationRepo.create({
+        user_id: assignedToUserId,
+        type: 'expense_payment_assigned',
+        title: 'Payment assigned to you',
+        message: 'You have been assigned to process an approved expense payment. Please upload payment proof.',
+        link: `/expenses/${expenseId}#payment-section`,
+        related_entity_id: expenseId,
+        related_entity_type: 'expense',
+        created_at: new Date()
+      });
+    } catch (err) {
+      logError('Failed to create expense payment assigned notification', { error: err?.message, expenseId, assignedTo: assignedToUserId });
+    }
+
     return updatedExpense;
   }
 

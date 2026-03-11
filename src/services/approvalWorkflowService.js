@@ -804,6 +804,27 @@ export class ApprovalWorkflowService {
       if (request.entity_type === 'expense') {
         await expenseRepo.updateStatus(request.entity_id, 'approved', { approved_at: new Date() });
         logInfo('Expense status updated from approval', { approvalRequestId, entityId: request.entity_id });
+
+        // Notify submitter to assign a payment member
+        try {
+          const exp = await expenseRepo.findById(request.entity_id);
+          const submitterId = exp?.submitted_by?._id || exp?.submitted_by;
+          if (submitterId) {
+            const notificationRepo = new NotificationRepository(tenantDb);
+            await notificationRepo.create({
+              user_id: submitterId,
+              type: 'expense_payment_assignment_required',
+              title: 'Expense approved — assign payment member',
+              message: 'Your expense was approved. Please assign a team member to process the payment and upload proof.',
+              link: `/expenses/${request.entity_id}#payment-section`,
+              related_entity_id: request.entity_id,
+              related_entity_type: 'expense',
+              created_at: new Date()
+            });
+          }
+        } catch (err) {
+          logError('Failed to create expense payment assignment notification', { error: err?.message, expenseId: request.entity_id });
+        }
       } else if (request.entity_type === 'risk') {
         if (request.request_type === 'risk_treatment') {
           // Treatment approved - mark risk as resolved

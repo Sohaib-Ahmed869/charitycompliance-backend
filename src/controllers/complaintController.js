@@ -14,6 +14,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import { logInfo, logError } from '../utils/logger.js';
 import crypto from 'crypto';
 import { MongoClient } from 'mongodb';
+import { NotificationRepository } from '../repositories/notificationRepository.js';
 
 // Get all complaints for organization
 export const getComplaints = asyncHandler(async (req, res) => {
@@ -365,6 +366,29 @@ export const updateComplaint = asyncHandler(async (req, res) => {
   const updatedComplaint = await complaintRepo.update(complaintId, req.body);
 
   logInfo('Complaint updated', { complaintId, orgId, updatedData: req.body });
+
+  // Notify assignee when complaint is assigned/changed
+  try {
+    const newAssignedTo = req.body?.assigned_to;
+    if (newAssignedTo) {
+      const prevAssignedTo = complaint.assigned_to?._id || complaint.assigned_to;
+      if (!prevAssignedTo || String(prevAssignedTo) !== String(newAssignedTo)) {
+        const notificationRepo = new NotificationRepository(tenantDb);
+        await notificationRepo.create({
+          user_id: newAssignedTo,
+          type: 'complaint_assigned',
+          title: 'Complaint assigned to you',
+          message: 'A complaint has been assigned to you for review and resolution.',
+          link: `/complaints/${complaintId}`,
+          related_entity_id: complaintId,
+          related_entity_type: 'complaint',
+          created_at: new Date()
+        });
+      }
+    }
+  } catch (err) {
+    logError('Failed to create complaint assignment notification', { error: err?.message, complaintId });
+  }
 
   res.json({
     success: true,
