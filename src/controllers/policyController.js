@@ -913,12 +913,52 @@ export const downloadPolicySignOffPDF = asyncHandler(async (req, res) => {
   let acknowledgements = await acknowledgementRepo.findByPolicyId(policyId);
   let documentLogs = await policyRepo.getDocumentLogs(policyId);
   let approvals = [];
+  let approvalRequest = null;
   
   try {
     approvals = await policyRepo.getApprovals(policyId);
     console.log('Approvals fetched for PDF:', JSON.stringify(approvals, null, 2));
   } catch (error) {
     console.error('Error fetching approvals:', error);
+  }
+
+  // Fetch approval workflow trail (ApprovalRequest) so PDF shows complete steps
+  try {
+    const approvalRequestSchema = (await import('../db/schemas/platform/approvalRequestSchema.js')).default;
+    const ApprovalRequest = tenantDb.models.ApprovalRequest || tenantDb.model('ApprovalRequest', approvalRequestSchema);
+    // Ensure referenced models exist for populate() on this tenant connection
+    const positionSchema = (await import('../db/schemas/platform/positionSchema.js')).default;
+    const departmentSchema = (await import('../db/schemas/platform/departmentSchema.js')).default;
+    tenantDb.models.Position || tenantDb.model('Position', positionSchema);
+    tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
+    const { UserRepository } = await import('../repositories/userRepository.js');
+    new UserRepository(tenantDb);
+    const approvalRequestId = policy.approval_request_id;
+
+    const basePopulate = (q) => q
+        .populate('submitted_by', 'first_name last_name email is_org_owner')
+        .populate('approval_steps.approver_user_id', 'first_name last_name email is_org_owner')
+        .populate('approval_steps.approver_position_id', 'title')
+        .populate('approval_steps.approver_department_id', 'name')
+        .populate('rejection_reviews.rejected_by', 'first_name last_name email is_org_owner')
+        .populate('rejection_reviews.forwarded_to', 'first_name last_name email is_org_owner')
+        .populate('escalations.escalated_by', 'first_name last_name email is_org_owner')
+        .populate('escalations.escalated_to', 'first_name last_name email is_org_owner')
+        .lean();
+
+    if (approvalRequestId) {
+      approvalRequest = await basePopulate(ApprovalRequest.findById(approvalRequestId));
+    }
+
+    // Fallback: if policy.approval_request_id is missing/stale, get the latest request by entity link.
+    if (!approvalRequest) {
+      approvalRequest = await basePopulate(
+        ApprovalRequest.findOne({ entity_id: policy._id, entity_type: 'policy' }).sort({ created_at: -1 })
+      );
+    }
+  } catch (err) {
+    console.error('Error fetching approval request for policy PDF:', err);
+    approvalRequest = null;
   }
 
   console.log('PDF Data Summary:', {
@@ -990,7 +1030,8 @@ export const downloadPolicySignOffPDF = asyncHandler(async (req, res) => {
     acknowledgements || [],
     documentLogs || [],
     approvals || [],
-    logoUrl
+    logoUrl,
+    approvalRequest
   );
 
   // Set headers and send PDF
@@ -1040,11 +1081,50 @@ export const downloadPolicyPackZip = asyncHandler(async (req, res) => {
   let acknowledgements = await acknowledgementRepo.findByPolicyId(policyId);
   let documentLogs = await policyRepo.getDocumentLogs(policyId);
   let approvals = [];
+  let approvalRequest = null;
   
   try {
     approvals = await policyRepo.getApprovals(policyId);
   } catch (error) {
     console.error('Error fetching approvals:', error);
+  }
+
+  // Fetch approval workflow trail (ApprovalRequest) so PDF shows complete steps
+  try {
+    const approvalRequestSchema = (await import('../db/schemas/platform/approvalRequestSchema.js')).default;
+    const ApprovalRequest = tenantDb.models.ApprovalRequest || tenantDb.model('ApprovalRequest', approvalRequestSchema);
+    // Ensure referenced models exist for populate() on this tenant connection
+    const positionSchema = (await import('../db/schemas/platform/positionSchema.js')).default;
+    const departmentSchema = (await import('../db/schemas/platform/departmentSchema.js')).default;
+    tenantDb.models.Position || tenantDb.model('Position', positionSchema);
+    tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
+    const { UserRepository } = await import('../repositories/userRepository.js');
+    new UserRepository(tenantDb);
+    const approvalRequestId = policy.approval_request_id;
+    const basePopulate = (q) => q
+        .populate('submitted_by', 'first_name last_name email is_org_owner')
+        .populate('approval_steps.approver_user_id', 'first_name last_name email is_org_owner')
+        .populate('approval_steps.approver_position_id', 'title')
+        .populate('approval_steps.approver_department_id', 'name')
+        .populate('rejection_reviews.rejected_by', 'first_name last_name email is_org_owner')
+        .populate('rejection_reviews.forwarded_to', 'first_name last_name email is_org_owner')
+        .populate('escalations.escalated_by', 'first_name last_name email is_org_owner')
+        .populate('escalations.escalated_to', 'first_name last_name email is_org_owner')
+        .lean();
+
+    if (approvalRequestId) {
+      approvalRequest = await basePopulate(ApprovalRequest.findById(approvalRequestId));
+    }
+
+    // Fallback: if policy.approval_request_id is missing/stale, get the latest request by entity link.
+    if (!approvalRequest) {
+      approvalRequest = await basePopulate(
+        ApprovalRequest.findOne({ entity_id: policy._id, entity_type: 'policy' }).sort({ created_at: -1 })
+      );
+    }
+  } catch (err) {
+    console.error('Error fetching approval request for policy PDF:', err);
+    approvalRequest = null;
   }
 
   // Decrypt user names in document logs
@@ -1091,7 +1171,8 @@ export const downloadPolicyPackZip = asyncHandler(async (req, res) => {
       acknowledgements || [],
       documentLogs || [],
       approvals || [],
-      logoUrl
+      logoUrl,
+      approvalRequest
     );
   } catch (pdfError) {
     console.error('PDF Generation Error:', pdfError);

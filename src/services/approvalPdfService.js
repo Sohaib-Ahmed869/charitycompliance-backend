@@ -32,6 +32,23 @@ const formatCurrency = (amount) => {
 };
 
 const esc = (str) => String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const safeName = (u) => {
+  if (!u) return '—';
+  if (typeof u === 'string') return '—';
+  const name = `${u.first_name || ''} ${u.last_name || ''}`.trim();
+  return name || '—';
+};
+
+const attemptOutcomeLabel = (attempt) => {
+  const reason = attempt?.reason || '';
+  if (reason === 'rejection_upheld') return 'Declined (Upheld)';
+  if (reason === 'rejection_overridden') return 'Declined (Overridden)';
+  if (reason) return toTitleCase(reason);
+  const snapshot = Array.isArray(attempt?.steps_snapshot) ? attempt.steps_snapshot : [];
+  if (snapshot.some((s) => s?.status === 'rejected')) return 'Declined';
+  if (snapshot.length > 0 && snapshot.every((s) => s?.status === 'approved')) return 'Approved';
+  return 'In Progress';
+};
 
 const REQUEST_TYPE_LABELS = {
   expense: 'Expense Reimbursement',
@@ -183,6 +200,114 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
       </tr>`;
     });
 
+    // ── Rejection review trail ──
+    let rejectionTrailHTML = '';
+    const rejectionReviews = Array.isArray(approvalRequest.rejection_reviews) ? approvalRequest.rejection_reviews : [];
+    if (rejectionReviews.length > 0) {
+      const rows = rejectionReviews.map((r, idx) => {
+        const filesHTML = (r.rejection_files || []).length > 0
+          ? (r.rejection_files || []).map((f) => {
+            const name = esc(f.name || 'file');
+            const url = f.url;
+            return url
+              ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${name}</a>`
+              : name;
+          }).join(', ')
+          : '—';
+
+        return `<tr>
+          <td>${idx + 1}</td>
+          <td>${esc(safeName(r.rejected_by))}</td>
+          <td>${esc(safeName(r.forwarded_to))}</td>
+          <td>${esc(toTitleCase(r.review_action || r.review_status || 'pending'))}</td>
+          <td style="font-size:9px;">${r.created_at ? `${formatDate(r.created_at)}<br/>${formatTime(r.created_at)}` : '—'}</td>
+          <td style="font-size:9px;">${r.reviewed_at ? `${formatDate(r.reviewed_at)}<br/>${formatTime(r.reviewed_at)}` : '—'}</td>
+          <td style="font-size:9px;">${esc(r.rejection_comments || '—')}${r.review_comments ? `<div style="margin-top:3px;color:#065F46;">✅ ${esc(r.review_comments)}</div>` : ''}</td>
+          <td style="font-size:9px;">${filesHTML}</td>
+        </tr>`;
+      }).join('');
+
+      rejectionTrailHTML = `
+        <h2>Rejection Review Trail (${rejectionReviews.length})</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Declined By</th>
+              <th>Forwarded To</th>
+              <th>Outcome</th>
+              <th>Declined At</th>
+              <th>Reviewed At</th>
+              <th>Notes</th>
+              <th>Files</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
+    // ── Opinion escalations trail ──
+    let escalationsHTML = '';
+    const escalations = Array.isArray(approvalRequest.escalations) ? approvalRequest.escalations : [];
+    if (escalations.length > 0) {
+      const rows = escalations.map((e, idx) => {
+        const reqFilesHTML = (e.request_files || []).length > 0
+          ? (e.request_files || []).map((f) => {
+            const name = esc(f.name || 'file');
+            const url = f.url;
+            return url
+              ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${name}</a>`
+              : name;
+          }).join(', ')
+          : '—';
+
+        const respFilesHTML = (e.files || []).length > 0
+          ? (e.files || []).map((f) => {
+            const name = esc(f.name || 'file');
+            const url = f.url;
+            return url
+              ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${name}</a>`
+              : name;
+          }).join(', ')
+          : '—';
+
+        return `<tr>
+          <td>${idx + 1}</td>
+          <td>${esc(String(e.step_index ?? '—'))}</td>
+          <td>${esc(safeName(e.escalated_by))}</td>
+          <td>${esc(safeName(e.escalated_to))}</td>
+          <td>${esc(toTitleCase(e.status || 'pending'))}</td>
+          <td style="font-size:9px;">${e.created_at ? `${formatDate(e.created_at)}<br/>${formatTime(e.created_at)}` : '—'}</td>
+          <td style="font-size:9px;">${e.responded_at ? `${formatDate(e.responded_at)}<br/>${formatTime(e.responded_at)}` : '—'}</td>
+          <td style="font-size:9px;">${esc(e.request_comments || '—')}${e.comments ? `<div style="margin-top:3px;color:#065F46;">💬 ${esc(e.comments)}</div>` : ''}</td>
+          <td style="font-size:9px;">${reqFilesHTML}</td>
+          <td style="font-size:9px;">${respFilesHTML}</td>
+        </tr>`;
+      }).join('');
+
+      escalationsHTML = `
+        <h2>Opinion Escalations (${escalations.length})</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Step</th>
+              <th>Escalated By</th>
+              <th>Escalated To</th>
+              <th>Status</th>
+              <th>Asked At</th>
+              <th>Responded At</th>
+              <th>Notes</th>
+              <th>Request Files</th>
+              <th>Response Files</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+    }
+
     // ── Acknowledgements summary ──
     const stepsWithAck = steps.filter(s => s.acknowledgement_files?.length || s.acknowledgement_note);
     let ackHTML = '';
@@ -228,34 +353,16 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
       const attemptRows = [];
 
       previousAttempts.forEach((attempt, idx) => {
-        const snapshot = Array.isArray(attempt.steps_snapshot) ? attempt.steps_snapshot : [];
-        const rejectedStep = snapshot.find(s => s.status === 'rejected');
-        const approvedOnly = snapshot.length > 0 && snapshot.every(s => s.status === 'approved');
-        const lastApproved = snapshot.filter(s => s.status === 'approved').slice(-1)[0] || null;
-
-        let outcome = 'In Progress';
-        let actor = '—';
-        let at = null;
-
-        if (rejectedStep) {
-          outcome = 'Declined';
-          actor = rejectedStep.approver_user_id
-            ? `${rejectedStep.approver_user_id.first_name || ''} ${rejectedStep.approver_user_id.last_name || ''}`.trim() || '—'
-            : '—';
-          at = rejectedStep.rejected_at;
-        } else if (approvedOnly && lastApproved) {
-          outcome = 'Approved';
-          actor = lastApproved.approver_user_id
-            ? `${lastApproved.approver_user_id.first_name || ''} ${lastApproved.approver_user_id.last_name || ''}`.trim() || '—'
-            : '—';
-          at = lastApproved.approved_at;
-        }
+        const outcome = attemptOutcomeLabel(attempt);
+        const at = attempt.saved_at || null;
 
         attemptRows.push(`<tr>
           <td>Attempt ${attempt.attempt_number || idx + 1}</td>
           <td>${esc(outcome)}</td>
-          <td>${esc(actor)}</td>
-          <td style="font-size:9px;">${at ? `${formatDate(at)} ${formatTime(at)}` : '—'}</td>
+          <td style="font-size:9px;">
+            ${attempt.change_control ? `<div><strong>Change Control:</strong> ${esc(attempt.change_control)}</div>` : '—'}
+          </td>
+          <td style="font-size:9px;">${at ? `${formatDate(at)}<br/>${formatTime(at)}` : '—'}</td>
         </tr>`);
       });
 
@@ -270,13 +377,13 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
         <td>Attempt ${previousAttempts.length + 1}</td>
         <td>${esc(finalOutcome)}</td>
         <td>${esc(finalActor)}</td>
-        <td style="font-size:9px;">${finalAt ? `${formatDate(finalAt)} ${formatTime(finalAt)}` : '—'}</td>
+        <td style="font-size:9px;">${finalAt ? `${formatDate(finalAt)}<br/>${formatTime(finalAt)}` : '—'}</td>
       </tr>`);
 
       attemptsHTML = `
         <h2>Attempt History</h2>
         <table>
-          <thead><tr><th>Attempt</th><th>Outcome</th><th>By</th><th>Date</th></tr></thead>
+          <thead><tr><th>Attempt</th><th>Outcome</th><th>Change Control</th><th>Saved At</th></tr></thead>
           <tbody>${attemptRows.join('')}</tbody>
         </table>
       `;
@@ -437,6 +544,8 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
     </table>
 
     ${attemptsHTML}
+    ${rejectionTrailHTML}
+    ${escalationsHTML}
     ${ackHTML}
 
     <div class="footer">
@@ -449,7 +558,7 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
 </html>
     `;
 
-    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+    await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 0 });
 
     const pdfBuffer = await page.pdf({
       format: 'A4',

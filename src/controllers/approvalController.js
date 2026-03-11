@@ -1303,6 +1303,8 @@ export const downloadApprovalPDF = asyncHandler(async (req, res) => {
     .populate('approval_steps.approver_department_id', 'name')
     .populate('rejection_reviews.rejected_by', 'first_name last_name email is_org_owner')
     .populate('rejection_reviews.forwarded_to', 'first_name last_name email is_org_owner')
+    .populate('escalations.escalated_by', 'first_name last_name email is_org_owner')
+    .populate('escalations.escalated_to', 'first_name last_name email is_org_owner')
     .lean();
 
   if (!approvalRequest) {

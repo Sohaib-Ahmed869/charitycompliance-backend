@@ -8,7 +8,7 @@ import puppeteer from 'puppeteer';
 /**
  * Generate Policy Sign-Off Sheet PDF
  */
-export const generatePolicySignOffPDF = async (policy, acknowledgements, documentLogs, approvals, logoUrl) => {
+export const generatePolicySignOffPDF = async (policy, acknowledgements, documentLogs, approvals, logoUrl, approvalRequest = null) => {
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -16,6 +16,12 @@ export const generatePolicySignOffPDF = async (policy, acknowledgements, documen
 
   try {
     const page = await browser.newPage();
+
+    const esc = (str) => String(str || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
 
     // Format date helper
     const formatDate = (date) => {
@@ -55,6 +61,144 @@ export const generatePolicySignOffPDF = async (policy, acknowledgements, documen
         .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
         .join(' ');
     };
+
+    const safeName = (u) => {
+      if (!u) return '—';
+      if (typeof u === 'string') return '—';
+      const name = `${u.first_name || ''} ${u.last_name || ''}`.trim();
+      return name || '—';
+    };
+
+    // ── Workflow approval trail (ApprovalRequest) ──
+    const ar = approvalRequest || null;
+    const arSteps = Array.isArray(ar?.approval_steps) ? ar.approval_steps : [];
+    const arPrevAttempts = Array.isArray(ar?.previous_attempts) ? ar.previous_attempts : [];
+    const arStatus = ar?.status ? formatText(ar.status) : '—';
+
+    const attemptOutcomeLabel = (attempt) => {
+      const reason = attempt?.reason || '';
+      if (reason === 'rejection_upheld') return 'Declined (Upheld)';
+      if (reason === 'rejection_overridden') return 'Declined (Overridden)';
+      if (reason) return formatText(reason);
+      const snapshot = Array.isArray(attempt?.steps_snapshot) ? attempt.steps_snapshot : [];
+      if (snapshot.some((s) => s?.status === 'rejected')) return 'Declined';
+      if (snapshot.length > 0 && snapshot.every((s) => s?.status === 'approved')) return 'Approved';
+      return 'In Progress';
+    };
+
+    let workflowAttemptsHTML = '';
+    if (ar || arPrevAttempts.length > 0) {
+      const rows = [];
+
+      arPrevAttempts.forEach((a, idx) => {
+        rows.push(`
+          <tr>
+            <td>Attempt ${a.attempt_number || idx + 1}</td>
+            <td>${esc(attemptOutcomeLabel(a))}</td>
+            <td style="font-size: 9px;">${a.change_control ? esc(a.change_control) : '—'}</td>
+            <td style="font-size: 9px;">${a.saved_at ? `${formatDate(a.saved_at)}<br/><small>${formatTime(a.saved_at)}</small>` : '—'}</td>
+          </tr>
+        `);
+      });
+
+      rows.push(`
+        <tr>
+          <td>Attempt ${arPrevAttempts.length + 1}</td>
+          <td>${esc(arStatus)}</td>
+          <td style="font-size: 9px;">—</td>
+          <td style="font-size: 9px;">${ar?.created_at ? `${formatDate(ar.created_at)}<br/><small>${formatTime(ar.created_at)}</small>` : '—'}</td>
+        </tr>
+      `);
+
+      workflowAttemptsHTML = `
+        <h2>Approval Workflow Attempts (${arPrevAttempts.length + 1})</h2>
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 18%;">Attempt</th>
+              <th style="width: 22%;">Outcome</th>
+              <th style="width: 40%;">Change Control</th>
+              <th style="width: 20%;">Timestamp</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.join('')}
+          </tbody>
+        </table>
+      `;
+    }
+
+    const renderStepRows = (steps, attemptLabel) => {
+      if (!Array.isArray(steps) || steps.length === 0) return '';
+      return steps.map((step, idx) => {
+        let statusClass = 'status-pending';
+        if (step.status === 'approved') statusClass = 'status-approved';
+        if (step.status === 'rejected') statusClass = 'status-rejected';
+
+        const isDeptHead = step.is_department_head === true;
+        const posTitle = isDeptHead
+          ? 'Head of Department'
+          : (step.approver_position_id?.title || step.approver_department_id?.name || `Step ${idx + 1}`);
+        const approverName = safeName(step.approver_user_id);
+        const reviewDate = step.approved_at || step.rejected_at;
+
+        let notes = '';
+        if (step.comments) notes += `<div style="margin-top:3px;font-size:9px;color:#4A5568;">💬 ${esc(step.comments)}</div>`;
+        if (step.acknowledgement_note) notes += `<div style="margin-top:3px;font-size:9px;color:#3B82F6;">📝 ${esc(step.acknowledgement_note)}</div>`;
+        if (step.acknowledgement_files?.length) {
+          const filesHTML = step.acknowledgement_files.map((f) => {
+            const name = esc(f.name || 'file');
+            const url = f.url;
+            return url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${name}</a>` : name;
+          }).join(', ');
+          notes += `<div style="margin-top:3px;font-size:9px;color:#6366F1;">📎 ${step.acknowledgement_files.length} file${step.acknowledgement_files.length !== 1 ? 's' : ''}: ${filesHTML}</div>`;
+        }
+
+        return `
+          <tr>
+            <td style="font-size: 9px;">${esc(attemptLabel)}</td>
+            <td>${esc(posTitle)}</td>
+            <td>${esc(approverName)}</td>
+            <td><span class="status-badge ${statusClass}">${formatText(step.status || 'pending')}</span></td>
+            <td>${reviewDate ? `${formatDate(reviewDate)}<br/><small>${formatTime(reviewDate)}</small>` : '—'}</td>
+            <td style="font-size: 9px;">${notes || '—'}</td>
+          </tr>
+        `;
+      }).join('');
+    };
+
+    let workflowStepsHTML = '';
+    if ((arPrevAttempts.length > 0) || arSteps.length > 0) {
+      const rows = [];
+      arPrevAttempts.forEach((a, idx) => {
+        const snap = Array.isArray(a.steps_snapshot) ? a.steps_snapshot : [];
+        rows.push(renderStepRows(snap, `Attempt ${a.attempt_number || idx + 1}`));
+      });
+      rows.push(renderStepRows(arSteps, `Attempt ${arPrevAttempts.length + 1}`));
+
+      workflowStepsHTML = `
+        <h2>Approval Workflow Trail (${arPrevAttempts.length + 1} attempt${(arPrevAttempts.length + 1) !== 1 ? 's' : ''})</h2>
+        ${(rows.join('').trim().length === 0)
+          ? '<p class="no-data">No approval workflow steps recorded</p>'
+          : `
+          <table>
+            <thead>
+              <tr>
+                <th style="width: 12%;">Attempt</th>
+                <th style="width: 20%;">Position</th>
+                <th style="width: 18%;">Approver</th>
+                <th style="width: 12%;">Status</th>
+                <th style="width: 18%;">Date & Time</th>
+                <th style="width: 20%;">Notes / Evidence</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.join('')}
+            </tbody>
+          </table>
+        `}
+      `;
+    }
 
     // Generate HTML content
     const htmlContent = `
@@ -249,7 +393,7 @@ export const generatePolicySignOffPDF = async (policy, acknowledgements, documen
       </tr>
       <tr>
         <td>Status</td>
-        <td>${(policy.status || 'active').charAt(0).toUpperCase() + (policy.status || 'active').slice(1)}</td>
+        <td>${formatText(policy.status || 'active')}</td>
       </tr>
       <tr>
         <td>Created Date</td>
@@ -341,9 +485,12 @@ export const generatePolicySignOffPDF = async (policy, acknowledgements, documen
     </table>
     `}
 
-    <h2>Approval Steps (${approvals.length})</h2>
+    ${workflowAttemptsHTML}
+    ${workflowStepsHTML}
+
+    <h2>Policy Review Actions (${approvals.length})</h2>
     ${approvals.length === 0
-      ? '<p class="no-data">No approvals recorded</p>'
+      ? '<p class="no-data">No policy review actions recorded</p>'
       : `
     <table>
       <thead>
@@ -388,7 +535,7 @@ export const generatePolicySignOffPDF = async (policy, acknowledgements, documen
 </html>
     `;
 
-    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+    await page.setContent(htmlContent, { waitUntil: 'domcontentloaded', timeout: 0 });
     
     // Generate PDF
     const pdfBuffer = await page.pdf({
