@@ -82,6 +82,14 @@ export class ComplaintRepository {
      .populate('category', 'name');
   }
 
+  async updateWithOps(complaintId, ops = {}, options = {}) {
+    const $set = { ...(ops.$set || {}), updated_at: new Date() };
+    const update = { ...ops, $set };
+    return await this.Complaint.findByIdAndUpdate(complaintId, update, { new: true, ...options })
+      .populate('assigned_to', 'first_name last_name email')
+      .populate('category', 'name');
+  }
+
   async delete(complaintId) {
     return await this.Complaint.findByIdAndDelete(complaintId);
   }

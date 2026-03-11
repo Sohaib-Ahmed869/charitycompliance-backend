@@ -68,6 +68,12 @@ const boardMemberSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  /** Whether this responsible person is a board member (used for complaints board sign-off routing) */
+  is_board_member: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
   custom_position_title: {
     type: String,
     trim: true

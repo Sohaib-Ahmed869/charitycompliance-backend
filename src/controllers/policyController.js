@@ -1220,25 +1220,37 @@ export const downloadPolicyPackZip = asyncHandler(async (req, res) => {
   const signOffFileName = `${policy.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'policy'}_signoff_sheet.pdf`;
   archive.append(signOffPdfBuffer, { name: signOffFileName });
 
-  // Add policy document to ZIP if it exists
-  if (policy.file_path) {
+  // Add a lightweight links file + JSON snapshot for auditing (avoid embedding huge attachments)
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const policyRecordUrl = `${frontendUrl}/policies/${policy._id}`;
+  const policyAcknowledgeUrl = `${frontendUrl}/policies/acknowledge/${policy._id}`;
+  const linksTxt = [
+    `Policy record: ${policyRecordUrl}`,
+    `Acknowledge/view page: ${policyAcknowledgeUrl}`,
+    `Sign-off sheet download: ${frontendUrl}/api/platform/policies/${policy._id}/signoff/download`,
+    `Policy pack download: ${frontendUrl}/api/platform/policies/${policy._id}/signoff/pack-download`,
+    `Document logs (API): ${frontendUrl}/api/platform/policies/${policy._id}/logs`,
+    `Approvals (API): ${frontendUrl}/api/platform/policies/${policy._id}/approvals`
+  ].join('\n') + '\n';
+  archive.append(linksTxt, { name: 'links.txt' });
+
+  // Add policy document only when it's not too large (keeps exports lightweight)
+  const MAX_EMBED_BYTES = 5 * 1024 * 1024; // 5MB
+  const shouldEmbedDoc = !!policy.file_path && (!policy.file_size || policy.file_size <= MAX_EMBED_BYTES);
+  if (shouldEmbedDoc) {
     try {
-      // Get policy document from S3
       const policyDocResult = await getFileStream(policy.file_path);
       const policyDocFileName = policy.file_name || `${policy.title?.replace(/[^a-z0-9]/gi, '_').toLowerCase() || 'policy'}_document.pdf`;
-      
-      // Convert stream to buffer for archiver
       const chunks = [];
-      for await (const chunk of policyDocResult.Body) {
-        chunks.push(chunk);
-      }
+      for await (const chunk of policyDocResult.Body) chunks.push(chunk);
       const policyBuffer = Buffer.concat(chunks);
-      
       archive.append(policyBuffer, { name: policyDocFileName });
     } catch (error) {
       console.error('Error fetching policy document:', error);
-      // Continue without the policy document if it fails - still send sign-off sheet
     }
+  } else if (policy.file_path) {
+    const msg = `Policy document not embedded due to size.\nS3 key: ${policy.file_path}\nOpen the policy record to view/download: ${policyRecordUrl}\n`;
+    archive.append(msg, { name: 'policy-document-link.txt' });
   }
 
   // Finalize the archive

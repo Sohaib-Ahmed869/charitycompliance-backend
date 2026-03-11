@@ -6,6 +6,37 @@
 
 import mongoose from 'mongoose';
 
+const complaintTrailEntrySchema = new mongoose.Schema(
+  {
+    at: { type: Date, default: Date.now, index: true },
+    actor_user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    action: { type: String, required: true, trim: true },
+    details: { type: mongoose.Schema.Types.Mixed, default: {} },
+  },
+  { _id: true }
+);
+
+const complaintEscalationEntrySchema = new mongoose.Schema(
+  {
+    from_stage: { type: String, trim: true },
+    to_user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    reason: { type: String, trim: true },
+    created_at: { type: Date, default: Date.now },
+    resolved_at: { type: Date, default: null },
+  },
+  { _id: true }
+);
+
+const complaintBoardSignoffSchema = new mongoose.Schema(
+  {
+    signed_at: { type: Date, default: null },
+    signed_by_user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    signature_data: { type: String, default: null },
+    notes: { type: String, trim: true, default: null },
+  },
+  { _id: false }
+);
+
 const complaintSchema = new mongoose.Schema(
   {
     org_id: {
@@ -56,6 +87,29 @@ const complaintSchema = new mongoose.Schema(
       type: String,
       enum: ['new', 'assigned', 'in_progress', 'resolved'],
       default: 'new',
+    },
+    workflow_stage: {
+      type: String,
+      enum: ['admin_triage', 'dept_head_review', 'board_signoff', 'resolved'],
+      default: 'admin_triage',
+      index: true,
+    },
+    is_major: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    board_signoff_board_member_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'BoardMember',
+      default: null,
+      index: true,
+    },
+    board_signoff_user_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true,
     },
     priority: {
       type: String,
@@ -152,6 +206,18 @@ const complaintSchema = new mongoose.Schema(
         type: String,
         trim: true,
       },
+    },
+    escalation_stack: {
+      type: [complaintEscalationEntrySchema],
+      default: [],
+    },
+    trail: {
+      type: [complaintTrailEntrySchema],
+      default: [],
+    },
+    board_signoff: {
+      type: complaintBoardSignoffSchema,
+      default: () => ({}),
     },
     created_at: {
       type: Date,

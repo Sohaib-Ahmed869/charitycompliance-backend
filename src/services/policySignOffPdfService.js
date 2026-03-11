@@ -62,6 +62,26 @@ export const generatePolicySignOffPDF = async (policy, acknowledgements, documen
         .join(' ');
     };
 
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const policyId = policy?._id?.toString?.() || '';
+    const linksHTML = policyId ? `
+      <h2>Links</h2>
+      <table class="info-table">
+        <tr>
+          <td>Policy Record</td>
+          <td><a href="${esc(`${baseUrl}/policies/${policyId}`)}" target="_blank" rel="noopener noreferrer">${esc(`${baseUrl}/policies/${policyId}`)}</a></td>
+        </tr>
+        <tr>
+          <td>Policy Document (view)</td>
+          <td><a href="${esc(`${baseUrl}/policies/${policyId}`)}" target="_blank" rel="noopener noreferrer">Open policy and download/view document</a></td>
+        </tr>
+        <tr>
+          <td>Approval Trail</td>
+          <td><a href="${esc(`${baseUrl}/policies/${policyId}`)}" target="_blank" rel="noopener noreferrer">Open policy to view approval trail</a></td>
+        </tr>
+      </table>
+    ` : '';
+
     const safeName = (u) => {
       if (!u) return '—';
       if (typeof u === 'string') return '—';
@@ -388,6 +408,10 @@ export const generatePolicySignOffPDF = async (policy, acknowledgements, documen
         <td>${policy.category || '—'}</td>
       </tr>
       <tr>
+        <td>Description</td>
+        <td>${esc(policy.description || '—').replace(/\n/g, '<br/>')}</td>
+      </tr>
+      <tr>
         <td>Version</td>
         <td>${policy.version || 'v1.0'}</td>
       </tr>
@@ -404,6 +428,8 @@ export const generatePolicySignOffPDF = async (policy, acknowledgements, documen
         <td>${formatDate(policy.updatedAt || policy.updated_at || policy.last_modified || policy.createdAt)}</td>
       </tr>
     </table>
+
+    ${linksHTML}
 
     <h2>Acknowledgements Log (${acknowledgements.length})</h2>
     ${acknowledgements.length === 0 

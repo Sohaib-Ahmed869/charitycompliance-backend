@@ -359,10 +359,11 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
     });
   });
 
-  // Complaint resolution flow events
+  // Complaint workflow events (prefer explicit complaint.trail; fallback to derived resolution events)
   const complaints = await Complaint.find({
     org_id: org._id,
     $or: [
+      { trail: { $exists: true, $ne: [] } },
       { 'resolution_details.root_cause': { $exists: true, $ne: '' } },
       { 'resolution_details.risk_linked_at': { $exists: true } },
       { 'resolution_details.training_linked_at': { $exists: true } },
@@ -370,6 +371,7 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
     ]
   })
     .populate('assigned_to', 'first_name last_name email is_org_owner role position')
+    .populate('trail.actor_user_id', 'first_name last_name email is_org_owner role position')
     .lean();
 
   const complaintRiskIds = complaints
@@ -384,15 +386,60 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
       )
     : new Map();
 
+  const complaintActionLabel = (a) => {
+    const map = {
+      created: 'Complaint created',
+      admin_triage_completed: 'Admin review completed',
+      dept_head_completed: 'Department head completed',
+      major_flag_set: 'Major flag updated',
+      board_signoff_selected: 'Board approval selected',
+      escalated: 'Escalated',
+      deescalated: 'De-escalated',
+      resolution_details_saved: 'Resolution details saved',
+      risk_linked: 'Risk linked to complaint',
+      training_linked: 'Training linked to complaint',
+      signed_off: 'Board approval completed',
+      resolved: 'Complaint resolved',
+    };
+    return map[a] || a || 'Complaint updated';
+  };
+
   complaints.forEach((complaint) => {
     const complaintId = complaint._id?.toString();
+    const resolutionDetails = complaint.resolution_details || {};
+
+    if (Array.isArray(complaint.trail) && complaint.trail.length > 0) {
+      complaint.trail.forEach((t, idx) => {
+        const actorUser = t?.actor_user_id;
+        events.push(normalizeEvent({
+          id: `complaint-trail-${complaintId}-${idx}`,
+          timestamp: t?.at || complaint.updated_at,
+          actor: {
+            id: actorUser?._id?.toString() || actorUser?.toString?.(),
+            name: toName(actorUser),
+            role: toRole(actorUser)
+          },
+          action: complaintActionLabel(t?.action),
+          module: 'complaint',
+          request_type: 'complaint',
+          request_id: complaintId,
+          details: {
+            complaint_title: complaint.complaint_title,
+            ...(t?.details || {})
+          },
+          source: 'complaint'
+        }));
+      });
+      return;
+    }
+
+    // Fallback (older records without trail)
     const actorUser = complaint.assigned_to;
     const actor = {
       id: actorUser?._id?.toString(),
       name: toName(actorUser),
       role: toRole(actorUser)
     };
-    const resolutionDetails = complaint.resolution_details || {};
 
     if (resolutionDetails.root_cause) {
       events.push(normalizeEvent({

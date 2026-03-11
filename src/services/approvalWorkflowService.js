@@ -814,8 +814,8 @@ export class ApprovalWorkflowService {
             await notificationRepo.create({
               user_id: submitterId,
               type: 'expense_payment_assignment_required',
-              title: 'Expense approved — assign payment member',
-              message: 'Your expense was approved. Please assign a team member to process the payment and upload proof.',
+              title: 'Expense approved — assign payment team',
+              message: 'Your expense was approved. Please assign a payment processor (adds payment details) and a payment reviewer (reviews and accepts).',
               link: `/expenses/${request.entity_id}#payment-section`,
               related_entity_id: request.entity_id,
               related_entity_type: 'expense',

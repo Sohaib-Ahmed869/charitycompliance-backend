@@ -58,6 +58,33 @@ export class CalendarRepository {
   }
 
   /**
+   * Upsert a system-generated reminder event.
+   * Uses (user_id, source_id, date, title) as a natural key.
+   */
+  async upsertSystemReminderEvent({ user_id, source_id, date, title, description, type = 'compliance' }) {
+    const d = date instanceof Date ? date : new Date(date);
+    return await this.CalendarEvent.findOneAndUpdate(
+      { user_id, source_id, date: d, title },
+      {
+        $setOnInsert: {
+          user_id,
+          source_id,
+          date: d,
+          title,
+          description: description || '',
+          type,
+          is_custom: true,
+          source: 'compliance',
+          created_at: new Date(),
+          updated_at: new Date()
+        },
+        $set: { updated_at: new Date() }
+      },
+      { upsert: true, new: true }
+    ).lean();
+  }
+
+  /**
    * Find policies with upcoming review dates
    */
   async findUpcomingPolicyReviews(orgId, options = {}) {
