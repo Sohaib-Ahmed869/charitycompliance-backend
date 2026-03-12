@@ -628,7 +628,9 @@ const ACTION_TYPE_MAP = {
   grant: 'grant',
   policies: 'policy',
   policy: 'policy',
-  hr: 'hr'
+  hr: 'hr',
+  complaints: 'complaint',
+  complaint: 'complaint'
 };
 
 const PRIORITY_LEVEL_MAP = { high: 3, medium: 2, low: 1 };
@@ -662,7 +664,7 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
     }
 
     // Single-workflow categories cannot have workflow_type
-    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval'];
+    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'complaint_resolution'];
     if (singleWorkflowCategories.includes(workflow_category) && workflow_type) {
       return res.status(400).json({
         success: false,

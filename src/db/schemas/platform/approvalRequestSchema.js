@@ -92,6 +92,7 @@ const approvalRequestSchema = new mongoose.Schema({
       'leave',
       'hr',
       'policy',
+      'complaint',
       'risk',
       'risk_treatment',
       'partner_vetting',
@@ -104,6 +105,7 @@ const approvalRequestSchema = new mongoose.Schema({
       'budget_approval',
       'risk_management',
       'grant_approval',
+      'complaint_resolution',
       'other'
     ],
     index: true
@@ -116,7 +118,7 @@ const approvalRequestSchema = new mongoose.Schema({
   entity_type: {
     type: String,
     required: true,
-    enum: ['expense', 'purchase', 'policy', 'document', 'budget', 'risk', 'grant', 'partner', 'funding_agreement', 'project', 'authority_transfer', 'other']
+    enum: ['expense', 'purchase', 'policy', 'document', 'budget', 'risk', 'grant', 'partner', 'funding_agreement', 'project', 'authority_transfer', 'complaint', 'other']
   },
   amount: {
     type: Number,

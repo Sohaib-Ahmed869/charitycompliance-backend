@@ -188,8 +188,26 @@ export class PartnerVettingService {
     if (!partner) {
       throw new AppError('Partner not found', 404, 'PARTNER_NOT_FOUND');
     }
-    if (!partner.documents?.[docIndex]) {
-      throw new AppError('Document not found', 404, 'DOCUMENT_NOT_FOUND');
+    
+    // If documents array doesn't exist or index is out of bounds, auto-create placeholder documents
+    if (!Array.isArray(partner.documents) || !partner.documents[docIndex]) {
+      // Initialize documents array if missing
+      if (!Array.isArray(partner.documents)) {
+        partner.documents = DEFAULT_DOCUMENTS.map(d => ({ ...d }));
+      }
+      
+      // Extend array if index is out of bounds
+      while (partner.documents.length <= docIndex) {
+        partner.documents.push({
+          name: `Document ${partner.documents.length + 1}`,
+          status: 'pending',
+          file_path: null,
+          file_name: null
+        });
+      }
+      
+      // Save the extended documents structure
+      await repo.update(partnerId, { documents: partner.documents });
     }
 
     const { key } = await uploadToS3(

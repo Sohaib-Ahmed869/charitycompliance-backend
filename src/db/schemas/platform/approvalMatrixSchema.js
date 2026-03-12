@@ -20,6 +20,7 @@ const approvalRuleSchema = new mongoose.Schema({
       'leave',
       'hr',
       'policy',
+      'complaint',
       'risk',
       'risk_treatment',
       'coi',
@@ -92,6 +93,7 @@ const approvalMatrixSchema = new mongoose.Schema({
     enum: [
       'risk_management',
       'risk_treatment',
+      'complaint_resolution',
       'coi',
       'partner_vetting',
       'policy_approval',
@@ -154,6 +156,7 @@ const getCategoryDisplayName = (category) => {
   const categoryNames = {
     risk_management: 'Risk Management',
     risk_treatment: 'Risk Treatment',
+    complaint_resolution: 'Complaint Resolution',
     coi: 'Conflict of Interest',
     partner_vetting: 'Partner Vetting',
     funding_agreement: 'Funding Agreement',
@@ -177,8 +180,8 @@ approvalMatrixSchema.pre('save', async function(next) {
     }
   }
   
-  // COI, Partner Vetting, Policy, HR, Risk Treatment: no workflow_type allowed
-  const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'risk_treatment'];
+  // Single-workflow categories: no workflow_type allowed
+  const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'risk_treatment', 'complaint_resolution'];
   if (singleWorkflowCategories.includes(doc.workflow_category)) {
     if (doc.workflow_type) {
       return next(new Error(`${getCategoryDisplayName(doc.workflow_category)} workflows cannot have a workflow type`));

@@ -35,9 +35,9 @@ router.post(
       .notEmpty()
       .withMessage('Description is required'),
     body('category')
-      .notEmpty()
+      .optional()
       .isMongoId()
-      .withMessage('Valid category/department ID is required'),
+      .withMessage('Category must be a valid department ID if provided'),
   ],
   validate,
   complaintController.submitPublicComplaint
@@ -102,9 +102,9 @@ router.post(
       .notEmpty()
       .withMessage('Description is required'),
     body('category')
-      .notEmpty()
+      .optional()
       .isMongoId()
-      .withMessage('Valid category/department ID is required'),
+      .withMessage('Category must be a valid department ID if provided'),
   ],
   validate,
   complaintController.createComplaint
@@ -210,6 +210,74 @@ router.post(
   ],
   validate,
   complaintController.workflowBoardSignoff
+);
+
+// Admin Triage: Select Department (required before approval)
+router.post(
+  '/:complaintId/workflow/admin-triage-select-department',
+  [
+    param('complaintId').notEmpty().withMessage('Complaint ID is required'),
+    body('department_id').notEmpty().isMongoId().withMessage('Valid department_id is required'),
+    body('is_major').optional().isBoolean().withMessage('is_major must be a boolean'),
+  ],
+  validate,
+  complaintController.adminTriageSelectDepartment
+);
+
+// Admin Approval
+router.post(
+  '/:complaintId/workflow/admin-approve',
+  [
+    param('complaintId').notEmpty().withMessage('Complaint ID is required'),
+    body('notes').optional().trim(),
+  ],
+  validate,
+  complaintController.adminApproveComplaint
+);
+
+// Admin Rejection
+router.post(
+  '/:complaintId/workflow/admin-reject',
+  [
+    param('complaintId').notEmpty().withMessage('Complaint ID is required'),
+    body('reason').optional().trim(),
+  ],
+  validate,
+  complaintController.adminRejectComplaint
+);
+
+// Dept Head Approval
+router.post(
+  '/:complaintId/workflow/dept-head-approve',
+  [
+    param('complaintId').notEmpty().withMessage('Complaint ID is required'),
+    body('notes').optional().trim(),
+  ],
+  validate,
+  complaintController.deptHeadApproveComplaint
+);
+
+// Dept Head Rejection
+router.post(
+  '/:complaintId/workflow/dept-head-reject',
+  [
+    param('complaintId').notEmpty().withMessage('Complaint ID is required'),
+    body('reason').optional().trim(),
+  ],
+  validate,
+  complaintController.deptHeadRejectComplaint
+);
+
+// Complete Resolution Steps (1, 2, 3)
+router.post(
+  '/:complaintId/workflow/resolution-step/:step',
+  [
+    param('complaintId').notEmpty().withMessage('Complaint ID is required'),
+    param('step').isIn(['1', '2', '3']).withMessage('Step must be 1, 2, or 3'),
+    body('data').optional().isObject().withMessage('data must be an object'),
+  ],
+  validate,
+  complaintController.completeResolutionStep
 );
 
 // Step 1: Save resolution details

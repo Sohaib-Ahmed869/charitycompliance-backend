@@ -74,33 +74,55 @@ function getActiveEscalationToUserId(complaint) {
 }
 
 async function ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner }) {
-  const adminOrOwner = userRole === 'admin' || isOrgOwner;
-  if (adminOrOwner) return;
-
-  const activeEscalationTo = getActiveEscalationToUserId(complaint);
-  if (activeEscalationTo && String(activeEscalationTo) === String(userId)) return;
+  // NOTE: We do NOT grant blanket admin access to all stages.
+  // Different stages require different roles/positions.
+  // This enforces the workflow properly.
 
   const stage = complaint?.workflow_stage || 'admin_triage';
+  
+  // Escalations can bypass workflow checks for admin_triage and dept_head_review
+  // But NOT for workflow_resolution or board_signoff (those are role-specific)
+  if (stage !== 'workflow_resolution' && stage !== 'board_signoff') {
+    const activeEscalationTo = getActiveEscalationToUserId(complaint);
+    if (activeEscalationTo && String(activeEscalationTo) === String(userId)) return;
+  }
+  
   if (stage === 'admin_triage') {
-    const ok = await userCanCharityAdminEdit(tenantDb, org._id, userId);
-    if (!ok) throw new AppError('You do not have permission to act on this complaint', 403, 'FORBIDDEN');
+    // Only admins and charity admin editors can triage (NOT org owner with generic admin role)
+    const ok = userRole === 'admin' || await userCanCharityAdminEdit(tenantDb, org._id, userId);
+    if (!ok) throw new AppError('Only admins can perform triage', 403, 'FORBIDDEN');
     return;
   }
+  
   if (stage === 'dept_head_review') {
+    // ONLY department head of this complaint's category can review
     const deptName = complaint?.category?.name || complaint?.category?.toString?.() || '';
     const headIds = await getDeptHeadUserIds(tenantDb, org._id, deptName);
     if (!headIds.includes(String(userId))) {
-      throw new AppError('You do not have permission to act on this complaint', 403, 'FORBIDDEN');
+      throw new AppError('Only the department head can review this complaint', 403, 'FORBIDDEN');
     }
     return;
   }
+  
+  if (stage === 'workflow_resolution') {
+    // Department heads MUST act - escalations do NOT bypass this
+    const deptName = complaint?.category?.name || complaint?.category?.toString?.() || '';
+    const headIds = await getDeptHeadUserIds(tenantDb, org._id, deptName);
+    if (!headIds.includes(String(userId))) {
+      throw new AppError('Only department head can complete resolution steps', 403, 'FORBIDDEN');
+    }
+    return;
+  }
+  
   if (stage === 'board_signoff') {
+    // ONLY the selected board member can sign off - even escalations do NOT bypass this
     const signoffUserId = complaint?.board_signoff_user_id ? String(complaint.board_signoff_user_id) : null;
     if (!signoffUserId || String(signoffUserId) !== String(userId)) {
-      throw new AppError('You do not have permission to act on this complaint', 403, 'FORBIDDEN');
+      throw new AppError('Only the selected board member can sign off', 403, 'FORBIDDEN');
     }
     return;
   }
+  
   if (stage === 'resolved') {
     throw new AppError('This complaint is already resolved', 400, 'ALREADY_RESOLVED');
   }
@@ -183,12 +205,14 @@ export const createComplaint = asyncHandler(async (req, res) => {
     complainant_occupation: req.body.complainant_occupation,
     complaint_title: req.body.complaint_title,
     description: req.body.description,
-    category: req.body.category,
+    category: req.body.category || null, // Department selected by admin during triage, not during registration
     submit_anonymously: req.body.submit_anonymously || false,
     submission_method: req.body.submission_method || 'website', // 'website' = internal staff submission
     status: 'new',
     workflow_stage: 'admin_triage',
     priority: req.body.priority || 'medium',
+    dept_head_approval_decision: 'pending',
+    admin_approval_decision: 'pending',
     attachments: Array.isArray(req.body.attachments)
       ? req.body.attachments.map((attachment) => ({
           filename: attachment?.filename || '',
@@ -332,12 +356,14 @@ export const submitPublicComplaint = asyncHandler(async (req, res) => {
       complainant_occupation: req.body.complainant_occupation,
       complaint_title: req.body.complaint_title,
       description: req.body.description,
-      category: req.body.category,
+      category: req.body.category || null, // Department selected by admin during triage, not during public submission
       submit_anonymously: req.body.submit_anonymously || false,
       submission_method: publicLink.link_type,
       status: 'new',
       workflow_stage: 'admin_triage',
       priority: 'medium',
+      dept_head_approval_decision: 'pending',
+      admin_approval_decision: 'pending',
       attachments: Array.isArray(req.body.attachments)
         ? req.body.attachments.map((attachment) => ({
             filename: attachment?.filename || '',
@@ -534,6 +560,359 @@ export const getComplaintsStats = asyncHandler(async (req, res) => {
 });
 
 // ─── Workflow endpoints (Admin → Dept Head → Board sign-off) ────────────────
+// Admin Triage: Select Department and optionally Approve/Reject
+export const adminTriageSelectDepartment = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { complaintId } = req.params;
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+  const { department_id, is_major } = req.body;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const complaintRepo = new ComplaintRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+  const ownerId = await getOrgOwnerUserId(tenantDb);
+  const isOrgOwner = ownerId && String(ownerId) === String(userId);
+
+  const complaint = await complaintRepo.findById(complaintId);
+  if (!complaint) throw new AppError('Complaint not found', 404, 'NOT_FOUND');
+
+  // Only admins can triage
+  const ok = userRole === 'admin' || isOrgOwner || await userCanCharityAdminEdit(tenantDb, org._id, userId);
+  if (!ok) throw new AppError('You do not have permission to perform this action', 403, 'FORBIDDEN');
+
+  if ((complaint.workflow_stage || 'admin_triage') !== 'admin_triage') {
+    throw new AppError('Complaint is not in admin triage stage', 400, 'INVALID_STAGE');
+  }
+
+  const updated = await complaintRepo.updateWithOps(complaintId, {
+    $set: {
+      category: department_id,
+      is_major: !!is_major,
+    },
+    $push: {
+      trail: {
+        at: new Date(),
+        actor_user_id: userId || null,
+        action: 'admin_triage_department_selected',
+        details: { department_id, is_major: !!is_major },
+      },
+    },
+  });
+
+  res.json({ success: true, data: updated });
+});
+
+// Admin Approval/Rejection Decision
+export const adminApproveComplaint = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { complaintId } = req.params;
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+  const { notes } = req.body;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const complaintRepo = new ComplaintRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+  const ownerId = await getOrgOwnerUserId(tenantDb);
+  const isOrgOwner = ownerId && String(ownerId) === String(userId);
+
+  const complaint = await complaintRepo.findById(complaintId);
+  if (!complaint) throw new AppError('Complaint not found', 404, 'NOT_FOUND');
+
+  if (!complaint.category) {
+    throw new AppError('Department must be selected before approval', 400, 'MISSING_DEPARTMENT');
+  }
+
+  // Only admins can approve
+  const ok = userRole === 'admin' || isOrgOwner || await userCanCharityAdminEdit(tenantDb, org._id, userId);
+  if (!ok) throw new AppError('You do not have permission to perform this action', 403, 'FORBIDDEN');
+
+  if ((complaint.workflow_stage || 'admin_triage') !== 'admin_triage') {
+    throw new AppError('Complaint must be in admin triage stage', 400, 'INVALID_STAGE');
+  }
+
+  // When admin approves, start complaint_resolution workflow
+  const { ApprovalWorkflowService } = await import('../services/approvalWorkflowService.js');
+  const workflowService = new ApprovalWorkflowService(orgId);
+
+  let workflowInstanceId = null;
+  try {
+    // Create workflow instance for complaint resolution
+    const workflowInstance = await workflowService.createComplaintResolutionWorkflow(complaintId, userId, { is_major: complaint.is_major });
+    workflowInstanceId = workflowInstance?._id;
+  } catch (err) {
+    logError('Failed to create complaint resolution workflow', {
+      complaintId,
+      code: err?.code,
+      message: err?.message,
+      stack: err?.stack
+    });
+    // This workflow is required for dept-head approval to proceed.
+    throw new AppError(
+      err?.message || 'No complaint workflow is configured yet. Please configure a workflow.',
+      400,
+      err?.code || 'COMPLAINT_WORKFLOW_NOT_CONFIGURED'
+    );
+  }
+
+  const updated = await complaintRepo.updateWithOps(complaintId, {
+    $set: {
+      admin_approval_decision: 'approved',
+      admin_approval_notes: notes || '',
+      workflow_stage: 'dept_head_review',
+      status: 'in_progress',
+      workflow_instance_id: workflowInstanceId,
+      workflow_instance_type: 'complaint_resolution',
+    },
+    $push: {
+      trail: {
+        at: new Date(),
+        actor_user_id: userId || null,
+        action: 'admin_approved',
+        details: { notes: notes || '', workflow_instance_id: workflowInstanceId || null },
+      },
+    },
+  });
+
+  // Send notification to department head(s)
+  try {
+    const categoryId = complaint?.category;
+    if (categoryId) {
+      // Get department info to find department heads
+      const departmentSchema = (await import('../db/schemas/platform/departmentSchema.js')).default;
+      tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
+      const Department = tenantDb.model('Department');
+      
+      const dept = await Department.findById(categoryId).select('name').lean();
+      const deptName = dept?.name || '';
+      
+      if (deptName) {
+        const deptHeadIds = await getDeptHeadUserIds(tenantDb, org._id, deptName);
+        
+        if (deptHeadIds && deptHeadIds.length > 0) {
+          const notifRepo = new NotificationRepository(tenantDb);
+          const complaintTitle = complaint.complaint_title || 'Untitled Complaint';
+          
+          const notifications = deptHeadIds.map(headId => ({
+            user_id: headId,
+            type: 'complaint_assigned',
+            subject: 'Complaint Assigned to Your Department',
+            message: `A new complaint "${complaintTitle}" has been assigned to ${deptName} for review.`,
+            related_entity_id: complaintId,
+            related_entity_type: 'complaint',
+            read: false,
+            created_at: new Date(),
+          }));
+          
+          await notifRepo.createMany(notifications);
+        }
+      }
+    }
+  } catch (err) {
+    logError('Failed to send notification to department head', { error: err?.message, complaintId, categoryId: complaint?.category });
+    // Continue - notification failure shouldn't block the response
+  }
+
+  res.json({ success: true, data: updated });
+});
+
+export const adminRejectComplaint = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { complaintId } = req.params;
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+  const { reason } = req.body;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const complaintRepo = new ComplaintRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+  const ownerId = await getOrgOwnerUserId(tenantDb);
+  const isOrgOwner = ownerId && String(ownerId) === String(userId);
+
+  // Only admins can reject
+  const ok = userRole === 'admin' || isOrgOwner || await userCanCharityAdminEdit(tenantDb, org._id, userId);
+  if (!ok) throw new AppError('You do not have permission to perform this action', 403, 'FORBIDDEN');
+
+  const complaint = await complaintRepo.findById(complaintId);
+  if (!complaint) throw new AppError('Complaint not found', 404, 'NOT_FOUND');
+
+  if ((complaint.workflow_stage || 'admin_triage') !== 'admin_triage') {
+    throw new AppError('Complaint must be in admin triage stage', 400, 'INVALID_STAGE');
+  }
+
+  const updated = await complaintRepo.updateWithOps(complaintId, {
+    $set: {
+      admin_approval_decision: 'rejected',
+      admin_approval_notes: reason || '',
+      status: 'resolved',
+      workflow_stage: 'resolved',
+    },
+    $push: {
+      trail: {
+        at: new Date(),
+        actor_user_id: userId || null,
+        action: 'admin_rejected',
+        details: { reason: reason || '' },
+      },
+    },
+  });
+
+  res.json({ success: true, data: updated });
+});
+
+// Dept Head Approval/Rejection
+export const deptHeadApproveComplaint = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { complaintId } = req.params;
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+  const { notes } = req.body;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const complaintRepo = new ComplaintRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+  const ownerId = await getOrgOwnerUserId(tenantDb);
+  const isOrgOwner = ownerId && String(ownerId) === String(userId);
+
+  const complaint = await complaintRepo.findById(complaintId);
+  if (!complaint) throw new AppError('Complaint not found', 404, 'NOT_FOUND');
+
+  if ((complaint.workflow_stage || 'admin_triage') !== 'dept_head_review') {
+    throw new AppError('Complaint is not in department head review stage', 400, 'INVALID_STAGE');
+  }
+
+  await ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner });
+
+  // Ensure complaint resolution workflow instance exists before proceeding.
+  // For older complaints created before workflow enforcement, auto-attach the workflow instance if possible.
+  if (!complaint.workflow_instance_id || complaint.workflow_instance_type !== 'complaint_resolution') {
+    try {
+      const { ApprovalWorkflowService } = await import('../services/approvalWorkflowService.js');
+      const workflowService = new ApprovalWorkflowService(orgId);
+      const workflowInstance = await workflowService.createComplaintResolutionWorkflow(
+        complaintId,
+        userId,
+        { is_major: complaint.is_major }
+      );
+
+      if (workflowInstance?._id) {
+        await complaintRepo.updateWithOps(complaintId, {
+          $set: {
+            workflow_instance_id: workflowInstance._id,
+            workflow_instance_type: 'complaint_resolution',
+          },
+          $push: {
+            trail: {
+              at: new Date(),
+              actor_user_id: userId || null,
+              action: 'workflow_instance_attached',
+              details: { workflow_instance_id: String(workflowInstance._id) },
+            },
+          },
+        });
+        complaint.workflow_instance_id = workflowInstance._id;
+        complaint.workflow_instance_type = 'complaint_resolution';
+      }
+    } catch (err) {
+      throw new AppError(
+        err?.message ||
+          'Complaint workflow is not assigned yet. Ask an admin to approve the complaint (this assigns the workflow) or configure the complaint workflow.',
+        400,
+        err?.code || 'COMPLAINT_WORKFLOW_NOT_ASSIGNED'
+      );
+    }
+
+    if (!complaint.workflow_instance_id || complaint.workflow_instance_type !== 'complaint_resolution') {
+      throw new AppError(
+        'Complaint workflow is not assigned yet. Ask an admin to approve the complaint (this assigns the workflow) or configure the complaint workflow.',
+        400,
+        'COMPLAINT_WORKFLOW_NOT_ASSIGNED'
+      );
+    }
+  }
+
+  const nextStage = complaint.is_major ? 'board_signoff' : 'workflow_resolution';
+  if (complaint.is_major && !complaint.board_signoff_user_id) {
+    throw new AppError('Select a board member for sign-off before proceeding', 400, 'MISSING_BOARD_SIGNOFF');
+  }
+
+  const updated = await complaintRepo.updateWithOps(complaintId, {
+    $set: {
+      dept_head_approval_decision: 'approved',
+      dept_head_approval_notes: notes || '',
+      workflow_stage: nextStage,
+    },
+    $push: {
+      trail: {
+        at: new Date(),
+        actor_user_id: userId || null,
+        action: 'dept_head_approved',
+        details: { notes: notes || '', next_stage: nextStage },
+      },
+    },
+  });
+
+  res.json({ success: true, data: updated });
+});
+
+export const deptHeadRejectComplaint = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { complaintId } = req.params;
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+  const { reason } = req.body;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const complaintRepo = new ComplaintRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+  const ownerId = await getOrgOwnerUserId(tenantDb);
+  const isOrgOwner = ownerId && String(ownerId) === String(userId);
+
+  const complaint = await complaintRepo.findById(complaintId);
+  if (!complaint) throw new AppError('Complaint not found', 404, 'NOT_FOUND');
+
+  if ((complaint.workflow_stage || 'admin_triage') !== 'dept_head_review') {
+    throw new AppError('Complaint is not in department head review stage', 400, 'INVALID_STAGE');
+  }
+
+  await ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner });
+
+  const updated = await complaintRepo.updateWithOps(complaintId, {
+    $set: {
+      dept_head_approval_decision: 'rejected',
+      dept_head_approval_notes: reason || '',
+      status: 'resolved',
+      workflow_stage: 'resolved',
+    },
+    $push: {
+      trail: {
+        at: new Date(),
+        actor_user_id: userId || null,
+        action: 'dept_head_rejected',
+        details: { reason: reason || '' },
+      },
+    },
+  });
+
+  res.json({ success: true, data: updated });
+});
+
 export const workflowTriageComplete = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { complaintId } = req.params;
@@ -570,6 +949,45 @@ export const workflowTriageComplete = asyncHandler(async (req, res) => {
       },
     },
   });
+
+  // Send notification to department head(s)
+  try {
+    const categoryId = complaint?.category;
+    if (categoryId) {
+      // Get department info to find department heads
+      const departmentSchema = (await import('../db/schemas/platform/departmentSchema.js')).default;
+      tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
+      const Department = tenantDb.model('Department');
+      
+      const dept = await Department.findById(categoryId).select('name').lean();
+      const deptName = dept?.name || '';
+      
+      if (deptName) {
+        const deptHeadIds = await getDeptHeadUserIds(tenantDb, org._id, deptName);
+        
+        if (deptHeadIds && deptHeadIds.length > 0) {
+          const notifRepo = new NotificationRepository(tenantDb);
+          const complaintTitle = complaint.complaint_title || 'Untitled Complaint';
+          
+          const notifications = deptHeadIds.map(headId => ({
+            user_id: headId,
+            type: 'complaint_assigned',
+            subject: 'Complaint Assigned to Your Department',
+            message: `A new complaint "${complaintTitle}" has been assigned to ${deptName} for review.`,
+            related_entity_id: complaintId,
+            related_entity_type: 'complaint',
+            read: false,
+            created_at: new Date(),
+          }));
+          
+          await notifRepo.createMany(notifications);
+        }
+      }
+    }
+  } catch (err) {
+    logError('Failed to send notification to department head', { error: err?.message, complaintId, categoryId: complaint?.category });
+    // Continue - notification failure shouldn't block the response
+  }
 
   res.json({ success: true, data: updated });
 });
@@ -895,6 +1313,130 @@ export const workflowBoardSignoff = asyncHandler(async (req, res) => {
   res.json({ success: true, data: updated });
 });
 
+// Workflow Resolution Stage (when complaint not major or as intermediate step)
+export const completeResolutionStep = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { complaintId } = req.params;
+  const { step } = req.params; // 1, 2, or 3 for the three resolution steps
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+  const { data, signature_data } = req.body;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const complaintRepo = new ComplaintRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+  const ownerId = await getOrgOwnerUserId(tenantDb);
+  const isOrgOwner = ownerId && String(ownerId) === String(userId);
+
+  const complaint = await complaintRepo.findById(complaintId);
+  if (!complaint) throw new AppError('Complaint not found', 404, 'NOT_FOUND');
+
+  if ((complaint.workflow_stage || 'admin_triage') !== 'workflow_resolution') {
+    throw new AppError('Complaint is not in workflow resolution stage', 400, 'INVALID_STAGE');
+  }
+
+  // Enforce strict role-based permission for workflow resolution
+  await ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner });
+
+  const stepNum = parseInt(step, 10);
+  if (![1, 2, 3].includes(stepNum)) {
+    throw new AppError('Invalid step number. Must be 1, 2, or 3', 400, 'INVALID_STEP');
+  }
+
+  const currentStep = complaint.resolution_step || 0;
+  if (stepNum !== currentStep + 1) {
+    throw new AppError(`Steps must be completed in order. Current step: ${currentStep}, requested: ${stepNum}`, 400, 'INVALID_STEP_ORDER');
+  }
+
+  const $set = { resolution_step: stepNum };
+  const actionDetails = {};
+
+  // Step 1: Save resolution details
+  if (stepNum === 1) {
+    $set['resolution_details.root_cause'] = data?.root_cause || '';
+    $set['resolution_details.resolution'] = data?.resolution || '';
+    $set['resolution_details.corrective_actions'] = data?.corrective_actions || '';
+    actionDetails.step = 'resolution_details';
+  }
+  // Step 2: Link risk
+  else if (stepNum === 2) {
+    if (data?.action === 'link' && data?.risk_id) {
+      $set.linked_risk_id = data.risk_id;
+    } else if (data?.action === 'create' && data?.risk_data) {
+      const { RiskService } = await import('../services/riskService.js');
+      const riskService = new RiskService(orgId);
+      const newRisk = await riskService.createRisk(
+        {
+          title: data.risk_data.title || complaint.complaint_title,
+          description: data.risk_data.description || complaint.description,
+          category: data.risk_data.category || 'Operational',
+          department_id: complaint.category,
+          metadata: { source: 'Complaint', complaint_id: String(complaintId) },
+        },
+        userId
+      );
+      $set.linked_risk_id = newRisk._id;
+      actionDetails.action = 'create';
+    }
+    $set['resolution_details.risk_linked_at'] = new Date();
+    actionDetails.step = 'risk_linked';
+  }
+  // Step 3: Link training
+  else if (stepNum === 3) {
+    if (data?.action === 'link' && data?.training_id) {
+      $set.linked_training_id = data.training_id;
+    } else if (data?.action === 'create' && data?.training_data) {
+      const { TrainingRepository } = await import('../repositories/trainingRepository.js');
+      const trainingRepo = new TrainingRepository(tenantDb);
+      const newTraining = await trainingRepo.createProgram({
+        org_id: org._id,
+        title: data.training_data.title || `Training - ${complaint.complaint_title}`,
+        category: data.training_data.category || 'General',
+        description: data.training_data.description || complaint.description,
+        status: 'draft',
+        created_by: userId,
+      });
+      $set.linked_training_id = newTraining._id;
+      actionDetails.action = 'create';
+    }
+    $set['resolution_details.training_linked_at'] = new Date();
+    actionDetails.step = 'training_linked';
+
+    // After step 3, determine next stage
+    // If major, go to board_signoff
+    if (complaint.is_major) {
+      if (!complaint.board_signoff_user_id) {
+        throw new AppError('Board member must be selected for sign-off', 400, 'MISSING_BOARD_SIGNOFF');
+      }
+      $set.workflow_stage = 'board_signoff';
+      actionDetails.next_stage = 'board_signoff';
+    } else {
+      // If not major, mark as resolved
+      $set.workflow_stage = 'resolved';
+      $set.status = 'resolved';
+      $set['resolution_details.resolved_at'] = new Date();
+      actionDetails.next_stage = 'resolved';
+    }
+  }
+
+  const updated = await complaintRepo.updateWithOps(complaintId, {
+    $set,
+    $push: {
+      trail: {
+        at: new Date(),
+        actor_user_id: userId || null,
+        action: `resolution_step_${stepNum}_completed`,
+        details: actionDetails,
+      },
+    },
+  });
+
+  res.json({ success: true, data: updated });
+});
+
 // Step 1: Save resolution details
 export const saveResolutionDetails = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -918,9 +1460,9 @@ export const saveResolutionDetails = asyncHandler(async (req, res) => {
     throw new AppError('Complaint not found', 404, 'NOT_FOUND');
   }
 
-  const stage = complaint.workflow_stage || 'admin_triage';
-  if (!['dept_head_review', 'board_signoff'].includes(stage)) {
-    throw new AppError('Resolution details can only be completed during review/sign-off stages', 400, 'INVALID_STAGE');
+  const stage = complaint?.workflow_stage || 'admin_triage';
+  if (!['dept_head_review', 'workflow_resolution', 'board_signoff'].includes(stage)) {
+    throw new AppError('Resolution details can only be completed during review/resolution/sign-off stages', 400, 'INVALID_STAGE');
   }
   await ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner });
 
@@ -979,9 +1521,9 @@ export const linkOrCreateRisk = asyncHandler(async (req, res) => {
     throw new AppError('Complaint not found', 404, 'NOT_FOUND');
   }
 
-  const stage = complaint.workflow_stage || 'admin_triage';
-  if (!['dept_head_review', 'board_signoff'].includes(stage)) {
-    throw new AppError('Risk linking can only be completed during review/sign-off stages', 400, 'INVALID_STAGE');
+  const stage = complaint?.workflow_stage || 'admin_triage';
+  if (!['dept_head_review', 'workflow_resolution', 'board_signoff'].includes(stage)) {
+    throw new AppError('Risk linking can only be completed during review/resolution/sign-off stages', 400, 'INVALID_STAGE');
   }
   await ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner });
 
@@ -1068,9 +1610,9 @@ export const linkOrCreateTraining = asyncHandler(async (req, res) => {
     throw new AppError('Complaint not found', 404, 'NOT_FOUND');
   }
 
-  const stage = complaint.workflow_stage || 'admin_triage';
-  if (!['dept_head_review', 'board_signoff'].includes(stage)) {
-    throw new AppError('Training linkage can only be completed during review/sign-off stages', 400, 'INVALID_STAGE');
+  const stage = complaint?.workflow_stage || 'admin_triage';
+  if (!['dept_head_review', 'workflow_resolution', 'board_signoff'].includes(stage)) {
+    throw new AppError('Training linkage can only be completed during review/resolution/sign-off stages', 400, 'INVALID_STAGE');
   }
   await ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner });
 
