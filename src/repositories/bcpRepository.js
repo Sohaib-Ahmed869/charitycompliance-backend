@@ -355,6 +355,8 @@ export class BcpAuthorityTransferRepository {
 
   async findById(id) {
     return await this.BcpAuthorityTransfer.findById(id)
+      .populate('from_user_id', 'first_name last_name email')
+      .populate('to_user_id', 'first_name last_name email')
       .populate('from_position_id', 'title code')
       .populate('to_position_id', 'title code')
       .populate('from_department_id', 'name')

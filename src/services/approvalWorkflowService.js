@@ -1788,4 +1788,103 @@ export class ApprovalWorkflowService {
 
     return approvalRequest;
   }
-}
+
+  /**
+   * Create approval workflow for complaint resolution
+   * Called when admin approves a complaint - initiates the complaint_resolution workflow
+   * This workflow has three steps:
+   * 1. Root cause & resolution details
+   * 2. Link/create risk
+   * 3. Link/create training
+   * After step 3: if major, board signoff is required; otherwise complaint is resolved
+   */
+  async createComplaintResolutionWorkflow(complaintId, submittedBy, metadata = {}) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const { ComplaintRepository } = await import('../repositories/complaintRepository.js');
+    const complaintRepo = new ComplaintRepository(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const complaint = await complaintRepo.findById(complaintId);
+    if (!complaint) {
+      throw new AppError('Complaint not found', 404, 'COMPLAINT_NOT_FOUND');
+    }
+
+    // Use configured approval matrix for complaint workflows (Roles & Permissions → Approval Workflows)
+    const { matrix, rule } = await this.findMatchingRule('complaint', 0, orgObjectId);
+    if (matrix?.workflow_category && matrix.workflow_category !== 'complaint_resolution') {
+      throw new AppError(
+        'Complaint workflow is misconfigured. Expected workflow category "complaint_resolution".',
+        400,
+        'COMPLAINT_WORKFLOW_MISCONFIGURED'
+      );
+    }
+
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+    const approverUserIds = approvers.map(a => String(a.user_id)).filter(Boolean);
+
+    if (approverUserIds.length === 0) {
+      throw new AppError(
+        'No approvers resolved for complaint workflow. Please configure positions/users for the workflow steps.',
+        400,
+        'NO_APPROVERS_FOUND'
+      );
+    }
+
+    // If major, enforce selected board member is final approver
+    const finalApprovers = [...approverUserIds];
+    if (metadata?.is_major) {
+      const boardUserId = complaint.board_signoff_user_id
+        ? String(complaint.board_signoff_user_id)
+        : '';
+      if (!boardUserId) {
+        throw new AppError(
+          'Select a board member for sign-off before proceeding.',
+          400,
+          'MISSING_BOARD_SIGNOFF'
+        );
+      }
+
+      // Ensure board member is last (remove if already included earlier)
+      const withoutBoard = finalApprovers.filter((id) => String(id) !== boardUserId);
+      finalApprovers.length = 0;
+      finalApprovers.push(...withoutBoard, boardUserId);
+    }
+
+    const approvalSteps = finalApprovers.map((userId, index) => ({
+      level: index + 1,
+      approver_user_id: userId,
+      status: 'pending',
+    }));
+
+    // Create workflow instance
+    const workflowInstance = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'complaint_resolution',
+      entity_id: complaintId,
+      entity_type: 'complaint',
+      amount: 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type || 'sequential',
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy,
+      workflow_type: 'complaint_resolution',
+      metadata: {
+        is_major: metadata?.is_major || false,
+        complaint_title: complaint.complaint_title,
+        department_id: complaint.category,
+      }
+    });
+
+    logInfo('Complaint resolution workflow created', {
+      complaintId,
+      workflowInstanceId: workflowInstance._id,
+      is_major: metadata?.is_major,
+      approversCount: approvalSteps.length,
+      approvalMatrixId: matrix?._id
+    });
+
+    return workflowInstance;
+  }}

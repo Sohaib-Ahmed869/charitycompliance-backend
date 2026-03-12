@@ -72,7 +72,41 @@ const complaintSchema = new mongoose.Schema(
     category: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Department',
-      required: true,
+      default: null,
+    },
+    dept_head_approval_decision: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending',
+      index: true,
+    },
+    dept_head_approval_notes: {
+      type: String,
+      trim: true,
+    },
+    admin_approval_decision: {
+      type: String,
+      enum: ['pending', 'approved', 'rejected'],
+      default: 'pending',
+      index: true,
+    },
+    admin_approval_notes: {
+      type: String,
+      trim: true,
+    },
+    workflow_instance_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'ApprovalRequest',
+      default: null,
+    },
+    workflow_instance_type: {
+      type: String,
+      enum: ['complaint_resolution'],
+      default: null,
+    },
+    resolution_step: {
+      type: Number,
+      default: 0,
     },
     submit_anonymously: {
       type: Boolean,
@@ -90,7 +124,7 @@ const complaintSchema = new mongoose.Schema(
     },
     workflow_stage: {
       type: String,
-      enum: ['admin_triage', 'dept_head_review', 'board_signoff', 'resolved'],
+      enum: ['admin_triage', 'dept_head_review', 'workflow_resolution', 'board_signoff', 'resolved'],
       default: 'admin_triage',
       index: true,
     },
