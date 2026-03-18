@@ -28,7 +28,6 @@ export const getPolicies = asyncHandler(async (req, res) => {
   }
 
   const policyRepo = new PolicyRepository(tenantDb);
-  const acknowledgementRepo = new PolicyAcknowledgementRepository(tenantDb);
   const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
@@ -89,6 +88,104 @@ export const getPolicyCounts = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: counts
+  });
+});
+
+/**
+ * Policy acknowledgement stats for org dashboard widgets.
+ * Counts people who have acknowledged all active policies vs pending.
+ *
+ * Audience is active board members in the org (including volunteers). If a person has no linked user_id,
+ * they are counted as pending (they cannot acknowledge in-app).
+ *
+ * GET /platform/policies/acknowledgement-stats
+ */
+export const getPolicyAcknowledgementStats = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+
+  const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) {
+    throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+  }
+
+  const policyRepo = new PolicyRepository(tenantDb);
+  const acknowledgementRepo = new PolicyAcknowledgementRepository(tenantDb);
+  const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+
+  const activePolicies = await policyRepo.findByOrgId(org._id, { status: 'active' });
+  const policyIds = (activePolicies || []).map((p) => p?._id).filter(Boolean);
+
+  const boardMembers = await boardMemberRepo.findByOrgId(org._id, false);
+  const audience = (boardMembers || []).filter((bm) => {
+    if (bm?.is_active === false) return false;
+    if (bm?.status && bm.status !== 'active') return false;
+    return true;
+  });
+
+  const totalPeople = audience.length;
+  if (totalPeople === 0) {
+    return res.json({
+      success: true,
+      data: {
+        totalPeople: 0,
+        acknowledged: 0,
+        pending: 0,
+        activePolicies: policyIds.length
+      }
+    });
+  }
+
+  // If no active policies, consider everyone "acknowledged".
+  if (policyIds.length === 0) {
+    return res.json({
+      success: true,
+      data: {
+        totalPeople,
+        acknowledged: totalPeople,
+        pending: 0,
+        activePolicies: 0
+      }
+    });
+  }
+
+  // Build a fast lookup: userId -> Set(policyId) acknowledged
+  const PolicyAcknowledgement =
+    tenantDb.models.PolicyAcknowledgement ||
+    tenantDb.model('PolicyAcknowledgement', (await import('../db/schemas/platform/policyAcknowledgementSchema.js')).default);
+
+  const ackRows = await PolicyAcknowledgement.find({ policy_id: { $in: policyIds } }, { policy_id: 1, user_id: 1 })
+    .lean();
+
+  const userToPolicies = new Map();
+  for (const row of ackRows || []) {
+    const uid = row?.user_id?.toString?.();
+    const pid = row?.policy_id?.toString?.();
+    if (!uid || !pid) continue;
+    if (!userToPolicies.has(uid)) userToPolicies.set(uid, new Set());
+    userToPolicies.get(uid).add(pid);
+  }
+
+  let acknowledged = 0;
+  for (const bm of audience) {
+    const uid = bm?.user_id?.toString?.();
+    if (!uid) continue; // no user -> cannot acknowledge in-app -> pending
+    const set = userToPolicies.get(uid);
+    if (set && set.size >= policyIds.length) acknowledged += 1;
+  }
+
+  const pending = Math.max(totalPeople - acknowledged, 0);
+
+  res.json({
+    success: true,
+    data: {
+      totalPeople,
+      acknowledged,
+      pending,
+      activePolicies: policyIds.length
+    }
   });
 });
 

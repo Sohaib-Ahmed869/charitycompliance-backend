@@ -17,16 +17,28 @@ const socialMediaCampaignSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  /** Backwards-compatible primary platform (first in platforms) */
   platform: {
     type: String,
     enum: ['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'other'],
-    required: true
+    required: false
   },
+  /** Multi-platform support */
+  platforms: [{
+    type: String,
+    enum: ['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'other']
+  }],
+  /** Backwards-compatible single link (first in post_urls) */
   post_url: {
     type: String,
     trim: true,
     default: ''
   },
+  /** Per-platform live links */
+  post_urls: [{
+    platform: { type: String, enum: ['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'other'], required: true },
+    url: { type: String, trim: true, default: '' }
+  }],
   objective: {
     type: String,
     trim: true,
@@ -84,6 +96,8 @@ const socialMediaCampaignSchema = new mongoose.Schema({
 });
 
 socialMediaCampaignSchema.index({ org_id: 1, createdAt: -1 });
+socialMediaCampaignSchema.index({ org_id: 1, platform: 1 });
+socialMediaCampaignSchema.index({ org_id: 1, platforms: 1 });
 
 export default socialMediaCampaignSchema;
 

@@ -27,10 +27,22 @@ export class SocialMediaCampaignRepository {
   async findByOrg(orgId, filters = {}) {
     const query = { org_id: orgId };
     if (filters.status) query.status = filters.status;
-    if (filters.platform) query.platform = filters.platform;
+    if (filters.platform) {
+      query.$or = [
+        { platform: filters.platform },
+        { platforms: { $in: [filters.platform] } }
+      ];
+    }
     if (filters.search) {
       const regex = new RegExp(filters.search, 'i');
-      query.$or = [{ title: regex }, { objective: regex }, { post_url: regex }];
+      const searchOr = [{ title: regex }, { objective: regex }, { post_url: regex }, { 'post_urls.url': regex }];
+      if (query.$or) {
+        // Combine existing $or (platform filter) with search by AND-ing them.
+        query.$and = [{ $or: query.$or }, { $or: searchOr }];
+        delete query.$or;
+      } else {
+        query.$or = searchOr;
+      }
     }
     return this.SocialMediaCampaign.find(query).sort({ createdAt: -1 }).lean();
   }

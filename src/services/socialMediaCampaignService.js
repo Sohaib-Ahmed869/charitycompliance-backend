@@ -26,11 +26,23 @@ export class SocialMediaCampaignService {
     const orgObjectId = await this._getOrgObjectId(tenantDb);
     const repo = new SocialMediaCampaignRepository(tenantDb);
 
+    const incomingPlatforms = Array.isArray(payload.platforms) ? payload.platforms.filter(Boolean) : [];
+    const platforms = incomingPlatforms.length > 0 ? incomingPlatforms : (payload.platform ? [payload.platform] : []);
+    const primaryPlatform = platforms[0] || payload.platform || 'other';
+
+    const incomingPostUrls = Array.isArray(payload.post_urls) ? payload.post_urls : [];
+    const postUrls = incomingPostUrls
+      .filter((p) => p && p.platform && typeof p.url === 'string')
+      .map((p) => ({ platform: p.platform, url: p.url }));
+    const primaryPostUrl = (postUrls.find((p) => p.platform === primaryPlatform)?.url) || payload.post_url || '';
+
     const campaign = await repo.create({
       org_id: orgObjectId,
       title: payload.title,
-      platform: payload.platform,
-      post_url: payload.post_url || '',
+      platform: primaryPlatform,
+      platforms,
+      post_url: primaryPostUrl || '',
+      post_urls: postUrls,
       objective: payload.objective || '',
       start_date: payload.start_date || null,
       end_date: payload.end_date || null,
@@ -82,10 +94,28 @@ export class SocialMediaCampaignService {
       throw new AppError('Only draft/pending campaigns can be updated', 400, 'INVALID_STATUS');
     }
 
-    const allowed = ['title', 'platform', 'post_url', 'objective', 'start_date', 'end_date', 'estimated_budget', 'ad_spend_estimate', 'currency', 'images', 'notes', 'metadata'];
+    const allowed = ['title', 'platform', 'platforms', 'post_url', 'post_urls', 'objective', 'start_date', 'end_date', 'estimated_budget', 'ad_spend_estimate', 'currency', 'images', 'notes', 'metadata'];
     const updates = {};
     for (const k of allowed) {
       if (payload[k] !== undefined) updates[k] = payload[k];
+    }
+    if (updates.platforms !== undefined) {
+      const p = Array.isArray(updates.platforms) ? updates.platforms.filter(Boolean) : [];
+      updates.platforms = p;
+      if (!updates.platform && p.length > 0) updates.platform = p[0];
+    }
+    if (updates.post_urls !== undefined) {
+      const list = Array.isArray(updates.post_urls) ? updates.post_urls : [];
+      updates.post_urls = list
+        .filter((x) => x && x.platform && typeof x.url === 'string')
+        .map((x) => ({ platform: x.platform, url: x.url }));
+      if (!updates.post_url) {
+        const prim = (updates.platform || existing.platform || (Array.isArray(existing.platforms) ? existing.platforms[0] : null));
+        if (prim) {
+          const match = updates.post_urls.find((p) => p.platform === prim)?.url;
+          if (match) updates.post_url = match;
+        }
+      }
     }
     if (updates.estimated_budget != null) updates.estimated_budget = Number(updates.estimated_budget || 0);
     if (updates.ad_spend_estimate != null) updates.ad_spend_estimate = Number(updates.ad_spend_estimate || 0);

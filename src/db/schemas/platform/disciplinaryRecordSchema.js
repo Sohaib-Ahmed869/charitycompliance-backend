@@ -69,6 +69,28 @@ const disciplinaryRecordSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
       required: true
+    },
+
+    /** When converted, this disciplinary record is linked to a complaint */
+    converted_to_complaint: {
+      type: Boolean,
+      default: false,
+      index: true
+    },
+    converted_complaint_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Complaint',
+      default: null,
+      index: true
+    },
+    converted_at: {
+      type: Date,
+      default: null
+    },
+    converted_by_user_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null
     }
   },
   {

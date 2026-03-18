@@ -5,7 +5,8 @@ import { validate } from '../../middleware/validation.js';
 import {
   createDisciplinaryRecord,
   listDisciplinaryRecords,
-  updateDisciplinaryRecord
+  updateDisciplinaryRecord,
+  convertDisciplinaryRecordToComplaint
 } from '../../controllers/disciplinaryRecordController.js';
 
 const router = express.Router();
@@ -41,6 +42,22 @@ router.put(
   ],
   validate,
   updateDisciplinaryRecord
+);
+
+router.post(
+  '/:recordId/convert-to-complaint',
+  [
+    param('recordId').notEmpty().isMongoId().withMessage('Valid record ID is required'),
+    body('complainant_name').trim().notEmpty().withMessage('complainant_name is required'),
+    body('complainant_email').isEmail().withMessage('Valid complainant_email is required'),
+    body('complaint_title').trim().notEmpty().withMessage('complaint_title is required'),
+    body('description').trim().notEmpty().withMessage('description is required'),
+    body('priority').optional().isIn(['low', 'medium', 'high', 'critical']),
+    body('submit_anonymously').optional().isBoolean(),
+    body('attachments').optional().isArray(),
+  ],
+  validate,
+  convertDisciplinaryRecordToComplaint
 );
 
 export default router;
