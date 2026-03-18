@@ -28,5 +28,13 @@ export class DonationRepository {
 
     return this.Donation.find(query).sort({ createdAt: -1 }).lean();
   }
+
+  async updateStatus(id, status, extra = {}) {
+    return this.Donation.findByIdAndUpdate(
+      id,
+      { status, ...extra },
+      { new: true }
+    ).lean();
+  }
 }
 

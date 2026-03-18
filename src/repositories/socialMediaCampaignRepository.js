@@ -34,5 +34,13 @@ export class SocialMediaCampaignRepository {
     }
     return this.SocialMediaCampaign.find(query).sort({ createdAt: -1 }).lean();
   }
+
+  async updateStatus(id, status, extra = {}) {
+    return this.SocialMediaCampaign.findByIdAndUpdate(
+      id,
+      { status, ...extra },
+      { new: true }
+    ).lean();
+  }
 }
 
