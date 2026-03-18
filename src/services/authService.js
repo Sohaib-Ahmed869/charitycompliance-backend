@@ -23,12 +23,14 @@ const LOCK_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
 /**
  * Load permissions granted by the user's position (if they are a board member with position_id).
+ * Shared helper used by login, OTP completion and runtime permission refresh.
+ *
  * @param {Object} tenantDb - Tenant DB connection
  * @param {string} userId - User _id
  * @param {string} orgId - Organization _id
  * @returns {Promise<string[]>} granted_permissions from Position, or []
  */
-const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => {
+export const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => {
   try {
     const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
     const { PositionRepository } = await import('../repositories/positionRepository.js');

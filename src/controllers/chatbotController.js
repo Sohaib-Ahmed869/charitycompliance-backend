@@ -97,18 +97,22 @@ A full review history is maintained with reviewer name, action, comments, versio
 
 COMPLAINTS
 Complaints can be submitted two ways:
-- **Internal**: From inside the app (submission method = "website")
-- **Public**: Via a public link — anyone can submit without logging in. Links can be of type "public_link", "qr_code", or "website_embed". Each link has a token, active flag, and optional expiry date.
+- **Internal**: From inside the app
+- **Public**: Via a public link — anyone can submit without logging in. Links can be of type "Public link", "QR code", or "Website embed" (each has a token and can be disabled/expired).
 
-Status flow: **new → assigned → in_progress → resolved**
+High-level flow (important):
+1. **Admin triage**: Admin marks if it is major and selects the responsible department.
+2. **Department Head review (gatekeeper)**:
+   - Department Head can **Approve** to allow the complaint workflow to start, or **Decline** with a reason.
+   - If declined, it returns to Admin who can either **Confirm the decline** or **Send back to the Department Head** for reconsideration.
+3. **Complaint workflow (after Department Head approval only)**:
+   - The workflow steps guide completion of the resolution work (resolution details, linking risk, linking training, etc.).
+4. **Final sign-off**:
+   - After the workflow completes, a **Board Member** performs final sign-off and adds final details (including training/risk context when needed).
+   - If no board member is assigned, the **last approver in the workflow** performs the final sign-off instead.
+   - Final sign-off is done once and is audit-tracked.
 
-How resolution works (4 mandatory steps):
-1. **Resolution details**: Root cause analysis, resolution actions, corrective/preventive actions, lessons learned, completion date. Status moves to "in_progress".
-2. **Link or create risk**: Connect the complaint to an existing risk, create a new risk from it, or skip.
-3. **Link or create training**: Attach relevant training.
-4. **Mark resolved**: System checks all steps are done, then marks as "resolved" with a timestamp.
-
-If any step is incomplete, the system blocks resolution. Admins see all complaints; regular users only see ones assigned to them.
+If a complaint looks “stuck”, it’s usually because it’s waiting at **Department Head review**, or it’s waiting for the **next workflow approver**, or it’s waiting for **final sign-off**.
 
 MEETINGS
 To create a meeting, go to **Meetings** (/meetings) and click the create button.

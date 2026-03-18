@@ -105,11 +105,57 @@ async function ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, 
   }
   
   if (stage === 'workflow_resolution') {
-    // Department heads MUST act - escalations do NOT bypass this
-    const deptName = complaint?.category?.name || complaint?.category?.toString?.() || '';
-    const headIds = await getDeptHeadUserIds(tenantDb, org._id, deptName);
-    if (!headIds.includes(String(userId))) {
-      throw new AppError('Only department head can complete resolution steps', 403, 'FORBIDDEN');
+    // Resolution steps are completed ONLY by:
+    // - For non‑major complaints: the final approver of the complaint workflow
+    // - For major complaints: the selected board sign‑off user
+    // Escalations do NOT bypass this.
+
+    // Require a linked complaint_resolution workflow instance
+    if (!complaint.workflow_instance_id || complaint.workflow_instance_type !== 'complaint_resolution') {
+      throw new AppError(
+        'Complaint workflow is not assigned yet. Ask an admin to approve the complaint (this assigns the workflow) or configure the complaint workflow.',
+        400,
+        'COMPLAINT_WORKFLOW_NOT_ASSIGNED'
+      );
+    }
+
+    // Load the approval request to verify status and final approver
+    const approvalRequestSchema = (await import('../db/schemas/platform/approvalRequestSchema.js')).default;
+    tenantDb.models.ApprovalRequest || tenantDb.model('ApprovalRequest', approvalRequestSchema);
+    const ApprovalRequest = tenantDb.model('ApprovalRequest');
+    const workflow = await ApprovalRequest.findById(complaint.workflow_instance_id).lean();
+
+    if (!workflow) {
+      throw new AppError('Complaint workflow instance not found', 404, 'COMPLAINT_WORKFLOW_NOT_FOUND');
+    }
+
+    if (workflow.status !== 'approved') {
+      throw new AppError(
+        'Resolution steps can only be completed after the complaint workflow is fully approved.',
+        403,
+        'WORKFLOW_NOT_COMPLETED'
+      );
+    }
+
+    const steps = Array.isArray(workflow.approval_steps) ? workflow.approval_steps : [];
+    const lastStep = steps.length > 0 ? steps[steps.length - 1] : null;
+    const lastApproverId = lastStep?.approver_user_id?._id || lastStep?.approver_user_id || null;
+    const userIdStr = String(userId);
+
+    // For major complaints, the selected board sign‑off user is allowed to complete resolution
+    const boardSignoffUserId = complaint?.board_signoff_user_id
+      ? String(complaint.board_signoff_user_id)
+      : null;
+
+    const isFinalWorkflowApprover = !!lastApproverId && String(lastApproverId) === userIdStr;
+    const isBoardSignoffUser = complaint.is_major && boardSignoffUserId && boardSignoffUserId === userIdStr;
+
+    if (!isFinalWorkflowApprover && !isBoardSignoffUser) {
+      throw new AppError(
+        'Only the final workflow approver (or selected board member for major complaints) can complete resolution steps',
+        403,
+        'FORBIDDEN'
+      );
     }
     return;
   }
@@ -638,45 +684,19 @@ export const adminApproveComplaint = asyncHandler(async (req, res) => {
     throw new AppError('Complaint must be in admin triage stage', 400, 'INVALID_STAGE');
   }
 
-  // When admin approves, start complaint_resolution workflow
-  const { ApprovalWorkflowService } = await import('../services/approvalWorkflowService.js');
-  const workflowService = new ApprovalWorkflowService(orgId);
-
-  let workflowInstanceId = null;
-  try {
-    // Create workflow instance for complaint resolution
-    const workflowInstance = await workflowService.createComplaintResolutionWorkflow(complaintId, userId, { is_major: complaint.is_major });
-    workflowInstanceId = workflowInstance?._id;
-  } catch (err) {
-    logError('Failed to create complaint resolution workflow', {
-      complaintId,
-      code: err?.code,
-      message: err?.message,
-      stack: err?.stack
-    });
-    // This workflow is required for dept-head approval to proceed.
-    throw new AppError(
-      err?.message || 'No complaint workflow is configured yet. Please configure a workflow.',
-      400,
-      err?.code || 'COMPLAINT_WORKFLOW_NOT_CONFIGURED'
-    );
-  }
-
   const updated = await complaintRepo.updateWithOps(complaintId, {
     $set: {
       admin_approval_decision: 'approved',
       admin_approval_notes: notes || '',
       workflow_stage: 'dept_head_review',
-      status: 'in_progress',
-      workflow_instance_id: workflowInstanceId,
-      workflow_instance_type: 'complaint_resolution',
+      status: 'in_progress'
     },
     $push: {
       trail: {
         at: new Date(),
         actor_user_id: userId || null,
         action: 'admin_approved',
-        details: { notes: notes || '', workflow_instance_id: workflowInstanceId || null },
+        details: { notes: notes || '' },
       },
     },
   });
@@ -844,10 +864,9 @@ export const deptHeadApproveComplaint = asyncHandler(async (req, res) => {
     }
   }
 
-  const nextStage = complaint.is_major ? 'board_signoff' : 'workflow_resolution';
-  if (complaint.is_major && !complaint.board_signoff_user_id) {
-    throw new AppError('Select a board member for sign-off before proceeding', 400, 'MISSING_BOARD_SIGNOFF');
-  }
+  // After dept head approval, always enter workflow resolution (steps 1-3).
+  // If the complaint is major, it will move to board sign-off AFTER step 3.
+  const nextStage = 'workflow_resolution';
 
   const updated = await complaintRepo.updateWithOps(complaintId, {
     $set: {
@@ -893,12 +912,14 @@ export const deptHeadRejectComplaint = asyncHandler(async (req, res) => {
 
   await ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner });
 
+  // When department head declines, send the complaint back to the admin triage
+  // stage for review of the decline (does NOT resolve the complaint).
   const updated = await complaintRepo.updateWithOps(complaintId, {
     $set: {
       dept_head_approval_decision: 'rejected',
       dept_head_approval_notes: reason || '',
-      status: 'resolved',
-      workflow_stage: 'resolved',
+      status: 'in_progress',
+      workflow_stage: 'admin_triage',
     },
     $push: {
       trail: {
@@ -1014,10 +1035,9 @@ export const workflowDeptHeadComplete = asyncHandler(async (req, res) => {
 
   await ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner });
 
-  const nextStage = complaint.is_major ? 'board_signoff' : 'dept_head_review';
-  if (complaint.is_major && !complaint.board_signoff_user_id) {
-    throw new AppError('Select a board member for sign-off before proceeding', 400, 'MISSING_BOARD_SIGNOFF');
-  }
+  // Keep consistent with dept-head approval: always proceed to workflow resolution.
+  // Major complaints go to board sign-off AFTER resolution step 3.
+  const nextStage = 'workflow_resolution';
 
   const now = new Date();
   const $set = { workflow_stage: nextStage };
@@ -1030,31 +1050,8 @@ export const workflowDeptHeadComplete = asyncHandler(async (req, res) => {
     },
   ];
 
-  // Automation: when entering board sign-off, ensure risk + training are linked
-  if (nextStage === 'board_signoff') {
-    if (!complaint.linked_risk_id) {
-      const { RiskService } = await import('../services/riskService.js');
-      const riskService = new RiskService(orgId);
-      const newRisk = await riskService.createRisk(
-        {
-          title: complaint.complaint_title,
-          description: complaint.description,
-          category: 'Operational',
-          department_id: complaint.category?._id || complaint.category,
-          metadata: { source: 'Complaint', complaint_id: String(complaintId) },
-        },
-        userId
-      );
-      $set.linked_risk_id = newRisk?._id || null;
-      $set['resolution_details.risk_linked_at'] = new Date();
-      trailEntries.push({
-        at: new Date(),
-        actor_user_id: userId || null,
-        action: 'risk_linked',
-        details: { action: 'create', linked_risk_id: String(newRisk?._id || '') },
-      });
-    }
-
+  // (Previous automation for board sign-off removed; resolution step 2/3 handles links.)
+  if (false) {
     if (!complaint.linked_training_id) {
       const { TrainingRepository } = await import('../repositories/trainingRepository.js');
       const trainingRepo = new TrainingRepository(tenantDb);
@@ -1281,6 +1278,11 @@ export const workflowBoardSignoff = asyncHandler(async (req, res) => {
     throw new AppError('Complaint is not in board sign-off stage', 400, 'INVALID_STAGE');
   }
 
+  // Prevent multiple final sign-offs on the same complaint
+  if (complaint.board_signoff?.signed_at) {
+    throw new AppError('Complaint is already signed off', 400, 'ALREADY_SIGNED_OFF');
+  }
+
   await ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner });
 
   if (!complaint.resolution_details?.root_cause) throw new AppError('Resolution details not completed', 400, 'INCOMPLETE_RESOLUTION');
@@ -1406,15 +1408,32 @@ export const completeResolutionStep = asyncHandler(async (req, res) => {
     actionDetails.step = 'training_linked';
 
     // After step 3, determine next stage
-    // If major, go to board_signoff
+    // If major and there are active board members, go to board_signoff;
+    // otherwise (no board members, or not major) resolve directly, with the
+    // current user acting as the final approver.
+    const boardMemberSchema = (await import('../db/schemas/platform/boardMemberSchema.js')).default;
+    tenantDb.models.BoardMember || tenantDb.model('BoardMember', boardMemberSchema);
+    const BoardMember = tenantDb.model('BoardMember');
+
+    let hasBoardMembers = false;
     if (complaint.is_major) {
+      const count = await BoardMember.countDocuments({
+        org_id: org._id,
+        is_active: true,
+        is_board_member: true,
+        user_id: { $ne: null },
+      });
+      hasBoardMembers = count > 0;
+    }
+
+    if (complaint.is_major && hasBoardMembers) {
       if (!complaint.board_signoff_user_id) {
         throw new AppError('Board member must be selected for sign-off', 400, 'MISSING_BOARD_SIGNOFF');
       }
       $set.workflow_stage = 'board_signoff';
       actionDetails.next_stage = 'board_signoff';
     } else {
-      // If not major, mark as resolved
+      // No board members configured (or complaint not major): mark as resolved.
       $set.workflow_stage = 'resolved';
       $set.status = 'resolved';
       $set['resolution_details.resolved_at'] = new Date();
@@ -1702,8 +1721,10 @@ export const markComplaintResolved = asyncHandler(async (req, res) => {
   }
 
   const stage = complaint.workflow_stage || 'admin_triage';
-  if (stage !== 'dept_head_review') {
-    throw new AppError('Complaint is not in department head review stage', 400, 'INVALID_STAGE');
+  // Legacy complaints may still be in dept_head_review, but in the
+  // current flow resolution happens during workflow_resolution.
+  if (stage !== 'workflow_resolution' && stage !== 'dept_head_review') {
+    throw new AppError('Complaint is not in the resolution stage', 400, 'INVALID_STAGE');
   }
   await ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner });
 

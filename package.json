@@ -38,6 +38,7 @@
     "openai": "^6.27.0",
     "puppeteer": "^24.37.4",
     "react-grid-layout": "^2.2.2",
+    "speakeasy": "^2.0.0",
     "stripe": "^17.3.1"
   },
   "devDependencies": {

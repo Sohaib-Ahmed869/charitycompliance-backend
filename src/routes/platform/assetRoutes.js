@@ -10,6 +10,8 @@ import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { uploadAssetSingle, handleUploadError } from '../../middleware/upload.js';
+import { requirePermission } from '../../middleware/rbac.js';
+import { requireMfa } from '../../middleware/mfa.js';
 
 const router = express.Router();
 
@@ -119,6 +121,29 @@ router.put(
   ],
   validate,
   assetController.updateAsset
+);
+
+// Credentials: update (encrypted) and fetch (decrypted)
+router.post(
+  '/:assetId/credentials',
+  [
+    param('assetId').isMongoId().withMessage('Invalid asset ID')
+  ],
+  validate,
+  requirePermission('module:asset_mgmt:edit'),
+  requireMfa('asset_credentials'),
+  assetController.updateAssetCredentials
+);
+
+router.get(
+  '/:assetId/credentials',
+  [
+    param('assetId').isMongoId().withMessage('Invalid asset ID')
+  ],
+  validate,
+  requirePermission('module:asset_mgmt:view'),
+  requireMfa('asset_credentials'),
+  assetController.getAssetCredentials
 );
 
 // Delete asset

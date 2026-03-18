@@ -45,7 +45,15 @@ router.post(
     body('positions')
       .optional()
       .isArray()
-      .withMessage('Positions must be an array')
+      .withMessage('Positions must be an array'),
+    body('effective_from')
+      .optional({ nullable: true })
+      .isISO8601()
+      .withMessage('effective_from must be a valid ISO 8601 date'),
+    body('effective_to')
+      .optional({ nullable: true })
+      .isISO8601()
+      .withMessage('effective_to must be a valid ISO 8601 date')
   ],
   validate,
   approvalController.createApprovalMatrix
@@ -75,10 +83,30 @@ router.put(
     body('positions')
       .optional()
       .isArray()
-      .withMessage('Positions must be an array')
+      .withMessage('Positions must be an array'),
+    body('effective_from')
+      .optional({ nullable: true })
+      .isISO8601()
+      .withMessage('effective_from must be a valid ISO 8601 date'),
+    body('effective_to')
+      .optional({ nullable: true })
+      .isISO8601()
+      .withMessage('effective_to must be a valid ISO 8601 date')
   ],
   validate,
   approvalController.updateApprovalMatrix
+);
+
+// Revoke approval matrix (workflow)
+router.post(
+  '/matrices/:matrixId/revoke',
+  [
+    param('matrixId')
+      .isMongoId()
+      .withMessage('Invalid matrix ID')
+  ],
+  validate,
+  approvalController.revokeApprovalMatrix
 );
 
 // List all approval requests for the org (optional status filter)
@@ -150,7 +178,11 @@ router.post(
       .withMessage('Step index must be a non-negative integer'),
     body('comments')
       .optional()
-      .trim()
+      .trim(),
+    body('e_signature')
+      .optional()
+      .isString()
+      .withMessage('e_signature must be a string data URL when provided')
   ],
   validate,
   approvalController.approveRequest
@@ -173,7 +205,11 @@ router.post(
       .withMessage('Severity must be between 1 and 5'),
     body('comments')
       .optional()
-      .trim()
+      .trim(),
+    body('e_signature')
+      .optional()
+      .isString()
+      .withMessage('e_signature must be a string data URL when provided')
   ],
   validate,
   approvalController.approveRiskWithPriority

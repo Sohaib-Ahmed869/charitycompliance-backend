@@ -13,6 +13,55 @@ import { uploadTrainingSingle, handleTrainingUploadError } from '../../middlewar
 
 const router = express.Router();
 
+// Public external training (no login; token-based)
+router.get(
+  '/public/enrollments/:token',
+  [param('token').notEmpty().withMessage('Token is required')],
+  validate,
+  trainingController.getExternalEnrollmentByToken
+);
+
+router.post(
+  '/public/enrollments/:token/progress',
+  [
+    param('token').notEmpty().withMessage('Token is required'),
+    body('resource_id').notEmpty().isMongoId().withMessage('Valid resource_id is required'),
+    body('status').optional().isIn(['not_started', 'in_progress', 'completed']),
+    body('video_seconds_watched').optional().isFloat({ min: 0 }),
+    body('pdf_percent_read').optional().isFloat({ min: 0, max: 100 })
+  ],
+  validate,
+  trainingController.updateExternalEnrollmentProgress
+);
+
+router.post(
+  '/public/enrollments/:token/complete',
+  [param('token').notEmpty().withMessage('Token is required')],
+  validate,
+  trainingController.completeExternalEnrollment
+);
+
+router.get(
+  '/public/enrollments/:token/resources/:resourceId/view-url',
+  [
+    param('token').notEmpty().withMessage('Token is required'),
+    param('resourceId').isMongoId().withMessage('Invalid resource ID')
+  ],
+  validate,
+  trainingController.getExternalEnrollmentResourceViewUrl
+);
+
+router.get(
+  '/public/enrollments/:token/resources/:resourceId/stream',
+  [
+    param('token').notEmpty().withMessage('Token is required'),
+    param('resourceId').isMongoId().withMessage('Invalid resource ID')
+  ],
+  validate,
+  trainingController.streamExternalEnrollmentResource
+);
+
+// Authenticated routes
 router.use(authAndResolveTenant);
 
 // --- Upload resource file (from PC) ---

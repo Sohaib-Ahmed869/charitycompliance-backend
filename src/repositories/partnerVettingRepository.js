@@ -66,6 +66,20 @@ export class PartnerVettingRepository {
     );
   }
 
+  async addVettingCheckDocument(partnerId, checkIndex, doc) {
+    const keyBase = `vetting_checks.${checkIndex}.documents`;
+    return await this.PartnerVetting.findByIdAndUpdate(
+      partnerId,
+      {
+        $push: {
+          [keyBase]: doc
+        },
+        $set: { updatedAt: new Date() }
+      },
+      { new: true, runValidators: true }
+    );
+  }
+
   async getCountsByOrg(orgId) {
     const partners = await this.PartnerVetting.find({ org_id: orgId });
     const today = new Date();

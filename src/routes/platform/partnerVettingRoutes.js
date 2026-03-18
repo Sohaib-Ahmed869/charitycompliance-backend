@@ -81,6 +81,29 @@ router.get(
   partnerVettingController.streamPartnerDocument
 );
 
+router.post(
+  '/:partnerId/vetting-checks/:checkIndex/documents/upload',
+  [
+    param('partnerId').isMongoId().withMessage('Invalid partner ID'),
+    param('checkIndex').isInt({ min: 0 }).withMessage('Invalid check index')
+  ],
+  validate,
+  uploadPolicySingle,
+  handlePolicyUploadError,
+  partnerVettingController.uploadVettingCheckDocument
+);
+
+router.get(
+  '/:partnerId/vetting-checks/:checkIndex/documents/:docIndex/stream',
+  [
+    param('partnerId').isMongoId().withMessage('Invalid partner ID'),
+    param('checkIndex').isInt({ min: 0 }).withMessage('Invalid check index'),
+    param('docIndex').isInt({ min: 0 }).withMessage('Invalid document index')
+  ],
+  validate,
+  partnerVettingController.streamVettingCheckDocument
+);
+
 router.delete(
   '/:partnerId',
   [param('partnerId').isMongoId().withMessage('Invalid partner ID')],

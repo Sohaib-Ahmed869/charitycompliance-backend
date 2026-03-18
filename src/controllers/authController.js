@@ -4,8 +4,9 @@
  * Handles HTTP requests for authentication endpoints
  */
 
-import authService from '../services/authService.js';
+import authService, { getPositionPermissionsForUser } from '../services/authService.js';
 import { asyncHandler, AppError } from '../middleware/errorHandler.js';
+import { getTenantConnection } from '../db/connectionManager.js';
 
 export const register = asyncHandler(async (req, res) => {
   const result = await authService.register(req.body);
@@ -89,5 +90,80 @@ export const sendOtp = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     message: 'Verification code sent to your email'
+  });
+});
+
+export const enableMfa = asyncHandler(async (req, res) => {
+  const userId = req.user?.userId;
+  const orgId = req.orgId || req.user?.orgId;
+
+  if (!userId || !orgId) {
+    throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
+  }
+
+  const tenantDb = await getTenantConnection(orgId);
+  await authService.enableMfa(tenantDb, userId);
+
+  res.json({
+    success: true,
+    message: 'Multi-factor authentication enabled'
+  });
+});
+
+export const disableMfa = asyncHandler(async (req, res) => {
+  const userId = req.user?.userId;
+  const orgId = req.orgId || req.user?.orgId;
+
+  if (!userId || !orgId) {
+    throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
+  }
+
+  const tenantDb = await getTenantConnection(orgId);
+  await authService.disableMfa(tenantDb, userId);
+
+  res.json({
+    success: true,
+    message: 'Multi-factor authentication disabled'
+  });
+});
+
+/**
+ * Runtime permission refresh for currently authenticated user.
+ * Returns the latest effective permissions based on the user's positions.
+ */
+export const refreshPermissions = asyncHandler(async (req, res) => {
+  const userId = req.user?.userId;
+  const orgId = req.orgId || req.user?.orgId;
+
+  if (!userId || !orgId) {
+    throw new AppError('Unauthorized', 401, 'UNAUTHORIZED');
+  }
+
+  const tenantDb = await getTenantConnection(orgId);
+
+  // Resolve organisation to get its _id (required by BoardMember/position helpers)
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) {
+    throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+  }
+
+  const positionPermissions = await getPositionPermissionsForUser(tenantDb, userId, org._id);
+
+  let basePermissions;
+  if (req.user?.roles?.includes('admin')) {
+    basePermissions = ['*:*'];
+  } else if (positionPermissions.length > 0) {
+    basePermissions = ['read:own', 'write:own', ...positionPermissions];
+  } else {
+    basePermissions = ['read:own', 'write:own'];
+  }
+
+  res.json({
+    success: true,
+    data: {
+      permissions: Array.from(new Set(basePermissions))
+    }
   });
 });

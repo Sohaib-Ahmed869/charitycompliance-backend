@@ -25,7 +25,7 @@ const calendarEventSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['policy', 'training', 'grant', 'funding', 'compliance', 'meeting', 'custom'],
+    enum: ['policy', 'training', 'grant', 'funding', 'compliance', 'meeting', 'task', 'appointment', 'custom'],
     default: 'custom'
   },
   description: {

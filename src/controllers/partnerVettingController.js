@@ -159,3 +159,54 @@ export const streamPartnerDocument = asyncHandler(async (req, res) => {
   if (ContentLength != null) res.setHeader('Content-Length', String(ContentLength));
   Body.pipe(res);
 });
+
+export const uploadVettingCheckDocument = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { partnerId, checkIndex } = req.params;
+  if (!req.file) {
+    return res.status(400).json({ success: false, error: { message: 'Document file is required' } });
+  }
+
+  const index = parseInt(checkIndex, 10);
+  if (Number.isNaN(index) || index < 0) {
+    return res.status(400).json({ success: false, error: { message: 'Invalid check index' } });
+  }
+
+  const service = new PartnerVettingService(orgId);
+  const partner = await service.uploadVettingCheckDocument(partnerId, index, req.file);
+
+  res.status(201).json({
+    success: true,
+    data: partner
+  });
+});
+
+export const streamVettingCheckDocument = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { partnerId, checkIndex, docIndex } = req.params;
+  const cIdx = parseInt(checkIndex, 10);
+  const dIdx = parseInt(docIndex, 10);
+  if (Number.isNaN(cIdx) || cIdx < 0 || Number.isNaN(dIdx) || dIdx < 0) {
+    return res.status(400).json({ success: false, error: { message: 'Invalid document index' } });
+  }
+
+  const service = new PartnerVettingService(orgId);
+  const rangeHeader = req.headers.range || null;
+  const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await service.streamVettingCheckDocument(
+    partnerId,
+    cIdx,
+    dIdx,
+    rangeHeader
+  );
+
+  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
+  res.setHeader('Content-Disposition', 'inline');
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Accept-Ranges', 'bytes');
+  if (IsPartial && ContentRange) {
+    res.status(206);
+    res.setHeader('Content-Range', ContentRange);
+  }
+  if (ContentLength != null) res.setHeader('Content-Length', String(ContentLength));
+  Body.pipe(res);
+});

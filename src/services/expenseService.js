@@ -30,6 +30,8 @@ export class ExpenseService {
     const expenseRepo = new ExpenseRepository(tenantDb);
 
     // Validate against project funding if project is specified
+    let resolvedFundingAgreementId = expenseData.funding_agreement_id || null;
+
     if (expenseData.project_id) {
       const ProjectRegister = tenantDb.model('ProjectRegister');
       const FundingAgreement = tenantDb.model('FundingAgreement');
@@ -40,7 +42,13 @@ export class ExpenseService {
         throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
       }
 
-      // Check if project has a funding agreement
+      // If project is linked to a funding agreement and none was explicitly provided on the expense,
+      // auto-populate the funding_agreement_id so fund utilization and approvals can see the link.
+      if (!resolvedFundingAgreementId && project.agreement_id) {
+        resolvedFundingAgreementId = project.agreement_id;
+      }
+
+      // Check if project has a funding agreement for utilization checks
       if (project.agreement_id) {
         // Fetch funding agreement
         const agreement = await FundingAgreement.findById(project.agreement_id);
@@ -74,7 +82,7 @@ export class ExpenseService {
       vendor_name: expenseData.vendor_name,
       vendor_email: expenseData.vendor_email,
       project_id: expenseData.project_id,
-      funding_agreement_id: expenseData.funding_agreement_id,
+      funding_agreement_id: resolvedFundingAgreementId,
       status: expenseData.status || 'draft',
       is_asset_purchase: expenseData.is_asset_purchase || false,
       asset_details: expenseData.asset_details || {},
