@@ -221,6 +221,30 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
         </table>
       `;
     }
+
+    // ── Final approval e‑signature (if captured) ──
+    let finalSignatureHTML = '';
+    const finalApprovedStep = steps.slice().reverse().find(s => s.status === 'approved' && s.signature_data);
+    if (finalApprovedStep && typeof finalApprovedStep.signature_data === 'string' && finalApprovedStep.signature_data.startsWith('data:')) {
+      const approverName = finalApprovedStep.approver_user_id
+        ? `${finalApprovedStep.approver_user_id.first_name || ''} ${finalApprovedStep.approver_user_id.last_name || ''}`.trim() || '—'
+        : '—';
+      finalSignatureHTML = `
+        <h2>Final Approval Signature</h2>
+        <table class="info-table">
+          <tr>
+            <td>Approved By</td>
+            <td>${esc(approverName)}</td>
+          </tr>
+          <tr>
+            <td>Signature</td>
+            <td>
+              <img src="${finalApprovedStep.signature_data}" alt="Final approval signature" class="signature-img" />
+            </td>
+          </tr>
+        </table>
+      `;
+    }
     
     // ── Attempt history ──
     let attemptsHTML = '';
@@ -390,6 +414,13 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
     .status-rejected { background-color: #FEE2E2; color: #7F1D1D; }
     .status-pending { background-color: #E0E7FF; color: #3730A3; }
     
+    .signature-img {
+      max-width: 260px;
+      height: auto;
+      border-bottom: 1px solid #CBD5E0;
+      margin-top: 6px;
+    }
+    
     .footer {
       margin-top: 40px;
       padding: 15px 0;
@@ -438,6 +469,7 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
 
     ${attemptsHTML}
     ${ackHTML}
+    ${finalSignatureHTML}
 
     <div class="footer">
       <p><strong>Generated on:</strong> ${formatDate(new Date())} at ${formatTime(new Date())}</p>

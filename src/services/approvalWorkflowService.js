@@ -17,6 +17,7 @@ import { ProjectRegisterRepository } from '../repositories/projectRegisterReposi
 import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
+import { DonorRepository } from '../repositories/donorRepository.js';
 import { ProjectRegisterService } from './projectRegisterService.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
@@ -54,6 +55,7 @@ export class ApprovalWorkflowService {
     if (t === 'risk_management') return 'risk';
     if (t === 'grant_approval') return 'grant';
     if (t === 'policy_approval') return 'policy';
+    if (t === 'complaint_resolution') return 'complaint';
     return t;
   }
 
@@ -122,10 +124,11 @@ export class ApprovalWorkflowService {
 
     // Load all active matrices and search across ALL of them, since each
     // workflow type (expense, grant, risk, etc.) may be stored in its own matrix.
-    const matrices = await approvalMatrixRepo.findByOrgId(orgId);
+    // Only use workflows that are currently effective (within date range) and not revoked.
+    const matrices = await approvalMatrixRepo.findEffectiveByOrgId(orgId, new Date());
     if (!matrices || matrices.length === 0) {
       throw new AppError(
-        'No approval matrix configured. Please set up an approval matrix first.',
+        'No approval workflow is currently effective. Please set an effective date range or create a new workflow.',
         400,
         'NO_APPROVAL_MATRIX'
       );
@@ -221,6 +224,288 @@ export class ApprovalWorkflowService {
     });
 
     // TODO: Send notifications to approvers
+
+    return approvalRequest;
+  }
+
+  /**
+   * Map donor size to numeric amount for approval matrix matching
+   * small=1, medium=2, large=3
+   */
+  _mapDonorSizeToAmount(size) {
+    const sizeMap = {
+      'small': 1,
+      'medium': 2,
+      'large': 3
+    };
+    return sizeMap[size] || 1;
+  }
+
+  /**
+   * Create approval request for a donation (action_type: donation)
+   */
+  async createDonationApprovalRequest(donationId, submittedBy, amount) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    // Find matching approval rule for donation action_type
+    const { matrix, rule } = await this.findMatchingRule('donation', amount || 0, orgObjectId);
+
+    // Resolve approvers
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    // Create approval steps
+    const approvalSteps = approvers.map(approver => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    // Create approval request
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'donation',
+      entity_id: donationId,
+      entity_type: 'donation',
+      amount: amount || 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    logInfo('Donation approval request created', {
+      donationId,
+      amount,
+      approvalRequestId: approvalRequest._id,
+      approversCount: approvers.length
+    });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Create approval request for a donation milestone (action_type: donation_milestone)
+   */
+  async createDonationMilestoneApprovalRequest(milestoneId, submittedBy, amount) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const { matrix, rule } = await this.findMatchingRule('donation_milestone', amount || 0, orgObjectId);
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'donation_milestone',
+      entity_id: milestoneId,
+      entity_type: 'donation_milestone',
+      amount: amount || 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Create approval request for a social media campaign (action_type: social_media_campaign)
+   */
+  async createSocialMediaCampaignApprovalRequest(campaignId, submittedBy, amount) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const { matrix, rule } = await this.findMatchingRule('social_media_campaign', amount || 0, orgObjectId);
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'social_media_campaign',
+      entity_id: campaignId,
+      entity_type: 'social_media_campaign',
+      amount: amount || 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Create approval request for a donor (action_type: donor)
+   * Uses workflow_type (small/medium/large) from donor size
+   */
+  async createDonorApprovalRequest(donorId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const donorRepo = new DonorRepository(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const userPositionRepo = new UserPositionRepository(tenantDb);
+
+    // Get donor
+    const donor = await donorRepo.findById(donorId);
+    if (!donor) {
+      throw new AppError('Donor not found', 404, 'DONOR_NOT_FOUND');
+    }
+
+    // Map donor size to amount for matching (small=1, medium=2, large=3)
+    const donorAmount = this._mapDonorSizeToAmount(donor.size || 'small');
+
+    // Find matching approval rule for donor action_type
+    const { matrix, rule } = await this.findMatchingRule('donor', donorAmount, orgObjectId);
+    
+    // Resolve approvers
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    // Create approval steps
+    const approvalSteps = approvers.map(approver => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    // Create approval request
+    // Use donorAmount (1/2/3) so the required "amount" field is satisfied,
+    // even though this is not a literal currency amount.
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'donor',
+      entity_id: donorId,
+      entity_type: 'donor',
+      amount: donorAmount,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    // Update donor with approval request reference
+    await donorRepo.update(donorId, {
+      approval_matrix_id: matrix._id,
+      approval_request_id: approvalRequest._id,
+      status: 'pending_approval'
+    });
+
+    logInfo('Donor approval request created', {
+      donorId,
+      donorSize: donor.size,
+      approvalRequestId: approvalRequest._id,
+      approversCount: approvers.length
+    });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Map grant size to numeric amount for approval matrix matching
+   * small=1, medium=2, large=3
+   */
+  _mapGrantSizeToAmount(size) {
+    const sizeMap = {
+      'small': 1,
+      'medium': 2,
+      'large': 3
+    };
+    return sizeMap[size] || 1;
+  }
+
+  /**
+   * Create approval request for a grant (action_type: grant)
+   * Uses workflow_type (small/medium/large) from grant size
+   */
+  async createGrantApprovalRequest(grantId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const userPositionRepo = new UserPositionRepository(tenantDb);
+
+    // Get grant (assuming a Grant model exists)
+    const Grant = tenantDb.model('Grant');
+    const grant = await Grant.findById(grantId);
+    if (!grant) {
+      throw new AppError('Grant not found', 404, 'GRANT_NOT_FOUND');
+    }
+
+    // Map grant size to amount for matching (small=1, medium=2, large=3)
+    const grantAmount = this._mapGrantSizeToAmount(grant.size || 'small');
+
+    // Find matching approval rule for grant action_type
+    const { matrix, rule } = await this.findMatchingRule('grant', grantAmount, orgObjectId);
+    
+    // Resolve approvers
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    // Create approval steps
+    const approvalSteps = approvers.map(approver => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    // Create approval request
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'grant',
+      entity_id: grantId,
+      entity_type: 'grant',
+      amount: grantAmount,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    // Update grant with approval request reference
+    await Grant.findByIdAndUpdate(grantId, {
+      approval_matrix_id: matrix._id,
+      approval_request_id: approvalRequest._id,
+      status: 'pending_approval'
+    });
+
+    logInfo('Grant approval request created', {
+      grantId,
+      grantSize: grant.size,
+      approvalRequestId: approvalRequest._id,
+      approversCount: approvers.length
+    });
 
     return approvalRequest;
   }
@@ -606,7 +891,17 @@ export class ApprovalWorkflowService {
   /**
    * Process approval (approve or reject)
    */
-  async processApproval(approvalRequestId, stepIndex, userId, decision, comments = null, ipAddress = null, userAgent = null, acknowledgement = null) {
+  async processApproval(
+    approvalRequestId,
+    stepIndex,
+    userId,
+    decision,
+    comments = null,
+    ipAddress = null,
+    userAgent = null,
+    acknowledgement = null,
+    signatureData = null
+  ) {
     const tenantDb = await this.getTenantDb();
     this._ensureTenantModels(tenantDb);
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
@@ -723,9 +1018,47 @@ export class ApprovalWorkflowService {
     if (ipAddress) updateData.ip_address = ipAddress;
     if (userAgent) updateData.user_agent = userAgent;
 
+    // Determine if this decision will complete the workflow (all approvals received)
+    const allStepsCurrent = request.approval_steps || [];
+    const hypotheticalSteps = allStepsCurrent.map((s, idx) => {
+      const plain = s.toObject ? s.toObject() : { ...s };
+      if (idx === stepIndex) {
+        plain.status = decision;
+      }
+      return plain;
+    });
+
+    let wouldAllApproved = false;
+    if (decision === 'approved') {
+      if (request.approval_type === 'any') {
+        wouldAllApproved = hypotheticalSteps.some((s) => s.status === 'approved');
+      } else if (request.approval_type === 'parallel') {
+        wouldAllApproved = hypotheticalSteps.every(
+          (s) => s.status === 'approved' || s.status === 'rejected'
+        ) && !hypotheticalSteps.some((s) => s.status === 'rejected');
+      } else if (request.approval_type === 'sequential') {
+        wouldAllApproved = hypotheticalSteps.every((s) => s.status === 'approved');
+      }
+    }
+
+    // If this is the final approval, require an e‑signature
+    if (wouldAllApproved && decision === 'approved') {
+      if (!signatureData || typeof signatureData !== 'string' || !signatureData.trim()) {
+        throw new AppError(
+          'E‑signature is required to complete final approval',
+          400,
+          'MISSING_E_SIGNATURE'
+        );
+      }
+      updateData.signature_data = signatureData;
+    } else if (signatureData) {
+      // Non‑final steps may optionally store a signature without enforcing it
+      updateData.signature_data = signatureData;
+    }
+
     await approvalRequestRepo.updateApprovalStep(approvalRequestId, stepIndex, updateData);
 
-    // Check if all approvals are complete
+    // Check if all approvals are complete (using updated request)
     const updatedRequest = await approvalRequestRepo.findById(approvalRequestId);
     const allSteps = updatedRequest.approval_steps;
     logInfo('Approval step updated', {
@@ -844,6 +1177,18 @@ export class ApprovalWorkflowService {
           previousStatus: request.status,
           newStatus: updatedPolicy?.status
         });
+      } else if (request.entity_type === 'donor') {
+        const donorRepo = new DonorRepository(tenantDb);
+        await donorRepo.update(request.entity_id, {
+          status: 'approved',
+          approved_for_kyc: true,
+          kyc_status: 'not_started',
+          aml_screening_status: 'not_started'
+        });
+        logInfo('Donor status updated from approval', {
+          approvalRequestId,
+          entityId: request.entity_id
+        });
       } else if (request.entity_type === 'funding_agreement') {
         const FundingAgreement = tenantDb.model('FundingAgreement');
         const fundingAgreement = await FundingAgreement.findByIdAndUpdate(
@@ -946,6 +1291,7 @@ export class ApprovalWorkflowService {
         document_approval: 'Document Approval',
         hr: 'HR',
         emergency: 'Emergency Authority Transfer',
+        complaint_resolution: 'Complaint Resolution Workflow',
         other: 'Approval Request'
       };
       const workflowTitle = typeLabels[request.request_type] || request.request_type || 'Approval Request';
@@ -1024,7 +1370,8 @@ export class ApprovalWorkflowService {
     if (step.status !== 'pending') return false;
 
     // Direct user match
-    if (step.approver_user_id && String(step.approver_user_id) === String(userId)) {
+    const stepApproverUserId = step.approver_user_id?._id || step.approver_user_id;
+    if (stepApproverUserId && String(stepApproverUserId) === String(userId)) {
       return true;
     }
 
@@ -1803,6 +2150,7 @@ export class ApprovalWorkflowService {
     this._ensureTenantModels(tenantDb);
     const orgObjectId = await this._getOrgObjectId();
     const { ComplaintRepository } = await import('../repositories/complaintRepository.js');
+    const boardMemberRepo = new BoardMemberRepository(tenantDb);
     const complaintRepo = new ComplaintRepository(tenantDb);
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
 
@@ -1832,24 +2180,32 @@ export class ApprovalWorkflowService {
       );
     }
 
-    // If major, enforce selected board member is final approver
+    // If major and the organization actually has board members configured,
+    // enforce that the selected board member is the final approver.
+    // If there are no active board members, fall back to the normal workflow
+    // approvers only (last workflow approver will effectively be the final signer).
     const finalApprovers = [...approverUserIds];
     if (metadata?.is_major) {
-      const boardUserId = complaint.board_signoff_user_id
-        ? String(complaint.board_signoff_user_id)
-        : '';
-      if (!boardUserId) {
-        throw new AppError(
-          'Select a board member for sign-off before proceeding.',
-          400,
-          'MISSING_BOARD_SIGNOFF'
-        );
-      }
+      const activeBoardCount = await boardMemberRepo.countByOrgId(orgObjectId);
+      if (activeBoardCount > 0) {
+        const boardUserId = complaint.board_signoff_user_id
+          ? String(complaint.board_signoff_user_id)
+          : '';
+        if (!boardUserId) {
+          throw new AppError(
+            'Select a board member for sign-off before proceeding.',
+            400,
+            'MISSING_BOARD_SIGNOFF'
+          );
+        }
 
-      // Ensure board member is last (remove if already included earlier)
-      const withoutBoard = finalApprovers.filter((id) => String(id) !== boardUserId);
-      finalApprovers.length = 0;
-      finalApprovers.push(...withoutBoard, boardUserId);
+        // Ensure board member is last (remove if already included earlier)
+        const withoutBoard = finalApprovers.filter((id) => String(id) !== boardUserId);
+        finalApprovers.length = 0;
+        finalApprovers.push(...withoutBoard, boardUserId);
+      }
+      // When there are no board members, we intentionally do NOT throw;
+      // the resolution workflow will be completed by the last workflow approver.
     }
 
     const approvalSteps = finalApprovers.map((userId, index) => ({

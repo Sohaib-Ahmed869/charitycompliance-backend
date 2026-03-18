@@ -1068,8 +1068,12 @@ export const downloadPolicyPackZip = asyncHandler(async (req, res) => {
 
   // Get organization for logo
   const org = await orgRepo.findOne();
-  const logoUrl = org?.logo_url || process.env.LOGO || '';
-  
+  // Prefer stored org logo, but never use a browser-only blob: URL inside Node/Puppeteer.
+  let logoUrl = org?.logo_url || '';
+  if (!logoUrl || String(logoUrl).startsWith('blob:')) {
+    logoUrl = process.env.LOGO || '';
+  }
+
   console.log('Logo URL for pack download:', {
     orgLogoUrl: org?.logo_url,
     envLogo: process.env.LOGO,

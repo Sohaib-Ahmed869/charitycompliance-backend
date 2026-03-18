@@ -320,10 +320,12 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
   const { DepartmentRepository } = await import('../repositories/departmentRepository.js');
   const { PositionRepository } = await import('../repositories/positionRepository.js');
   const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
 
   const orgRepo = new OrganizationRepository(tenantDb);
   const departmentRepo = new DepartmentRepository(tenantDb);
   const positionRepo = new PositionRepository(tenantDb);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
   // Get organization
   const org = await orgRepo.findOne();
@@ -336,6 +338,19 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
 
   // Get all active positions
   const positions = await positionRepo.findByOrgId(org._id);
+
+  // Determine which positions are held by active board members (is_board_member=true)
+  const boardMembers = await boardMemberRepo.BoardMember.find({
+    org_id: org._id,
+    is_active: true,
+    is_board_member: true,
+    position_id: { $ne: null }
+  }).lean();
+  const boardPositionIds = new Set(
+    boardMembers
+      .map((bm) => bm.position_id?.toString?.())
+      .filter(Boolean)
+  );
 
   // Group positions by department
   const departmentsWithRoles = departments.map(dept => {
@@ -364,6 +379,8 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
           name: pos.title,
           level: pos.level,
           isManagement: pos.is_management,
+          // Derived flag: true when at least one active board member holds this position
+          is_board_level: boardPositionIds.has(pos._id.toString()),
           granted_permissions: pos.granted_permissions || [],
           modulePermissions
         };

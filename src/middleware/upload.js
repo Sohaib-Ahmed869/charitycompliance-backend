@@ -189,6 +189,18 @@ export const uploadMultiple = upload.array('files', 5); // Max 5 files
 export const uploadAcknowledgementFiles = upload.array('files', 10);
 
 /**
+ * Middleware for donor KYC document uploads
+ * Allows up to 10 files (PDF, Word, images) - 10MB max each
+ */
+export const uploadDonorKycFiles = upload.array('files', 10);
+
+/**
+ * Middleware for social media campaign image uploads
+ * Allows up to 10 files (images) - 10MB max each
+ */
+export const uploadSocialCampaignImages = upload.array('files', 10);
+
+/**
  * Error handler for multer errors
  */
 export const handleUploadError = (err, req, res, next) => {

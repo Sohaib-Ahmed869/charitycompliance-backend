@@ -17,6 +17,106 @@ const _transferCache = new Map();
 const TRANSFER_CACHE_TTL = 30_000; // 30s
 
 /**
+ * Compute effective module permissions for a non-admin user based on their positions.
+ * Mirrors the logic used during login so runtime updates to position permissions
+ * are reflected immediately without requiring a new login.
+ *
+ * @param {string} userId
+ * @param {string} orgId - tenant orgId string (not ObjectId)
+ * @returns {Promise<string[]>}
+ */
+async function computeRuntimePermissionsForUser(userId, orgId) {
+  try {
+    const { getTenantConnection } = await import('../db/connectionManager.js');
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const { PositionRepository } = await import('../repositories/positionRepository.js');
+    const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+
+    const tenantDb = await getTenantConnection(orgId);
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (!org) return [];
+
+    const boardMemberRepo = new BoardMemberRepository(tenantDb);
+    const positionRepo = new PositionRepository(tenantDb);
+
+    // Get ALL active board_members (user may hold multiple positions after transfer)
+    const allBoardMembers = await boardMemberRepo.findAllActiveByUserId(userId, org._id);
+    if (!allBoardMembers || allBoardMembers.length === 0) return [];
+
+    const positionIds = allBoardMembers
+      .map(bm => bm.position_id)
+      .filter(Boolean);
+    if (positionIds.length === 0) return [];
+
+    const positions = await Promise.all(positionIds.map(pid => positionRepo.findById(pid)));
+
+    const result = [];
+
+    for (const position of positions) {
+      if (!position) continue;
+
+      if (Array.isArray(position.granted_permissions) && position.granted_permissions.length) {
+        result.push(...position.granted_permissions.filter(p => typeof p === 'string' && p.trim()));
+      }
+    }
+
+    // Known sidebar modules - used for defaults when module_permissions is empty
+    const MODULE_IDS = [
+      'dashboard', 'approval_workflow', 'audit_trail', 'complaints', 'charity_admin', 'policies', 'human_resources',
+      'financial_mgmt', 'risk_mgmt', 'programs', 'grants_donors', 'reporting', 'systems_legal'
+    ];
+
+    // Fixed modules: dashboard & audit_trail (view only), approval_workflow & human_resources (view+edit)
+    const FIXED_VIEW_ONLY = ['dashboard', 'audit_trail'];
+    const FIXED_VIEW_EDIT = ['approval_workflow', 'human_resources'];
+
+    // Merge module_permissions from all positions (most permissive wins)
+    const permsMap = {};
+    for (const position of positions) {
+      if (!position) continue;
+      if (Array.isArray(position.module_permissions) && position.module_permissions.length) {
+        for (const mp of position.module_permissions) {
+          if (!mp || !mp.module_id) continue;
+          const mod = mp.module_id.toString();
+          if (!permsMap[mod]) {
+            permsMap[mod] = { view: false, edit: false, delete: false };
+          }
+          if (mp.view) permsMap[mod].view = true;
+          if (mp.edit) permsMap[mod].edit = true;
+          if (mp.delete) permsMap[mod].delete = true;
+        }
+      }
+    }
+
+    // Default: all modules get view when not explicitly set
+    for (const mod of MODULE_IDS) {
+      if (permsMap[mod]) {
+        if (permsMap[mod].view) result.push(`module:${mod}:view`);
+        if (permsMap[mod].edit) result.push(`module:${mod}:edit`);
+        if (permsMap[mod].delete) result.push(`module:${mod}:delete`);
+      } else {
+        // No permissions set - use defaults
+        const isFixedViewEdit = FIXED_VIEW_EDIT.includes(mod);
+        const isFixedViewOnly = FIXED_VIEW_ONLY.includes(mod);
+        if (isFixedViewOnly || isFixedViewEdit) {
+          result.push(`module:${mod}:view`);
+          if (isFixedViewEdit) result.push(`module:${mod}:edit`);
+        } else {
+          // For non-fixed modules, default to view only to avoid over-granting edit/delete
+          result.push(`module:${mod}:view`);
+        }
+      }
+    }
+
+    return Array.from(new Set(result));
+  } catch (err) {
+    // On any failure, fall back to token permissions
+    return [];
+  }
+}
+
+/**
  * Clear the transfer-block cache for a specific user so the middleware
  * picks up the status change on their very next API call (immediate logout).
  */
@@ -134,13 +234,26 @@ export const authenticate = async (req, res, next) => {
     // Verify token
     const decoded = verifyToken(token);
 
+    const decodedRoles = decoded.roles || [];
+    let effectivePermissions = decoded.permissions || [];
+
+    // For non-admin users, recompute permissions from DB on each request so that
+    // changes to position/module permissions take effect without requiring re-login.
+    if (!decodedRoles.includes('admin') && decoded.orgId && decoded.userId) {
+      const runtimePerms = await computeRuntimePermissionsForUser(decoded.userId, decoded.orgId);
+      if (runtimePerms.length > 0) {
+        // Include basic self permissions plus module permissions
+        effectivePermissions = ['read:own', 'write:own', ...runtimePerms];
+      }
+    }
+
     // Attach user info to request
     req.user = {
       userId: decoded.userId,
       orgId: decoded.orgId,
       email: decoded.email,
-      roles: decoded.roles || [],
-      permissions: decoded.permissions || []
+      roles: decodedRoles,
+      permissions: effectivePermissions
     };
 
     // Attach token for potential refresh

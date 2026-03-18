@@ -11,6 +11,7 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
 import { AppError } from '../middleware/errorHandler.js';
 import { uploadToS3, deleteFromS3, getFileUrl } from '../services/s3Service.js';
+import { encryptSecret, decryptSecret } from '../services/secretCryptoService.js';
 
 const normalizeAssignedTo = (assignedTo) => {
   if (!assignedTo) return undefined;
@@ -213,3 +214,66 @@ export const getAssetStats = asyncHandler(async (req, res) => {
     data: stats
   });
 });
+
+export const updateAssetCredentials = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { assetId } = req.params;
+  const { username, password, api_key, notes } = req.body || {};
+
+  const assetService = new AssetService(orgId);
+  const asset = await assetService.getAssetById(assetId);
+
+  const payload = encryptSecret(
+    JSON.stringify({
+      username: username || '',
+      password: password || '',
+      api_key: api_key || '',
+      notes: notes || ''
+    })
+  );
+
+  const updated = await assetService.updateAsset(assetId, {
+    credentials: {
+      ...payload,
+      meta: {
+        username_hint: username ? username.slice(-4) : ''
+      }
+    }
+  }, userId);
+
+  res.json({
+    success: true,
+    data: {
+      _id: updated._id,
+      has_credentials: !!updated.credentials?.cipher_text
+    }
+  });
+});
+
+export const getAssetCredentials = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { assetId } = req.params;
+
+  const assetService = new AssetService(orgId);
+  const asset = await assetService.getAssetById(assetId);
+
+  const decoded = decryptSecret(asset.credentials || {});
+  let parsed = { username: '', password: '', api_key: '', notes: '' };
+  if (decoded) {
+    try {
+      parsed = JSON.parse(decoded);
+    } catch {
+      parsed = { username: '', password: '', api_key: '', notes: '' };
+    }
+  }
+
+  res.json({
+    success: true,
+    data: {
+      ...parsed,
+      has_credentials: !!asset.credentials?.cipher_text
+    }
+  });
+});
+

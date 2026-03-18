@@ -52,6 +52,13 @@ export const resolveTenant = async (req, res, next) => {
     // Attach to request object (always use normalized id for consistency)
     req.tenantDb = tenantDb;
     req.orgId = normalizedOrgId;
+    
+    // Map user properties from req.user for easier access
+    if (req.user) {
+      req.userId = req.user.userId;
+      req.userRoles = req.user.roles;
+      req.userPermissions = req.user.permissions;
+    }
 
     next();
   } catch (error) {

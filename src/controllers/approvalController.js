@@ -190,7 +190,7 @@ export const approveRequest = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user.userId;
   const { approvalRequestId } = req.params;
-  const { stepIndex, comments, acknowledgement } = req.body;
+  const { stepIndex, comments, acknowledgement, e_signature } = req.body;
 
   const ipAddress = req.ip || req.connection.remoteAddress;
   const userAgent = req.get('user-agent');
@@ -204,7 +204,8 @@ export const approveRequest = asyncHandler(async (req, res) => {
     comments,
     ipAddress,
     userAgent,
-    acknowledgement
+    acknowledgement,
+    e_signature || null
   );
 
   res.json({
@@ -637,7 +638,7 @@ const PRIORITY_LEVEL_MAP = { high: 3, medium: 2, low: 1 };
 
 export const createApprovalMatrix = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
-  const { name, action_type, priority, priority_level, description, positions, workflow_category, workflow_type } = req.body;
+  const { name, action_type, priority, priority_level, description, positions, workflow_category, workflow_type, effective_from, effective_to } = req.body;
 
   const tenantDb = await getTenantConnection(orgId);
   const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
@@ -746,6 +747,33 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
   // Add optional fields
   if (workflow_category) matrixData.workflow_category = workflow_category;
   if (workflow_type) matrixData.workflow_type = workflow_type;
+  if (effective_from) matrixData.effective_from = new Date(effective_from);
+  if (effective_to) matrixData.effective_to = new Date(effective_to);
+
+  // Risk Treatment workflows must end with a board-level approver.
+  if (workflow_category === 'risk_treatment' && requiresApprovalFrom.length > 0) {
+    const lastStep = requiresApprovalFrom.reduce((a, b) => (a.approval_level > b.approval_level ? a : b));
+    if (lastStep.position_id) {
+      const boardMembers = await import('../repositories/boardMemberRepository.js');
+      const { BoardMemberRepository } = boardMembers;
+      const bmRepo = new BoardMemberRepository(tenantDb);
+      const hasBoardForPosition = await bmRepo.BoardMember.exists({
+        org_id: org._id,
+        is_active: true,
+        is_board_member: true,
+        position_id: lastStep.position_id
+      });
+      if (!hasBoardForPosition) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Risk Treatment workflows must end with a board-level position as the final approver.'
+          }
+        });
+      }
+    }
+  }
 
   const matrix = await approvalMatrixRepo.create(matrixData);
 
@@ -758,7 +786,7 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
 export const updateApprovalMatrix = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { matrixId } = req.params;
-  const { name, description, priority, priority_level, positions, workflow_category, workflow_type } = req.body;
+  const { name, description, priority, priority_level, positions, workflow_category, workflow_type, effective_from, effective_to } = req.body;
 
   const tenantDb = await getTenantConnection(orgId);
   const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
@@ -827,6 +855,8 @@ export const updateApprovalMatrix = asyncHandler(async (req, res) => {
   }
   if (workflow_category !== undefined) updateData.workflow_category = workflow_category;
   if (workflow_type !== undefined) updateData.workflow_type = workflow_type;
+  if (effective_from !== undefined) updateData.effective_from = effective_from ? new Date(effective_from) : null;
+  if (effective_to !== undefined) updateData.effective_to = effective_to ? new Date(effective_to) : null;
 
   if (positions && Array.isArray(positions) && matrix.rules?.length > 0) {
     const allPositions = await positionRepo.findByOrgId(org._id);
@@ -840,6 +870,32 @@ export const updateApprovalMatrix = asyncHandler(async (req, res) => {
         user_id: null
       };
     });
+
+    // Risk Treatment workflows must end with a board-level approver.
+    const categoryToCheck = updateData.workflow_category || matrix.workflow_category;
+    if (categoryToCheck === 'risk_treatment' && requiresApprovalFrom.length > 0) {
+      const lastStep = requiresApprovalFrom.reduce((a, b) => (a.approval_level > b.approval_level ? a : b));
+      if (lastStep.position_id) {
+        const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+        const bmRepo = new BoardMemberRepository(tenantDb);
+        const hasBoardForPosition = await bmRepo.BoardMember.exists({
+          org_id: org._id,
+          is_active: true,
+          is_board_member: true,
+          position_id: lastStep.position_id
+        });
+        if (!hasBoardForPosition) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'Risk Treatment workflows must end with a board-level position as the final approver.'
+            }
+          });
+        }
+      }
+    }
+
     matrix.rules[0].requires_approval_from = requiresApprovalFrom;
     matrix.markModified('rules');
   }
@@ -853,11 +909,42 @@ export const updateApprovalMatrix = asyncHandler(async (req, res) => {
   });
 });
 
+export const revokeApprovalMatrix = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { matrixId } = req.params;
+  const userId = req.user?.userId || null;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) {
+    return res.status(404).json({ success: false, error: { code: 'ORG_NOT_FOUND', message: 'Organization not found' } });
+  }
+
+  const matrix = await approvalMatrixRepo.findById(matrixId);
+  if (!matrix || String(matrix.org_id) !== String(org._id)) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Approval matrix not found' } });
+  }
+
+  if (matrix.revoked_at) {
+    return res.status(400).json({ success: false, error: { code: 'ALREADY_REVOKED', message: 'Workflow is already revoked' } });
+  }
+
+  matrix.is_active = false;
+  matrix.revoked_at = new Date();
+  matrix.revoked_by = userId;
+  await matrix.save();
+
+  res.json({ success: true, data: matrix });
+});
+
 export const approveRiskWithPriority = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user.userId;
   const { approvalRequestId } = req.params;
-  const { likelihood, severity, comments, acknowledgement } = req.body;
+  const { likelihood, severity, comments, acknowledgement, e_signature } = req.body;
 
   // Validate likelihood and severity
   if (!likelihood || !severity) {
@@ -925,7 +1012,8 @@ export const approveRiskWithPriority = asyncHandler(async (req, res) => {
     comments || '',
     ipAddress,
     userAgent,
-    acknowledgement
+    acknowledgement,
+    e_signature || null
   );
 
   // Update risk with likelihood, severity, and calculated priority

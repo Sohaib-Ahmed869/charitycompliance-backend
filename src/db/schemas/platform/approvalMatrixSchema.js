@@ -16,6 +16,11 @@ const approvalRuleSchema = new mongoose.Schema({
       'expense',
       'purchase',
       'grant',
+      'donor',
+      'donation',
+      'donation_agreement',
+      'donation_milestone',
+      'social_media_campaign',
       'contract',
       'leave',
       'hr',
@@ -101,6 +106,12 @@ const approvalMatrixSchema = new mongoose.Schema({
       'funding_agreement',
       'expense_approval',
       'project_approval',
+      'grant_approval',
+      'donor_review',
+      'donation_workflow',
+      'donation_agreement_workflow',
+      'donation_milestone_workflow',
+      'social_media_campaign_workflow',
       'emergency',
       'other'
     ],
@@ -110,9 +121,10 @@ const approvalMatrixSchema = new mongoose.Schema({
     type: String,
     enum: [
       'high', 'medium', 'low',                        // Risk types
-      'petty_cash', 'low_cash', 'moderate_cash', 'high_cash'  // Financial types
+      'petty_cash', 'low_cash', 'moderate_cash', 'high_cash',  // Financial types
+      'small', 'large'                                // Donor/Grant size types (medium reused from risk types)
     ],
-    description: 'Type designation: Risk uses high/medium/low, Financial uses cash tiers'
+    description: 'Type designation: Risk uses high/medium/low, Financial uses cash tiers, Donor/Grant uses small/medium/large'
   },
   priority: {
     type: Number,
@@ -142,6 +154,29 @@ const approvalMatrixSchema = new mongoose.Schema({
   is_active: {
     type: Boolean,
     default: true
+  },
+
+  // ── Effective dates + revocation ──────────────────────────────────────────
+  effective_from: {
+    type: Date,
+    default: null,
+    index: true
+  },
+  effective_to: {
+    type: Date,
+    default: null,
+    index: true
+  },
+  revoked_at: {
+    type: Date,
+    default: null,
+    index: true
+  },
+  revoked_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+    index: true
   }
 }, {
   timestamps: true,
@@ -163,6 +198,12 @@ const getCategoryDisplayName = (category) => {
     project_approval: 'Project Approval',
     expense_approval: 'Expense Approval',
     policy_approval: 'Policy Approval',
+    donor_review: 'Donor Review',
+    grant_approval: 'Grant Approval',
+    donation_workflow: 'Donations',
+    donation_agreement_workflow: 'Donation Funding Agreements',
+    donation_milestone_workflow: 'Donation Milestones',
+    social_media_campaign_workflow: 'Social Media Campaigns',
     hr_approval: 'HR Approval',
     emergency: 'Emergency Response'
   };
@@ -172,11 +213,37 @@ const getCategoryDisplayName = (category) => {
 // Validation: workflow_category and workflow_type rules
 approvalMatrixSchema.pre('save', async function(next) {
   const doc = this;
+
+  // Effective date sanity
+  if (doc.effective_from && doc.effective_to) {
+    if (new Date(doc.effective_from) > new Date(doc.effective_to)) {
+      return next(new Error('Workflow effective end date must be after the effective start date'));
+    }
+  }
+
+  // Revocation implies inactive
+  if (doc.revoked_at && doc.is_active) {
+    doc.is_active = false;
+  }
   
   // Risk management must have workflow_type (high/medium/low)
   if (doc.workflow_category === 'risk_management') {
     if (!doc.workflow_type || !['high', 'medium', 'low'].includes(doc.workflow_type)) {
       return next(new Error('Risk Management workflows must have workflow_type: high, medium, or low'));
+    }
+  }
+  
+  // Donor review must have workflow_type (small/medium/large)
+  if (doc.workflow_category === 'donor_review') {
+    if (!doc.workflow_type || !['small', 'medium', 'large'].includes(doc.workflow_type)) {
+      return next(new Error('Donor Review workflows must have workflow_type: small, medium, or large'));
+    }
+  }
+  
+  // Grant approval must have workflow_type (small/medium/large)
+  if (doc.workflow_category === 'grant_approval') {
+    if (!doc.workflow_type || !['small', 'medium', 'large'].includes(doc.workflow_type)) {
+      return next(new Error('Grant Approval workflows must have workflow_type: small, medium, or large'));
     }
   }
   
@@ -207,7 +274,7 @@ approvalMatrixSchema.pre('save', async function(next) {
       return next(new Error('Financial workflows must have workflow_type: petty_cash, low_cash, moderate_cash, or high_cash'));
     }
   }
-  
+
   next();
 });
 

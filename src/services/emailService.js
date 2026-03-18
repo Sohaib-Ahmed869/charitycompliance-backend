@@ -2,15 +2,15 @@
  * Email Service
  *
  * Handles sending emails using nodemailer with SMTP
- * Templates follow Yathic design: purple gradient background, logo, tagline, CTA, info box, footer
+ * Templates follow Stewardex design: purple gradient background, logo, tagline, CTA, info box, footer
  */
 
 import nodemailer from 'nodemailer';
 import { logError, logInfo } from '../utils/logger.js';
 
-const APP_NAME = process.env.APP_NAME || 'Yathic';
+const APP_NAME = process.env.APP_NAME || 'Stewardex';
 const LOGO_URL = process.env.logo || process.env.LOGO_URL || '';
-const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@yathic.com';
+const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@stewardex.com';
 
 const GRADIENT = 'linear-gradient(103.82deg, #132E5E 6.74%, #9A78EC 76.18%)';
 const BODY_GRADIENT = 'linear-gradient(180deg, #FAFAFC 0%, #F5F3FA 40%, #EDE9F7 100%)';
@@ -582,6 +582,37 @@ class EmailService {
       infoBoxLines: ['You can view all feedback in the approval trail.', 'Edit the policy document if needed, then resubmit.']
     });
 
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
+   * Send external training invite (no login required).
+   * @param {Object} params
+   * @param {string} params.to
+   * @param {string} params.recipientName
+   * @param {string} params.trainingTitle
+   * @param {string} params.trainingLink
+   */
+  async sendExternalTrainingInvite({ to, recipientName, trainingTitle, trainingLink }) {
+    const subject = `Training assigned: ${trainingTitle}`;
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+        Hi ${recipientName || 'there'},
+      </p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+        You have been invited to complete the training <strong>${trainingTitle}</strong>.
+      </p>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+        Use the button below to open your training link. No portal login is required.
+      </p>
+    `;
+    const html = buildEmailTemplate({
+      heading: 'Training Assigned',
+      bodyHtml,
+      buttonText: 'Start Training',
+      buttonLink: trainingLink,
+      infoBoxLines: ['This link is unique to you. Please do not share it.', 'Your progress and completion will be recorded for compliance reporting.']
+    });
     return this.sendEmail({ to, subject, html });
   }
 }

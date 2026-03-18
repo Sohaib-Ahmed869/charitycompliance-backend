@@ -69,6 +69,10 @@ const approvalStepSchema = new mongoose.Schema({
   },
   user_agent: {
     type: String
+  },
+  /** Optional e‑signature captured for this approval step (base64 data URL) */
+  signature_data: {
+    type: String
   }
 }, { _id: true });
 
@@ -88,6 +92,11 @@ const approvalRequestSchema = new mongoose.Schema({
       'expense',
       'purchase',
       'grant',
+      'donor',
+      'donation',
+      'donation_agreement',
+      'donation_milestone',
+      'social_media_campaign',
       'contract',
       'leave',
       'hr',
@@ -118,7 +127,26 @@ const approvalRequestSchema = new mongoose.Schema({
   entity_type: {
     type: String,
     required: true,
-    enum: ['expense', 'purchase', 'policy', 'document', 'budget', 'risk', 'grant', 'partner', 'funding_agreement', 'project', 'authority_transfer', 'complaint', 'other']
+    enum: [
+      'expense',
+      'purchase',
+      'policy',
+      'document',
+      'budget',
+      'risk',
+      'grant',
+      'donor',
+      'donation',
+      'donation_agreement',
+      'donation_milestone',
+      'social_media_campaign',
+      'partner',
+      'funding_agreement',
+      'project',
+      'authority_transfer',
+      'complaint',
+      'other'
+    ]
   },
   amount: {
     type: Number,

@@ -45,7 +45,7 @@ router.post(
       .withMessage('Event date must be a valid ISO 8601 date'),
     body('type')
       .optional()
-      .isIn(['policy', 'training', 'grant', 'funding', 'compliance', 'meeting', 'custom'])
+      .isIn(['policy', 'training', 'grant', 'funding', 'compliance', 'meeting', 'task', 'appointment', 'custom'])
       .withMessage('Invalid event type'),
     body('description')
       .optional()
@@ -84,7 +84,7 @@ router.put(
       .withMessage('Event date must be a valid ISO 8601 date'),
     body('type')
       .optional()
-      .isIn(['policy', 'training', 'grant', 'funding', 'compliance', 'meeting', 'custom'])
+      .isIn(['policy', 'training', 'grant', 'funding', 'compliance', 'meeting', 'task', 'appointment', 'custom'])
       .withMessage('Invalid event type'),
     body('description')
       .optional()

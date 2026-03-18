@@ -136,7 +136,8 @@ const organizationSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
-  logo_path: {
+  // Logo: we store a data URL (base64) in logo_url so it works without external storage
+  logo_url: {
     type: String
   },
   timezone: {

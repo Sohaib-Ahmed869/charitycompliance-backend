@@ -13,8 +13,30 @@ export class ApprovalMatrixRepository {
       tenantDb.model('ApprovalMatrix', approvalMatrixSchema);
   }
 
-  async findByOrgId(orgId) {
-    return await this.ApprovalMatrix.find({ org_id: orgId, is_active: true });
+  async findByOrgId(orgId, options = {}) {
+    const { includeInactive = false } = options;
+    const query = { org_id: orgId };
+    if (!includeInactive) query.is_active = true;
+    return await this.ApprovalMatrix.find(query);
+  }
+
+  /**
+   * Matrices that are currently effective and not revoked/inactive.
+   * A matrix is effective when:
+   * - effective_from is null OR effective_from <= asOf
+   * - effective_to is null OR effective_to >= asOf
+   */
+  async findEffectiveByOrgId(orgId, asOf = new Date()) {
+    const d = asOf instanceof Date ? asOf : new Date(asOf);
+    return await this.ApprovalMatrix.find({
+      org_id: orgId,
+      is_active: true,
+      revoked_at: null,
+      $and: [
+        { $or: [{ effective_from: null }, { effective_from: { $lte: d } }] },
+        { $or: [{ effective_to: null }, { effective_to: { $gte: d } }] }
+      ]
+    });
   }
 
   async findDefault(orgId) {

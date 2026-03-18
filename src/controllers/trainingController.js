@@ -16,6 +16,8 @@ import { validationResult } from 'express-validator';
 import { AppError } from '../middleware/errorHandler.js';
 import { uploadToS3, getFileUrl, getFileStream } from '../services/s3Service.js';
 import { decryptBoardMemberFields } from '../utils/decryptBoardMember.js';
+import { ExternalTrainingEnrollmentRepository } from '../repositories/externalTrainingEnrollmentRepository.js';
+import emailService from '../services/emailService.js';
 
 const getOrgId = (req) => req.orgId;
 
@@ -37,6 +39,16 @@ const getTenantAndRepos = async (req) => {
   const departmentRepo = new DepartmentRepository(tenantDb);
   const positionRepo = new PositionRepository(tenantDb);
   return { orgId, org, tenantDb, trainingRepo, boardMemberRepo, departmentRepo, positionRepo };
+};
+
+const getTenantByOrgKey = async (orgKey) => {
+  const tenantDb = await getTenantConnection(orgKey);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+  const trainingRepo = new TrainingRepository(tenantDb);
+  const externalRepo = new ExternalTrainingEnrollmentRepository(tenantDb);
+  return { tenantDb, org, trainingRepo, externalRepo };
 };
 
 // --- Upload resource file (from PC) ---
@@ -179,7 +191,7 @@ export const createProgram = asyncHandler(async (req, res) => {
       error: { code: 'VALIDATION_ERROR', message: 'Validation failed', details: errors.array() }
     });
   }
-  const { trainingRepo, org } = await getTenantAndRepos(req);
+  const { trainingRepo, org, tenantDb } = await getTenantAndRepos(req);
   const {
     title,
     category,
@@ -190,7 +202,8 @@ export const createProgram = asyncHandler(async (req, res) => {
     position_ids,
     track_completion_status,
     record_completion_dates,
-    store_evidence
+    store_evidence,
+    external_invitees
   } = req.body;
   const program = await trainingRepo.createProgram({
     org_id: org._id,
@@ -206,11 +219,44 @@ export const createProgram = asyncHandler(async (req, res) => {
     record_completion_dates: record_completion_dates !== false,
     store_evidence: !!store_evidence
   });
-  res.status(201).json({ success: true, data: program });
+
+  // Optional: create external enrollments + email invite links
+  const invitees = Array.isArray(external_invitees) ? external_invitees : [];
+  let externalInviteLinks = [];
+  if (invitees.length > 0) {
+    const externalRepo = new ExternalTrainingEnrollmentRepository(tenantDb);
+    const invitedBy = req.user?.userId || req.userId || null;
+    const created = await externalRepo.upsertMany({
+      orgKey: req.orgId,
+      orgObjectId: org._id,
+      programId: program._id,
+      invitees,
+      invitedByUserId: invitedBy
+    });
+
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    externalInviteLinks = created.map((enr) => ({
+      email: enr.email,
+      link: `${baseUrl}/public/training/${req.orgId}.${enr.token}`
+    }));
+    await Promise.all(
+      created.map((enr) => {
+        const link = `${baseUrl}/public/training/${req.orgId}.${enr.token}`;
+        return emailService.sendExternalTrainingInvite({
+          to: enr.email,
+          recipientName: enr.name || enr.email,
+          trainingTitle: program.title || program.category || 'Training',
+          trainingLink: link
+        });
+      })
+    );
+  }
+
+  res.status(201).json({ success: true, data: program, meta: { external_invite_links: externalInviteLinks } });
 });
 
 export const updateProgram = asyncHandler(async (req, res) => {
-  const { trainingRepo, org } = await getTenantAndRepos(req);
+  const { trainingRepo, org, tenantDb } = await getTenantAndRepos(req);
   const { programId } = req.params;
   const program = await trainingRepo.findProgramById(programId);
   if (!program || program.org_id.toString() !== org._id.toString()) {
@@ -233,7 +279,270 @@ export const updateProgram = asyncHandler(async (req, res) => {
     if (req.body[k] !== undefined) updates[k] = req.body[k];
   });
   const updated = await trainingRepo.updateProgram(programId, updates);
-  res.json({ success: true, data: updated });
+
+  // Optional: create external enrollments + email invite links
+  const invitees = Array.isArray(req.body.external_invitees) ? req.body.external_invitees : [];
+  let externalInviteLinks = [];
+  if (invitees.length > 0) {
+    const externalRepo = new ExternalTrainingEnrollmentRepository(tenantDb);
+    const invitedBy = req.user?.userId || req.userId || null;
+    const created = await externalRepo.upsertMany({
+      orgKey: req.orgId,
+      orgObjectId: org._id,
+      programId,
+      invitees,
+      invitedByUserId: invitedBy
+    });
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    externalInviteLinks = created.map((enr) => ({
+      email: enr.email,
+      link: `${baseUrl}/public/training/${req.orgId}.${enr.token}`
+    }));
+    await Promise.all(
+      created.map((enr) => {
+        const link = `${baseUrl}/public/training/${req.orgId}.${enr.token}`;
+        return emailService.sendExternalTrainingInvite({
+          to: enr.email,
+          recipientName: enr.name || enr.email,
+          trainingTitle: updated?.title || updated?.category || 'Training',
+          trainingLink: link
+        });
+      })
+    );
+  }
+
+  res.json({ success: true, data: updated, meta: { external_invite_links: externalInviteLinks } });
+});
+
+export const getExternalEnrollmentByToken = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+
+  // We don't know org yet; search across tenant DBs isn't possible.
+  // So: the token must embed orgKey prefix. We support both styles:
+  // - "<orgKey>.<token>" (recommended)
+  // - plain token (only works if orgKey is provided via x-org-id header)
+  let orgKey = null;
+  let pureToken = token;
+  if (token.includes('.')) {
+    const [prefix, rest] = token.split('.', 2);
+    orgKey = prefix;
+    pureToken = rest;
+  }
+  if (!orgKey) {
+    orgKey = req.headers['x-org-id'];
+  }
+  if (!orgKey) throw new AppError('org key missing for public training link', 400, 'ORG_KEY_REQUIRED');
+
+  const { org, trainingRepo, externalRepo } = await getTenantByOrgKey(orgKey);
+  const enrollment = await externalRepo.findByToken(pureToken);
+  if (!enrollment) throw new AppError('Invalid or expired training link', 404, 'NOT_FOUND');
+  if (String(enrollment.org_id) !== String(org._id)) throw new AppError('Invalid training link', 403, 'FORBIDDEN');
+
+  const program = await trainingRepo.findProgramById(enrollment.training_program_id);
+  if (!program) throw new AppError('Training program not found', 404, 'NOT_FOUND');
+  const modules = await trainingRepo.findModulesByProgram(program._id);
+  const modulesWithResources = await Promise.all(
+    modules.map(async (mod) => {
+      const resources = await trainingRepo.findResourcesByModule(mod._id);
+      return { ...mod, resources };
+    })
+  );
+
+  // ensure progress includes entries for all resources
+  const allResIds = new Set();
+  modulesWithResources.forEach((m) => (m.resources || []).forEach((r) => allResIds.add(String(r._id))));
+  const progress = Array.isArray(enrollment.progress) ? enrollment.progress : [];
+  const byRes = new Map(progress.map((p) => [String(p.resource_id), p]));
+  const merged = Array.from(allResIds).map((rid) => byRes.get(rid) || { resource_id: rid, status: 'not_started', video_seconds_watched: 0, pdf_percent_read: 0, completed_at: null });
+
+  await externalRepo.updateProgressByToken(pureToken, { last_accessed_at: new Date(), progress: merged });
+  const updatedEnrollment = await externalRepo.findByToken(pureToken);
+
+  res.json({
+    success: true,
+    data: {
+      enrollment: {
+        email: updatedEnrollment.email,
+        name: updatedEnrollment.name,
+        status: updatedEnrollment.status,
+        completed_at: updatedEnrollment.completed_at,
+        progress: updatedEnrollment.progress
+      },
+      program: { ...program, modules: modulesWithResources }
+    }
+  });
+});
+
+export const updateExternalEnrollmentProgress = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+  let orgKey = null;
+  let pureToken = token;
+  if (token.includes('.')) {
+    const [prefix, rest] = token.split('.', 2);
+    orgKey = prefix;
+    pureToken = rest;
+  }
+  if (!orgKey) orgKey = req.headers['x-org-id'];
+  if (!orgKey) throw new AppError('org key missing for public training link', 400, 'ORG_KEY_REQUIRED');
+
+  const { org, externalRepo } = await getTenantByOrgKey(orgKey);
+  const enrollment = await externalRepo.findByToken(pureToken);
+  if (!enrollment) throw new AppError('Invalid or expired training link', 404, 'NOT_FOUND');
+  if (String(enrollment.org_id) !== String(org._id)) throw new AppError('Invalid training link', 403, 'FORBIDDEN');
+
+  const { resource_id, status, video_seconds_watched, pdf_percent_read, time_spent_seconds_delta, signature_data } = req.body || {};
+  const progress = Array.isArray(enrollment.progress) ? enrollment.progress : [];
+  const next = progress.map((p) => ({ ...p }));
+  const idx = next.findIndex((p) => String(p.resource_id) === String(resource_id));
+  const existing = idx >= 0
+    ? next[idx]
+    : {
+        resource_id,
+        status: 'not_started',
+        video_seconds_watched: 0,
+        pdf_percent_read: 0,
+        time_spent_seconds: 0,
+        started_at: null,
+        last_activity_at: null,
+        signature_data: null,
+        completed_at: null
+      };
+  const alreadyCompleted = existing.status === 'completed' || existing.completed_at != null;
+
+  const now = new Date();
+  if (!existing.started_at && (status === 'in_progress' || status === 'completed' || (video_seconds_watched ?? 0) > 0 || (pdf_percent_read ?? 0) > 0 || (time_spent_seconds_delta ?? 0) > 0)) {
+    existing.started_at = now;
+  }
+  existing.last_activity_at = now;
+
+  if (typeof video_seconds_watched === 'number' && video_seconds_watched >= 0) existing.video_seconds_watched = video_seconds_watched;
+  if (typeof pdf_percent_read === 'number' && pdf_percent_read >= 0) existing.pdf_percent_read = Math.min(100, Math.max(0, pdf_percent_read));
+  if (typeof time_spent_seconds_delta === 'number' && time_spent_seconds_delta > 0) {
+    existing.time_spent_seconds = Math.max(0, Number(existing.time_spent_seconds || 0) + Math.min(3600, time_spent_seconds_delta));
+  }
+  if (typeof signature_data === 'string' && signature_data.startsWith('data:image/')) {
+    existing.signature_data = signature_data;
+  }
+  if (status === 'completed') {
+    existing.status = 'completed';
+    existing.completed_at = now;
+  } else if (status === 'in_progress' && !alreadyCompleted) {
+    existing.status = 'in_progress';
+  }
+  if (idx >= 0) next[idx] = existing;
+  else next.push(existing);
+
+  // derive enrollment status
+  const allCompleted = next.length > 0 && next.every((p) => p.status === 'completed' || p.completed_at != null);
+  const anyStarted = next.some((p) => p.status === 'in_progress' || p.status === 'completed' || p.completed_at != null);
+  const enrStatus = allCompleted ? 'completed' : anyStarted ? 'in_progress' : 'not_started';
+
+  const updated = await externalRepo.updateProgressByToken(pureToken, {
+    progress: next,
+    status: enrStatus,
+    last_accessed_at: now,
+    ...(enrollment.started_at == null && anyStarted ? { started_at: now } : {}),
+    ...(allCompleted ? { completed_at: now } : {})
+  });
+
+  res.json({ success: true, data: { status: updated.status, completed_at: updated.completed_at, progress: updated.progress } });
+});
+
+export const completeExternalEnrollment = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+  let orgKey = null;
+  let pureToken = token;
+  if (token.includes('.')) {
+    const [prefix, rest] = token.split('.', 2);
+    orgKey = prefix;
+    pureToken = rest;
+  }
+  if (!orgKey) orgKey = req.headers['x-org-id'];
+  if (!orgKey) throw new AppError('org key missing for public training link', 400, 'ORG_KEY_REQUIRED');
+
+  const { org, externalRepo } = await getTenantByOrgKey(orgKey);
+  const enrollment = await externalRepo.findByToken(pureToken);
+  if (!enrollment) throw new AppError('Invalid or expired training link', 404, 'NOT_FOUND');
+  if (String(enrollment.org_id) !== String(org._id)) throw new AppError('Invalid training link', 403, 'FORBIDDEN');
+
+  const updated = await externalRepo.updateProgressByToken(pureToken, {
+    status: 'completed',
+    completed_at: new Date(),
+    last_accessed_at: new Date()
+  });
+  res.json({ success: true, data: { status: updated.status, completed_at: updated.completed_at } });
+});
+
+export const getExternalEnrollmentResourceViewUrl = asyncHandler(async (req, res) => {
+  const { token, resourceId } = req.params;
+  let orgKey = null;
+  let pureToken = token;
+  if (token.includes('.')) {
+    const [prefix, rest] = token.split('.', 2);
+    orgKey = prefix;
+    pureToken = rest;
+  }
+  if (!orgKey) orgKey = req.headers['x-org-id'];
+  if (!orgKey) throw new AppError('org key missing for public training link', 400, 'ORG_KEY_REQUIRED');
+
+  const { org, trainingRepo, externalRepo } = await getTenantByOrgKey(orgKey);
+  const enrollment = await externalRepo.findByToken(pureToken);
+  if (!enrollment) throw new AppError('Invalid or expired training link', 404, 'NOT_FOUND');
+  if (String(enrollment.org_id) !== String(org._id)) throw new AppError('Invalid training link', 403, 'FORBIDDEN');
+
+  const resource = await trainingRepo.findResourceById(resourceId);
+  if (!resource) throw new AppError('Resource not found', 404, 'NOT_FOUND');
+  const mod = await trainingRepo.findModuleById(resource.module_id);
+  if (!mod) throw new AppError('Module not found', 404, 'NOT_FOUND');
+  if (String(mod.training_program_id) !== String(enrollment.training_program_id)) {
+    throw new AppError('Resource not part of this training', 403, 'FORBIDDEN');
+  }
+
+  if (resource.link_url) return res.json({ success: true, data: { url: resource.link_url } });
+  if (!resource.file_url) throw new AppError('Resource has no file or link', 404, 'NO_CONTENT');
+  const url = await getFileUrl(resource.file_url, 3600);
+  res.json({ success: true, data: { url } });
+});
+
+export const streamExternalEnrollmentResource = asyncHandler(async (req, res) => {
+  const { token, resourceId } = req.params;
+  let orgKey = null;
+  let pureToken = token;
+  if (token.includes('.')) {
+    const [prefix, rest] = token.split('.', 2);
+    orgKey = prefix;
+    pureToken = rest;
+  }
+  if (!orgKey) orgKey = req.headers['x-org-id'];
+  if (!orgKey) throw new AppError('org key missing for public training link', 400, 'ORG_KEY_REQUIRED');
+
+  const { org, trainingRepo, externalRepo } = await getTenantByOrgKey(orgKey);
+  const enrollment = await externalRepo.findByToken(pureToken);
+  if (!enrollment) throw new AppError('Invalid or expired training link', 404, 'NOT_FOUND');
+  if (String(enrollment.org_id) !== String(org._id)) throw new AppError('Invalid training link', 403, 'FORBIDDEN');
+
+  const resource = await trainingRepo.findResourceById(resourceId);
+  if (!resource) throw new AppError('Resource not found', 404, 'NOT_FOUND');
+  const mod = await trainingRepo.findModuleById(resource.module_id);
+  if (!mod) throw new AppError('Module not found', 404, 'NOT_FOUND');
+  if (String(mod.training_program_id) !== String(enrollment.training_program_id)) {
+    throw new AppError('Resource not part of this training', 403, 'FORBIDDEN');
+  }
+  const type = (resource.type || '').toLowerCase();
+  if (type !== 'pdf' && type !== 'video') throw new AppError('Resource is not streamable', 400, 'VALIDATION_ERROR');
+  if (!resource.file_url) throw new AppError('Resource has no file', 404, 'NO_CONTENT');
+
+  const rangeHeader = req.headers.range || null;
+  const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await getFileStream(resource.file_url, rangeHeader);
+  res.setHeader('Content-Type', ContentType || (type === 'pdf' ? 'application/pdf' : 'video/mp4'));
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Accept-Ranges', 'bytes');
+  if (IsPartial && ContentRange) {
+    res.status(206);
+    res.setHeader('Content-Range', ContentRange);
+  }
+  if (ContentLength) res.setHeader('Content-Length', ContentLength);
+  Body.pipe(res);
 });
 
 export const publishProgram = asyncHandler(async (req, res) => {
@@ -525,12 +834,50 @@ export const getRegisterList = asyncHandler(async (req, res) => {
       };
     })
   );
-  res.json({ success: true, data: result });
+
+  // External participants (token-based)
+  const externalRepo = new ExternalTrainingEnrollmentRepository(tenantDb);
+  const externalEnrollments = await externalRepo.listByOrg(org._id, { search });
+  const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const externalRows = await Promise.all(
+    externalEnrollments.map(async (enr) => {
+      const program = await trainingRepo.findProgramById(enr.training_program_id);
+      const programTitle = program?.title || program?.category || 'Training';
+      const lastActivity = enr.last_activity_at || enr.last_accessed_at || enr.updatedAt || enr.enrolled_at || null;
+      return {
+        _id: `external:${enr._id}`,
+        external_enrollment_id: enr._id,
+        name: enr.name || enr.email,
+        email: enr.email,
+        role: 'External participant',
+        category: 'External',
+        training: `${enr.status === 'completed' ? 1 : 0}/1`,
+        trainingCompleted: enr.status === 'completed' ? 1 : 0,
+        trainingTotal: 1,
+        lastActivity,
+        profile_picture_url: null,
+        wwcc_status: 'n/a',
+        police_check_status: 'n/a',
+        external: true,
+        program_title: programTitle,
+        program_id: enr.training_program_id,
+        public_link: `${baseUrl}/public/training/${req.orgId}.${enr.token}`
+      };
+    })
+  );
+
+  const combined = [...result, ...externalRows].sort((a, b) => {
+    const ad = a.lastActivity ? new Date(a.lastActivity).getTime() : 0;
+    const bd = b.lastActivity ? new Date(b.lastActivity).getTime() : 0;
+    return bd - ad;
+  });
+
+  res.json({ success: true, data: combined });
 });
 
 // --- Register metrics (summary cards) ---
 export const getRegisterMetrics = asyncHandler(async (req, res) => {
-  const { trainingRepo, boardMemberRepo, org } = await getTenantAndRepos(req);
+  const { trainingRepo, boardMemberRepo, org, tenantDb } = await getTenantAndRepos(req);
   const programs = await trainingRepo.findProgramsByOrg(org._id, { includeDraft: false });
   const programIds = programs.map((p) => p._id);
   let totalModules = 0;
@@ -565,6 +912,18 @@ export const getRegisterMetrics = asyncHandler(async (req, res) => {
       if (enr.status === 'completed') completeCount++;
     }
   }
+
+  // External enrollments
+  const externalRepo = new ExternalTrainingEnrollmentRepository(tenantDb);
+  const externals = await externalRepo.listByOrg(org._id, {});
+  // count unique people by email
+  const externalEmails = new Set(externals.map((e) => (e.email || '').toLowerCase()).filter(Boolean));
+  enrolledCount += externalEmails.size;
+  for (const enr of externals) {
+    if (enr.status === 'in_progress') inProgressCount++;
+    if (enr.status === 'completed') completeCount++;
+  }
+
   res.json({
     success: true,
     data: {

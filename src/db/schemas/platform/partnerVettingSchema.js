@@ -60,6 +60,12 @@ const partnerVettingSchema = new mongoose.Schema({
   vetting_checks: [
     {
       name: { type: String, trim: true },
+      check_type: {
+        type: String,
+        enum: ['standard', 'other'],
+        default: 'standard'
+      },
+      other_name: { type: String, trim: true },
       status: {
         type: String,
         enum: ['pending', 'completed', 'cleared'],
@@ -70,7 +76,14 @@ const partnerVettingSchema = new mongoose.Schema({
         enum: ['low', 'medium', 'high', ''],
         default: ''
       },
-      comments: { type: String, trim: true }
+      comments: { type: String, trim: true },
+      documents: [
+        {
+          file_path: { type: String },
+          file_name: { type: String },
+          uploaded_at: { type: Date, default: Date.now }
+        }
+      ]
     }
   ],
   documents: [

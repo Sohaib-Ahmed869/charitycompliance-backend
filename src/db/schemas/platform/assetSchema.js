@@ -58,6 +58,20 @@ const assetSchema = new mongoose.Schema({
     required: true,
     min: 0
   },
+  subscription_price: {
+    type: Number,
+    min: 0
+  },
+  subscription_currency: {
+    type: String,
+    trim: true,
+    default: 'AUD'
+  },
+  billing_frequency: {
+    type: String,
+    enum: ['one_off', 'monthly', 'quarterly', 'yearly', 'ad_hoc', ''],
+    default: ''
+  },
   purchase_date: {
     type: Date,
     required: true
@@ -88,6 +102,17 @@ const assetSchema = new mongoose.Schema({
   },
   notes: {
     type: String
+  },
+  // Encrypted credentials for this IT system / asset
+  credentials: {
+    algorithm: { type: String, default: 'aes-256-gcm' },
+    iv: { type: String },
+    auth_tag: { type: String },
+    cipher_text: { type: String },
+    // Optional metadata (e.g. last 4 chars of username) without secrets
+    meta: {
+      username_hint: { type: String, trim: true }
+    }
   },
   created_by: {
     type: mongoose.Schema.Types.ObjectId,
