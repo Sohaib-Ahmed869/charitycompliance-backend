@@ -939,6 +939,102 @@ export const getRegisterMetrics = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * Training completion activity heatmap (GitHub-like).
+ * Returns daily counts of completed resources within a date range (default: last 26 weeks).
+ *
+ * GET /platform/training/activity/heatmap?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
+ */
+export const getTrainingActivityHeatmap = asyncHandler(async (req, res) => {
+  const { trainingRepo, org, tenantDb } = await getTenantAndRepos(req);
+
+  const end = req.query.end_date ? new Date(String(req.query.end_date)) : new Date();
+  end.setHours(23, 59, 59, 999);
+  const start = req.query.start_date ? new Date(String(req.query.start_date)) : new Date(end);
+  if (!req.query.start_date) start.setDate(start.getDate() - (26 * 7 - 1));
+  start.setHours(0, 0, 0, 0);
+
+  // Internal completions (portal users)
+  const programs = await trainingRepo.findProgramsByOrg(org._id, { includeDraft: true });
+  const programIds = (programs || []).map((p) => p?._id).filter(Boolean);
+
+  const TrainingCompletion = tenantDb.models.TrainingCompletion;
+  const TrainingEnrollment = tenantDb.models.TrainingEnrollment;
+
+  let internalBuckets = [];
+  if (programIds.length > 0) {
+    internalBuckets = await TrainingCompletion.aggregate([
+      {
+        $match: {
+          status: 'completed',
+          completed_at: { $gte: start, $lte: end }
+        }
+      },
+      {
+        $lookup: {
+          from: TrainingEnrollment.collection.name,
+          localField: 'enrollment_id',
+          foreignField: '_id',
+          as: 'enr'
+        }
+      },
+      { $unwind: '$enr' },
+      { $match: { 'enr.training_program_id': { $in: programIds } } },
+      {
+        $group: {
+          _id: {
+            $dateToString: { format: '%Y-%m-%d', date: '$completed_at' }
+          },
+          count: { $sum: 1 }
+        }
+      },
+      { $project: { _id: 0, date: '$_id', count: 1 } }
+    ]);
+  }
+
+  // External completions (token-based)
+  const ExternalTrainingEnrollment =
+    tenantDb.models.ExternalTrainingEnrollment ||
+    tenantDb.model(
+      'ExternalTrainingEnrollment',
+      (await import('../db/schemas/platform/externalTrainingEnrollmentSchema.js')).default
+    );
+
+  const externalBuckets = await ExternalTrainingEnrollment.aggregate([
+    {
+      $match: {
+        org_id: org._id,
+        status: 'completed',
+        completed_at: { $gte: start, $lte: end }
+      }
+    },
+    {
+      $group: {
+        _id: {
+          $dateToString: { format: '%Y-%m-%d', date: '$completed_at' }
+        },
+        count: { $sum: 1 }
+      }
+    },
+    { $project: { _id: 0, date: '$_id', count: 1 } }
+  ]);
+
+  const map = new Map();
+  for (const b of [...(internalBuckets || []), ...(externalBuckets || [])]) {
+    const d = b?.date;
+    if (!d) continue;
+    map.set(d, (map.get(d) || 0) + (Number(b?.count || 0) || 0));
+  }
+
+  const data = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const iso = d.toISOString().slice(0, 10);
+    data.push({ date: iso, count: map.get(iso) || 0 });
+  }
+
+  res.json({ success: true, data });
+});
+
 // --- My training (current user's assigned courses; for members, not HR) ---
 export const getMyTraining = asyncHandler(async (req, res) => {
   const { trainingRepo, boardMemberRepo, org } = await getTenantAndRepos(req);

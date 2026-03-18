@@ -106,6 +106,17 @@ router.get(
   trainingController.getRegisterMetrics
 );
 
+// --- Training completion activity heatmap ---
+router.get(
+  '/activity/heatmap',
+  [
+    query('start_date').optional().isISO8601().withMessage('start_date must be an ISO date'),
+    query('end_date').optional().isISO8601().withMessage('end_date must be an ISO date')
+  ],
+  validate,
+  trainingController.getTrainingActivityHeatmap
+);
+
 router.get(
   '/register/list',
   [

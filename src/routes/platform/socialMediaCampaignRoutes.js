@@ -31,8 +31,19 @@ router.post(
   '/',
   [
     body('title').trim().notEmpty().withMessage('Campaign title is required'),
-    body('platform').trim().notEmpty().withMessage('Platform is required'),
+    body().custom((value, { req }) => {
+      const hasPlatforms = Array.isArray(req.body?.platforms) && req.body.platforms.length > 0;
+      const hasPlatform = !!String(req.body?.platform || '').trim();
+      if (!hasPlatforms && !hasPlatform) throw new Error('Platform is required');
+      return true;
+    }),
+    body('platform').optional().trim(),
+    body('platforms').optional().isArray(),
+    body('platforms.*').optional().isIn(['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'other']),
     body('post_url').optional().trim(),
+    body('post_urls').optional().isArray(),
+    body('post_urls.*.platform').optional().isIn(['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'other']),
+    body('post_urls.*.url').optional().trim(),
     body('estimated_budget').optional().isNumeric(),
     body('ad_spend_estimate').optional().isNumeric()
   ],
@@ -46,7 +57,12 @@ router.put(
     param('campaignId').isMongoId().withMessage('Invalid campaign ID'),
     body('title').optional().trim(),
     body('platform').optional().trim(),
+    body('platforms').optional().isArray(),
+    body('platforms.*').optional().isIn(['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'other']),
     body('post_url').optional().trim(),
+    body('post_urls').optional().isArray(),
+    body('post_urls.*.platform').optional().isIn(['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'other']),
+    body('post_urls.*.url').optional().trim(),
     body('objective').optional().trim(),
     body('estimated_budget').optional().isNumeric(),
     body('ad_spend_estimate').optional().isNumeric(),

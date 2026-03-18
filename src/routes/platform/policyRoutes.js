@@ -19,6 +19,11 @@ router.get(
 );
 
 router.get(
+  '/acknowledgement-stats',
+  policyController.getPolicyAcknowledgementStats
+);
+
+router.get(
   '/',
   [
     query('status').optional().isIn(['draft', 'active', 'under_review', 'expired', 'pending_review', 'resubmission_required']).withMessage('Invalid status'),
