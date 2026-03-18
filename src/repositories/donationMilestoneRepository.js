@@ -32,5 +32,13 @@ export class DonationMilestoneRepository {
       .sort({ due_date: 1 })
       .lean();
   }
+
+  async updateStatus(id, status, extra = {}) {
+    return this.DonationMilestone.findByIdAndUpdate(
+      id,
+      { status, ...extra },
+      { new: true }
+    ).lean();
+  }
 }
 

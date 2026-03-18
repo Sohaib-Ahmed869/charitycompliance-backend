@@ -1189,6 +1189,30 @@ export class ApprovalWorkflowService {
           approvalRequestId,
           entityId: request.entity_id
         });
+      } else if (request.entity_type === 'donation') {
+        const { DonationRepository } = await import('../repositories/donationRepository.js');
+        const donationRepo = new DonationRepository(tenantDb);
+        await donationRepo.updateStatus(request.entity_id, 'approved', { approved_at: new Date() });
+        logInfo('Donation status updated from approval', {
+          approvalRequestId,
+          entityId: request.entity_id
+        });
+      } else if (request.entity_type === 'donation_milestone') {
+        const { DonationMilestoneRepository } = await import('../repositories/donationMilestoneRepository.js');
+        const milestoneRepo = new DonationMilestoneRepository(tenantDb);
+        await milestoneRepo.updateStatus(request.entity_id, 'completed', { completed_at: new Date() });
+        logInfo('Donation milestone status updated from approval', {
+          approvalRequestId,
+          entityId: request.entity_id
+        });
+      } else if (request.entity_type === 'social_media_campaign') {
+        const { SocialMediaCampaignRepository } = await import('../repositories/socialMediaCampaignRepository.js');
+        const campaignRepo = new SocialMediaCampaignRepository(tenantDb);
+        await campaignRepo.updateStatus(request.entity_id, 'approved', { approved_at: new Date() });
+        logInfo('Social media campaign status updated from approval', {
+          approvalRequestId,
+          entityId: request.entity_id
+        });
       } else if (request.entity_type === 'funding_agreement') {
         const FundingAgreement = tenantDb.model('FundingAgreement');
         const fundingAgreement = await FundingAgreement.findByIdAndUpdate(
