@@ -107,10 +107,17 @@ router.post(
       .notEmpty()
       .withMessage('Position is required'),
     body('appointment_date')
-      .isISO8601()
-      .withMessage('Valid appointment date is required')
+      .if((value, { req }) => !req.body.is_volunteer)
+      .notEmpty()
+      .withMessage('Appointment date is required')
       .custom((value, { req }) => {
-        const appointment = new Date(value);
+        if (req.body.is_volunteer && !value) return true;
+        if (!value) return true;
+        const date = new Date(value);
+        if (isNaN(date.getTime())) {
+          throw new Error('Valid appointment date is required');
+        }
+        const appointment = date;
         const today = new Date();
         if (appointment > today) {
           throw new Error('Appointment date cannot be in the future');
@@ -124,11 +131,13 @@ router.post(
         return true;
       }),
     body('term_end_date')
-      .optional()
-      .isISO8601()
-      .withMessage('Valid term end date is required')
+      .if((value, { req }) => value)
       .custom((value, { req }) => {
-        const termEnd = new Date(value);
+        const date = new Date(value);
+        if (isNaN(date.getTime())) {
+          throw new Error('Valid term end date is required');
+        }
+        const termEnd = date;
         if (req.body.appointment_date) {
           const appointment = new Date(req.body.appointment_date);
           if (termEnd <= appointment) {
@@ -230,6 +239,30 @@ router.delete(
   [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
   validate,
   boardMemberController.deletePoliceCheck
+);
+
+// ── Contract upload / view / delete ──
+router.post(
+  '/:boardMemberId/contract',
+  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
+  validate,
+  uploadSingle,
+  handleUploadError,
+  boardMemberController.uploadContract
+);
+
+router.get(
+  '/:boardMemberId/contract/view',
+  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
+  validate,
+  boardMemberController.viewContract
+);
+
+router.delete(
+  '/:boardMemberId/contract',
+  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
+  validate,
+  boardMemberController.deleteContract
 );
 
 export default router;

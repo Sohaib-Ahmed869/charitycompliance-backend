@@ -48,11 +48,18 @@ const legalDocumentSchema = new mongoose.Schema({
   },
   category: {
     type: String,
-    enum: ['mou', 'sponsorship_agreement', 'contract', 'lease_agreement', 'grant_agreement', 'sla', 'other'],
+    enum: ['mou', 'sponsorship_agreement', 'contract', 'lease_agreement', 'grant_agreement', 'sla', 'ambassadors_insurance', 'other'],
     required: true,
     index: true
   },
+  category_other_text: {
+    type: String,
+    trim: true
+  },
   effective_date: {
+    type: Date
+  },
+  review_date: {
     type: Date
   },
   owner_id: {

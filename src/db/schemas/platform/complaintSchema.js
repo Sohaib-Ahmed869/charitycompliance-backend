@@ -253,6 +253,15 @@ const complaintSchema = new mongoose.Schema(
       type: complaintBoardSignoffSchema,
       default: () => ({}),
     },
+    volunteer_submission: {
+      source: { type: String, enum: ['volunteer_link'], default: null },
+      board_member_id: { type: mongoose.Schema.Types.ObjectId, ref: 'BoardMember', default: null },
+      name: { type: String, trim: true, default: null },
+      email: { type: String, trim: true, lowercase: true, default: null },
+      action_token: { type: String, default: null },
+      action_type: { type: String, enum: ['complaint', 'risk', 'coi'], default: null },
+      submitted_at: { type: Date, default: null },
+    },
     created_at: {
       type: Date,
       default: Date.now,

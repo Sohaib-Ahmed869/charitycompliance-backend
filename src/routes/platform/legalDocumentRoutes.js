@@ -21,9 +21,11 @@ router.post(
   handleUploadError,
   [
     body('document_name').notEmpty().withMessage('Document name is required').trim(),
-    body('category').notEmpty().withMessage('Category is required').isIn(['mou', 'sponsorship_agreement', 'contract', 'lease_agreement', 'grant_agreement', 'sla', 'other'])
+    body('category').notEmpty().withMessage('Category is required').isIn(['mou', 'sponsorship_agreement', 'contract', 'lease_agreement', 'grant_agreement', 'sla', 'ambassadors_insurance', 'other'])
       .withMessage('Invalid category type'),
+    body('category_other_text').optional({ values: 'falsy' }).trim(),
     body('effective_date').optional({ values: 'falsy' }).isISO8601().withMessage('Invalid date format'),
+    body('review_date').optional({ values: 'falsy' }).isISO8601().withMessage('Invalid date format'),
     body('owner_id').optional({ values: 'falsy' }).isMongoId().withMessage('Invalid owner ID')
   ],
   validate,
@@ -34,7 +36,7 @@ router.get(
   '/',
   [
     query('status').optional().isIn(['active', 'expired', 'archived']),
-    query('category').optional().isIn(['mou', 'sponsorship_agreement', 'contract', 'lease_agreement', 'grant_agreement', 'sla', 'other']),
+    query('category').optional().isIn(['mou', 'sponsorship_agreement', 'contract', 'lease_agreement', 'grant_agreement', 'sla', 'ambassadors_insurance', 'other']),
     query('search').optional().trim()
   ],
   validate,
@@ -55,9 +57,11 @@ router.put(
   [
     param('id').isMongoId().withMessage('Invalid document ID'),
     body('document_name').optional().trim(),
-    body('category').optional({ values: 'falsy' }).isIn(['mou', 'sponsorship_agreement', 'contract', 'lease_agreement', 'grant_agreement', 'sla', 'other']),
+    body('category').optional({ values: 'falsy' }).isIn(['mou', 'sponsorship_agreement', 'contract', 'lease_agreement', 'grant_agreement', 'sla', 'ambassadors_insurance', 'other']),
+    body('category_other_text').optional({ values: 'falsy' }).trim(),
     body('status').optional({ values: 'falsy' }).isIn(['active', 'expired', 'archived']),
     body('effective_date').optional({ values: 'falsy' }).isISO8601(),
+    body('review_date').optional({ values: 'falsy' }).isISO8601(),
     body('owner_id').optional({ values: 'falsy' }).isMongoId()
   ],
   validate,

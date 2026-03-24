@@ -51,6 +51,30 @@ const getTenantByOrgKey = async (orgKey) => {
   return { tenantDb, org, trainingRepo, externalRepo };
 };
 
+async function notifyVolunteersForProgram({ boardMemberRepo, orgIdObj, program }) {
+  try {
+    const allPeople = await boardMemberRepo.findByOrgId(orgIdObj, false);
+    const targetPositionIds = new Set((program?.position_ids || []).map((id) => String(id)));
+    const recipients = (allPeople || []).filter((bm) => {
+      if (!bm?.is_volunteer || !bm?.email) return false;
+      if (targetPositionIds.size === 0) return false;
+      const personPositionId = bm?.position_id?._id ? String(bm.position_id._id) : String(bm?.position_id || '');
+      return targetPositionIds.has(personPositionId);
+    });
+    await Promise.all(
+      recipients.map((v) =>
+        emailService.sendVolunteerTrainingNotification({
+          to: v.email,
+          recipientName: `${v.given_names || ''} ${v.family_name || ''}`.trim() || 'Volunteer',
+          trainingTitle: program.title || program.category || 'Training',
+        })
+      )
+    );
+  } catch {
+    // non-blocking
+  }
+}
+
 // --- Upload resource file (from PC) ---
 export const uploadResourceFile = asyncHandler(async (req, res) => {
   if (!req.file) {
@@ -191,7 +215,7 @@ export const createProgram = asyncHandler(async (req, res) => {
       error: { code: 'VALIDATION_ERROR', message: 'Validation failed', details: errors.array() }
     });
   }
-  const { trainingRepo, org, tenantDb } = await getTenantAndRepos(req);
+  const { trainingRepo, org, tenantDb, boardMemberRepo } = await getTenantAndRepos(req);
   const {
     title,
     category,
@@ -252,11 +276,13 @@ export const createProgram = asyncHandler(async (req, res) => {
     );
   }
 
+  notifyVolunteersForProgram({ boardMemberRepo, orgIdObj: org._id, program }).catch(() => {});
+
   res.status(201).json({ success: true, data: program, meta: { external_invite_links: externalInviteLinks } });
 });
 
 export const updateProgram = asyncHandler(async (req, res) => {
-  const { trainingRepo, org, tenantDb } = await getTenantAndRepos(req);
+  const { trainingRepo, org, tenantDb, boardMemberRepo } = await getTenantAndRepos(req);
   const { programId } = req.params;
   const program = await trainingRepo.findProgramById(programId);
   if (!program || program.org_id.toString() !== org._id.toString()) {
@@ -310,6 +336,8 @@ export const updateProgram = asyncHandler(async (req, res) => {
       })
     );
   }
+
+  notifyVolunteersForProgram({ boardMemberRepo, orgIdObj: org._id, program: updated }).catch(() => {});
 
   res.json({ success: true, data: updated, meta: { external_invite_links: externalInviteLinks } });
 });
@@ -844,13 +872,26 @@ export const getRegisterList = asyncHandler(async (req, res) => {
       const program = await trainingRepo.findProgramById(enr.training_program_id);
       const programTitle = program?.title || program?.category || 'Training';
       const lastActivity = enr.last_activity_at || enr.last_accessed_at || enr.updatedAt || enr.enrolled_at || null;
+      const recipientType = String(enr?.metadata?.recipient_type || '').toLowerCase();
+      const roleLabel = recipientType === 'donor'
+        ? 'Donor'
+        : recipientType === 'volunteer'
+          ? 'Volunteer'
+          : recipientType === 'visitor'
+            ? 'Visitor'
+            : 'External participant';
+      const categoryLabel = recipientType === 'donor'
+        ? 'Donor'
+        : recipientType === 'volunteer'
+          ? 'Volunteer'
+          : 'External';
       return {
         _id: `external:${enr._id}`,
         external_enrollment_id: enr._id,
         name: enr.name || enr.email,
         email: enr.email,
-        role: 'External participant',
-        category: 'External',
+        role: roleLabel,
+        category: categoryLabel,
         training: `${enr.status === 'completed' ? 1 : 0}/1`,
         trainingCompleted: enr.status === 'completed' ? 1 : 0,
         trainingTotal: 1,
@@ -861,7 +902,10 @@ export const getRegisterList = asyncHandler(async (req, res) => {
         external: true,
         program_title: programTitle,
         program_id: enr.training_program_id,
-        public_link: `${baseUrl}/public/training/${req.orgId}.${enr.token}`
+        public_link: `${baseUrl}/public/training/${req.orgId}.${enr.token}`,
+        recipient_type: recipientType || null,
+        board_member_id: enr?.metadata?.board_member_id || null,
+        donor_id: enr?.metadata?.donor_id || null
       };
     })
   );
@@ -1560,7 +1604,7 @@ export const getPersonTrainingRecord = asyncHandler(async (req, res) => {
 
 // --- Assign training to people (create enrollments for a program for selected board members) ---
 export const assignProgramToPeople = asyncHandler(async (req, res) => {
-  const { trainingRepo, org } = await getTenantAndRepos(req);
+  const { trainingRepo, boardMemberRepo, org } = await getTenantAndRepos(req);
   const { programId } = req.params;
   const { board_member_ids } = req.body; // array of board member ids
   const program = await trainingRepo.findProgramById(programId);
@@ -1580,6 +1624,31 @@ export const assignProgramToPeople = asyncHandler(async (req, res) => {
       await trainingRepo.upsertCompletion(enrollment._id, resId, {});
     }
   }
+
+  // Notify assigned volunteers
+  try {
+    const volunteers = await Promise.all(
+      board_member_ids.map(async (bmId) => {
+        const person = await boardMemberRepo.findById(bmId);
+        return person;
+      })
+    );
+    const volunteerRecipients = volunteers.filter(
+      (v) => v && v.is_volunteer === true && v.email
+    );
+    await Promise.all(
+      volunteerRecipients.map((v) =>
+        emailService.sendVolunteerTrainingNotification({
+          to: v.email,
+          recipientName: `${v.given_names || ''} ${v.family_name || ''}`.trim() || 'Volunteer',
+          trainingTitle: program.title || program.category || 'Training',
+        })
+      )
+    );
+  } catch {
+    // Do not block assignment if notification fails
+  }
+
   const enrollments = await trainingRepo.findEnrollmentsByProgram(programId);
   res.json({ success: true, data: enrollments });
 });

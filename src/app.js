@@ -110,6 +110,7 @@ import donationRoutes from './routes/platform/donationRoutes.js';
 import donationMilestoneRoutes from './routes/platform/donationMilestoneRoutes.js';
 import socialMediaCampaignRoutes from './routes/platform/socialMediaCampaignRoutes.js';
 import disciplinaryRoutes from './routes/platform/disciplinaryRoutes.js';
+import volunteerRoutes from './routes/platform/volunteerRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -147,6 +148,7 @@ app.use('/api/v1/platform/bcp', bcpRoutes);
 app.use('/api/v1/platform/legal-documents', legalDocumentRoutes);
 app.use('/api/v1/platform/dashboard', dashboardRoutes);
 app.use('/api/v1/platform/chatbot', chatbotRoutes);
+app.use('/api/v1/platform/volunteers', volunteerRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

@@ -219,17 +219,53 @@ export const updateAssetCredentials = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user.userId;
   const { assetId } = req.params;
-  const { username, password, api_key, notes } = req.body || {};
+  const {
+    access_mode,
+    credential_type,
+    username,
+    password,
+    api_key,
+    notes,
+    authorized_person_name,
+    authorized_person_role,
+    authorized_person_email,
+    authorized_person_phone,
+    authorized_person_notes,
+    bank_name,
+    account_name,
+    account_number_last4,
+    bsb_last3,
+    portal_url,
+    portal_customer_id
+  } = req.body || {};
 
   const assetService = new AssetService(orgId);
   const asset = await assetService.getAssetById(assetId);
 
+  const accessMode = access_mode === 'authorized_person_only' ? 'authorized_person_only' : 'direct_credentials';
+  const credentialType = ['bank_credentials', 'banking_portal'].includes(credential_type)
+    ? credential_type
+    : 'general';
+
   const payload = encryptSecret(
     JSON.stringify({
+      access_mode: accessMode,
+      credential_type: credentialType,
       username: username || '',
       password: password || '',
       api_key: api_key || '',
-      notes: notes || ''
+      notes: notes || '',
+      authorized_person_name: authorized_person_name || '',
+      authorized_person_role: authorized_person_role || '',
+      authorized_person_email: authorized_person_email || '',
+      authorized_person_phone: authorized_person_phone || '',
+      authorized_person_notes: authorized_person_notes || '',
+      bank_name: bank_name || '',
+      account_name: account_name || '',
+      account_number_last4: account_number_last4 || '',
+      bsb_last3: bsb_last3 || '',
+      portal_url: portal_url || '',
+      portal_customer_id: portal_customer_id || ''
     })
   );
 
@@ -259,12 +295,30 @@ export const getAssetCredentials = asyncHandler(async (req, res) => {
   const asset = await assetService.getAssetById(assetId);
 
   const decoded = decryptSecret(asset.credentials || {});
-  let parsed = { username: '', password: '', api_key: '', notes: '' };
+  let parsed = {
+    access_mode: 'direct_credentials',
+    credential_type: 'general',
+    username: '',
+    password: '',
+    api_key: '',
+    notes: '',
+    authorized_person_name: '',
+    authorized_person_role: '',
+    authorized_person_email: '',
+    authorized_person_phone: '',
+    authorized_person_notes: '',
+    bank_name: '',
+    account_name: '',
+    account_number_last4: '',
+    bsb_last3: '',
+    portal_url: '',
+    portal_customer_id: ''
+  };
   if (decoded) {
     try {
-      parsed = JSON.parse(decoded);
+      parsed = { ...parsed, ...(JSON.parse(decoded) || {}) };
     } catch {
-      parsed = { username: '', password: '', api_key: '', notes: '' };
+      // keep safe defaults for backward compatibility
     }
   }
 

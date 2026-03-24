@@ -15,6 +15,19 @@ import policySchema from '../db/schemas/platform/policySchema.js';
 import expenseSchema from '../db/schemas/platform/expenseSchema.js';
 import complaintSchema from '../db/schemas/platform/complaintSchema.js';
 import riskSchema from '../db/schemas/platform/riskSchema.js';
+import documentSchema from '../db/schemas/platform/documentSchema.js';
+import legalDocumentSchema from '../db/schemas/platform/legalDocumentSchema.js';
+import boardMemberSchema from '../db/schemas/platform/boardMemberSchema.js';
+import approvalMatrixSchema from '../db/schemas/platform/approvalMatrixSchema.js';
+import policyAcknowledgementSchema from '../db/schemas/platform/policyAcknowledgementSchema.js';
+import trainingCompletionSchema from '../db/schemas/platform/trainingCompletionSchema.js';
+import trainingEnrollmentSchema from '../db/schemas/platform/trainingEnrollmentSchema.js';
+import trainingProgramSchema from '../db/schemas/platform/trainingProgramSchema.js';
+import donorSchema from '../db/schemas/platform/donorSchema.js';
+import fundingAgreementSchema from '../db/schemas/platform/fundingAgreementSchema.js';
+import projectRegisterSchema from '../db/schemas/platform/projectRegisterSchema.js';
+import assetSchema from '../db/schemas/platform/assetSchema.js';
+import supportTicketSchema from '../db/schemas/platform/supportTicketSchema.js';
 
 const toName = (user) => {
   if (!user) return '—';
@@ -45,12 +58,23 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const tenantDb = req.tenantDb || await getTenantConnection(orgId);
 
-  // Admin-only: verify org owner
+  // Access model:
+  // - Admin (org owner): can view all events or filter by selected user
+  // - Non-admin: can only view their own actions
   const userRepo = new UserRepository(tenantDb);
   const user = await userRepo.findById(req.user?.userId);
-  if (!user?.is_org_owner) {
-    throw new AppError('Only admins can access audit trail', 403, 'ADMIN_ONLY');
-  }
+  const isAdmin = !!user?.is_org_owner;
+  const requestedUserId = String(req.query?.userId || '').trim();
+  const actorFilterUserId = isAdmin
+    ? (requestedUserId || null)
+    : String(req.user?.userId || '');
+  const startDate = req.query?.startDate ? new Date(req.query.startDate) : null;
+  const endDate = req.query?.endDate ? new Date(req.query.endDate) : null;
+  const hasValidStart = startDate && !Number.isNaN(startDate.getTime());
+  const hasValidEnd = endDate && !Number.isNaN(endDate.getTime());
+  const moduleFilter = String(req.query?.module || '').trim().toLowerCase();
+  // Inclusive end-date for day-based filters
+  if (hasValidEnd) endDate.setHours(23, 59, 59, 999);
 
   const orgRepo = new OrganizationRepository(tenantDb);
   const org = await orgRepo.findOne();
@@ -63,6 +87,19 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
   const Expense = tenantDb.models.Expense || tenantDb.model('Expense', expenseSchema);
   const Complaint = tenantDb.models.Complaint || tenantDb.model('Complaint', complaintSchema);
   const Risk = tenantDb.models.Risk || tenantDb.model('Risk', riskSchema);
+  const Document = tenantDb.models.Document || tenantDb.model('Document', documentSchema);
+  const LegalDocument = tenantDb.models.LegalDocument || tenantDb.model('LegalDocument', legalDocumentSchema);
+  const BoardMember = tenantDb.models.BoardMember || tenantDb.model('BoardMember', boardMemberSchema);
+  const ApprovalMatrix = tenantDb.models.ApprovalMatrix || tenantDb.model('ApprovalMatrix', approvalMatrixSchema);
+  const PolicyAcknowledgement = tenantDb.models.PolicyAcknowledgement || tenantDb.model('PolicyAcknowledgement', policyAcknowledgementSchema);
+  const TrainingCompletion = tenantDb.models.TrainingCompletion || tenantDb.model('TrainingCompletion', trainingCompletionSchema);
+  const TrainingEnrollment = tenantDb.models.TrainingEnrollment || tenantDb.model('TrainingEnrollment', trainingEnrollmentSchema);
+  const TrainingProgram = tenantDb.models.TrainingProgram || tenantDb.model('TrainingProgram', trainingProgramSchema);
+  const Donor = tenantDb.models.Donor || tenantDb.model('Donor', donorSchema);
+  const FundingAgreement = tenantDb.models.FundingAgreement || tenantDb.model('FundingAgreement', fundingAgreementSchema);
+  const ProjectRegister = tenantDb.models.ProjectRegister || tenantDb.model('ProjectRegister', projectRegisterSchema);
+  const Asset = tenantDb.models.Asset || tenantDb.model('Asset', assetSchema);
+  const SupportTicket = tenantDb.models.SupportTicket || tenantDb.model('SupportTicket', supportTicketSchema);
 
   const approvalRepo = new ApprovalRequestRepository(tenantDb);
   // Use model directly to populate rejection reviews
@@ -511,13 +548,523 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
     }
   });
 
+  // Additional immutable-style operational events for weekly compliance reporting.
+  const [governingDocs, legalDocs, boardMembers, workflows, standaloneRisks, policyAcknowledgements, completedTrainingCompletions, allPolicies, allTrainings, allExpenses, allDonors, allFundingAgreements, allProjects, allAssets, allSupportTickets] = await Promise.all([
+    Document.find({ org_id: org._id, category: 'governing_document' })
+      .populate('uploaded_by', 'first_name last_name email is_org_owner role position')
+      .select('title document_type status createdAt updatedAt uploaded_by')
+      .lean(),
+    LegalDocument.find({ org_id: orgId })
+      .populate('created_by', 'first_name last_name email is_org_owner role position')
+      .select('document_name category category_other_text status createdAt updatedAt created_by')
+      .lean(),
+    BoardMember.find({ org_id: org._id })
+      .populate('user_id', 'first_name last_name email is_org_owner role position')
+      .select('given_names family_name status is_active createdAt updatedAt user_id')
+      .lean(),
+    ApprovalMatrix.find({ org_id: org._id })
+      .populate('revoked_by', 'first_name last_name email is_org_owner role position')
+      .select('name workflow_category is_active revoked_at createdAt updatedAt revoked_by')
+      .lean(),
+    Risk.find({ org_id: org._id })
+      .populate('submitted_by', 'first_name last_name email is_org_owner role position')
+      .select('title category status createdAt updatedAt submitted_by')
+      .lean(),
+    PolicyAcknowledgement.find({})
+      .select('policy_id user_id user_name user_title acknowledged_at')
+      .lean(),
+    TrainingCompletion.find({ status: 'completed' })
+      .select('enrollment_id completed_at createdAt updatedAt status')
+      .lean(),
+    Policy.find({ org_id: org._id })
+      .populate('uploaded_by', 'first_name last_name email is_org_owner role position')
+      .select('title category status createdAt updatedAt uploaded_by')
+      .lean(),
+    TrainingProgram.find({ org_id: org._id })
+      .select('title category status createdAt updatedAt')
+      .lean(),
+    Expense.find({ org_id: orgId })
+      .populate('submitted_by', 'first_name last_name email is_org_owner role position')
+      .select('expense_name description category amount status created_at updatedAt submitted_by')
+      .lean(),
+    Donor.find({ org_id: orgId })
+      .select('name donor_type size status createdAt updatedAt')
+      .lean(),
+    FundingAgreement.find({ org_id: org._id })
+      .select('agreement_title agreement_type total_amount status createdAt updatedAt')
+      .lean(),
+    ProjectRegister.find({ org_id: org._id })
+      .select('project_name agreement_title status phase warning createdAt updatedAt')
+      .lean(),
+    Asset.find({ org_id: orgId })
+      .populate('created_by', 'first_name last_name email is_org_owner role position')
+      .select('asset_name category type status created_at updatedAt created_by')
+      .lean(),
+    SupportTicket.find({ org_id: orgId })
+      .select('ticket_number summary category priority status created_at updatedAt reporter')
+      .lean()
+  ]);
+
+  const policyAcknowledgementPolicyIds = policyAcknowledgements
+    .map((item) => item.policy_id?.toString())
+    .filter(Boolean);
+  const trainingEnrollmentIds = completedTrainingCompletions
+    .map((item) => item.enrollment_id?.toString())
+    .filter(Boolean);
+
+  const [ackPolicies, trainingEnrollments] = await Promise.all([
+    policyAcknowledgementPolicyIds.length
+      ? Policy.find({ _id: { $in: policyAcknowledgementPolicyIds } }).select('title category').lean()
+      : Promise.resolve([]),
+    trainingEnrollmentIds.length
+      ? TrainingEnrollment.find({ _id: { $in: trainingEnrollmentIds } })
+          .populate('training_program_id', 'title category')
+          .populate('board_member_id', 'given_names family_name user_id')
+          .select('training_program_id board_member_id')
+          .lean()
+      : Promise.resolve([])
+  ]);
+
+  const ackPolicyMap = new Map(ackPolicies.map((item) => [item._id?.toString(), item]));
+  const enrollmentMap = new Map(trainingEnrollments.map((item) => [item._id?.toString(), item]));
+
+  governingDocs.forEach((doc) => {
+    const actorUser = doc.uploaded_by || null;
+    const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
+    events.push(normalizeEvent({
+      id: `governing-doc-created-${doc._id}`,
+      timestamp: doc.createdAt,
+      actor,
+      action: 'Governing document added',
+      module: 'governing_document',
+      request_type: 'governing_document',
+      request_id: doc._id?.toString(),
+      details: { title: doc.title || null, type: doc.document_type || null, status: doc.status || null },
+      source: 'document'
+    }));
+    if (doc.updatedAt && new Date(doc.updatedAt).getTime() - new Date(doc.createdAt).getTime() > 1000) {
+      events.push(normalizeEvent({
+        id: `governing-doc-updated-${doc._id}`,
+        timestamp: doc.updatedAt,
+        actor,
+        action: 'Governing document updated',
+        module: 'governing_document',
+        request_type: 'governing_document',
+        request_id: doc._id?.toString(),
+        details: { title: doc.title || null, type: doc.document_type || null, status: doc.status || null },
+        source: 'document'
+      }));
+    }
+  });
+
+  legalDocs.forEach((doc) => {
+    const actorUser = doc.created_by || null;
+    const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
+    const category = doc.category === 'other' ? (doc.category_other_text || 'Other') : doc.category;
+    events.push(normalizeEvent({
+      id: `legal-doc-created-${doc._id}`,
+      timestamp: doc.createdAt,
+      actor,
+      action: 'Legal document added',
+      module: 'legal_document',
+      request_type: 'legal_document',
+      request_id: doc._id?.toString(),
+      details: { title: doc.document_name || null, category: category || null, status: doc.status || null },
+      source: 'legal_document'
+    }));
+    if (doc.updatedAt && new Date(doc.updatedAt).getTime() - new Date(doc.createdAt).getTime() > 1000) {
+      events.push(normalizeEvent({
+        id: `legal-doc-updated-${doc._id}`,
+        timestamp: doc.updatedAt,
+        actor,
+        action: 'Legal document updated',
+        module: 'legal_document',
+        request_type: 'legal_document',
+        request_id: doc._id?.toString(),
+        details: { title: doc.document_name || null, category: category || null, status: doc.status || null },
+        source: 'legal_document'
+      }));
+    }
+  });
+
+  boardMembers.forEach((person) => {
+    const actorUser = person.user_id || null;
+    const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
+    const personName = [person.given_names, person.family_name].filter(Boolean).join(' ').trim() || 'Responsible person';
+    events.push(normalizeEvent({
+      id: `person-added-${person._id}`,
+      timestamp: person.createdAt,
+      actor,
+      action: 'Responsible person added',
+      module: 'responsible_people',
+      request_type: 'responsible_people',
+      request_id: person._id?.toString(),
+      details: { person_name: personName, status: person.status || null },
+      source: 'responsible_people'
+    }));
+    const removed = person.status === 'removed' || person.status === 'resigned' || person.is_active === false;
+    if (removed && person.updatedAt) {
+      events.push(normalizeEvent({
+        id: `person-removed-${person._id}`,
+        timestamp: person.updatedAt,
+        actor,
+        action: 'Responsible person removed',
+        module: 'responsible_people',
+        request_type: 'responsible_people',
+        request_id: person._id?.toString(),
+        details: { person_name: personName, status: person.status || null },
+        source: 'responsible_people'
+      }));
+    }
+  });
+
+  workflows.forEach((wf) => {
+    const actorUser = wf.revoked_by || null;
+    const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
+    events.push(normalizeEvent({
+      id: `workflow-created-${wf._id}`,
+      timestamp: wf.createdAt,
+      actor: actorUser ? actor : { id: null, name: 'System', role: null },
+      action: 'Workflow generated',
+      module: 'approval_workflow',
+      request_type: 'approval_workflow',
+      request_id: wf._id?.toString(),
+      details: { workflow_name: wf.name || null, category: wf.workflow_category || null, active: wf.is_active },
+      source: 'approval_workflow'
+    }));
+    if (wf.revoked_at) {
+      events.push(normalizeEvent({
+        id: `workflow-revoked-${wf._id}`,
+        timestamp: wf.revoked_at,
+        actor,
+        action: 'Workflow completed',
+        module: 'approval_workflow',
+        request_type: 'approval_workflow',
+        request_id: wf._id?.toString(),
+        details: { workflow_name: wf.name || null, category: wf.workflow_category || null },
+        source: 'approval_workflow'
+      }));
+    }
+  });
+
+  standaloneRisks.forEach((risk) => {
+    const actorUser = risk.submitted_by || null;
+    const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
+    events.push(normalizeEvent({
+      id: `risk-created-${risk._id}`,
+      timestamp: risk.createdAt,
+      actor,
+      action: 'Risk created',
+      module: 'risk',
+      request_type: 'risk',
+      request_id: risk._id?.toString(),
+      details: { title: risk.title || null, category: risk.category || null, status: risk.status || null },
+      source: 'risk'
+    }));
+  });
+
+  policyAcknowledgements.forEach((ack) => {
+    const policy = ackPolicyMap.get(ack.policy_id?.toString());
+    events.push(normalizeEvent({
+      id: `policy-ack-${ack._id}`,
+      timestamp: ack.acknowledged_at || ack.updatedAt || ack.createdAt,
+      actor: {
+        id: ack.user_id?.toString() || null,
+        name: ack.user_name || 'Policy reader',
+        role: ack.user_title || null
+      },
+      action: 'Policy acknowledged',
+      module: 'policy',
+      request_type: 'policy_acknowledgement',
+      request_id: ack._id?.toString(),
+      details: {
+        title: policy?.title || null,
+        category: policy?.category || null
+      },
+      source: 'policy_acknowledgement'
+    }));
+  });
+
+  completedTrainingCompletions.forEach((completion) => {
+    const enrollment = enrollmentMap.get(completion.enrollment_id?.toString());
+    const boardMember = enrollment?.board_member_id;
+    const actorName = boardMember
+      ? `${boardMember.given_names || ''} ${boardMember.family_name || ''}`.trim() || 'Training participant'
+      : 'Training participant';
+    events.push(normalizeEvent({
+      id: `training-completed-${completion._id}`,
+      timestamp: completion.completed_at || completion.updatedAt || completion.createdAt,
+      actor: {
+        id: boardMember?.user_id?.toString() || null,
+        name: actorName,
+        role: null
+      },
+      action: 'Training completed',
+      module: 'training',
+      request_type: 'training_completion',
+      request_id: completion._id?.toString(),
+      details: {
+        title: enrollment?.training_program_id?.title || null,
+        category: enrollment?.training_program_id?.category || null,
+        status: completion.status || null
+      },
+      source: 'training_completion'
+    }));
+  });
+
+  allPolicies.forEach((policy) => {
+    const actorUser = policy.uploaded_by || null;
+    const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
+    events.push(normalizeEvent({
+      id: `policy-created-${policy._id}`,
+      timestamp: policy.createdAt,
+      actor,
+      action: 'Policy added',
+      module: 'policy',
+      request_type: 'policy',
+      request_id: policy._id?.toString(),
+      details: { title: policy.title || null, category: policy.category || null, status: policy.status || null },
+      source: 'policy'
+    }));
+    if (policy.updatedAt && new Date(policy.updatedAt).getTime() - new Date(policy.createdAt).getTime() > 1000) {
+      events.push(normalizeEvent({
+        id: `policy-updated-${policy._id}`,
+        timestamp: policy.updatedAt,
+        actor,
+        action: 'Policy updated',
+        module: 'policy',
+        request_type: 'policy',
+        request_id: policy._id?.toString(),
+        details: { title: policy.title || null, category: policy.category || null, status: policy.status || null },
+        source: 'policy'
+      }));
+    }
+  });
+
+  allTrainings.forEach((training) => {
+    events.push(normalizeEvent({
+      id: `training-created-${training._id}`,
+      timestamp: training.createdAt,
+      actor: { id: null, name: 'System', role: null },
+      action: 'Training added',
+      module: 'training',
+      request_type: 'training',
+      request_id: training._id?.toString(),
+      details: { title: training.title || null, category: training.category || null, status: training.status || null },
+      source: 'training'
+    }));
+    if (training.updatedAt && new Date(training.updatedAt).getTime() - new Date(training.createdAt).getTime() > 1000) {
+      events.push(normalizeEvent({
+        id: `training-updated-${training._id}`,
+        timestamp: training.updatedAt,
+        actor: { id: null, name: 'System', role: null },
+        action: 'Training updated',
+        module: 'training',
+        request_type: 'training',
+        request_id: training._id?.toString(),
+        details: { title: training.title || null, category: training.category || null, status: training.status || null },
+        source: 'training'
+      }));
+    }
+  });
+
+  allExpenses.forEach((expense) => {
+    const actorUser = expense.submitted_by || null;
+    const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
+    events.push(normalizeEvent({
+      id: `expense-created-${expense._id}`,
+      timestamp: expense.created_at || expense.createdAt,
+      actor,
+      action: 'Expense added',
+      module: 'finance',
+      request_type: 'expense',
+      request_id: expense._id?.toString(),
+      details: {
+        title: expense.expense_name || expense.description || null,
+        category: expense.category || null,
+        amount: expense.amount ?? null,
+        status: expense.status || null
+      },
+      source: 'expense'
+    }));
+    if (expense.updatedAt && new Date(expense.updatedAt).getTime() - new Date(expense.created_at || expense.createdAt).getTime() > 1000) {
+      events.push(normalizeEvent({
+        id: `expense-updated-${expense._id}`,
+        timestamp: expense.updatedAt,
+        actor,
+        action: 'Expense updated',
+        module: 'finance',
+        request_type: 'expense',
+        request_id: expense._id?.toString(),
+        details: {
+          title: expense.expense_name || expense.description || null,
+          category: expense.category || null,
+          amount: expense.amount ?? null,
+          status: expense.status || null
+        },
+        source: 'expense'
+      }));
+    }
+  });
+
+  allDonors.forEach((donor) => {
+    events.push(normalizeEvent({
+      id: `donor-created-${donor._id}`,
+      timestamp: donor.createdAt,
+      actor: { id: null, name: 'System', role: null },
+      action: 'Donor added',
+      module: 'donor',
+      request_type: 'donor',
+      request_id: donor._id?.toString(),
+      details: { title: donor.name || null, type: donor.donor_type || null, status: donor.status || null, category: donor.size || null },
+      source: 'donor'
+    }));
+    if (donor.updatedAt && new Date(donor.updatedAt).getTime() - new Date(donor.createdAt).getTime() > 1000) {
+      events.push(normalizeEvent({
+        id: `donor-updated-${donor._id}`,
+        timestamp: donor.updatedAt,
+        actor: { id: null, name: 'System', role: null },
+        action: 'Donor updated',
+        module: 'donor',
+        request_type: 'donor',
+        request_id: donor._id?.toString(),
+        details: { title: donor.name || null, type: donor.donor_type || null, status: donor.status || null, category: donor.size || null },
+        source: 'donor'
+      }));
+    }
+  });
+
+  allFundingAgreements.forEach((agreement) => {
+    events.push(normalizeEvent({
+      id: `funding-created-${agreement._id}`,
+      timestamp: agreement.createdAt,
+      actor: { id: null, name: 'System', role: null },
+      action: 'Funding agreement added',
+      module: 'funding_agreement',
+      request_type: 'funding_agreement',
+      request_id: agreement._id?.toString(),
+      details: { title: agreement.agreement_title || null, type: agreement.agreement_type || null, amount: agreement.total_amount ?? null, status: agreement.status || null },
+      source: 'funding_agreement'
+    }));
+    if (agreement.updatedAt && new Date(agreement.updatedAt).getTime() - new Date(agreement.createdAt).getTime() > 1000) {
+      events.push(normalizeEvent({
+        id: `funding-updated-${agreement._id}`,
+        timestamp: agreement.updatedAt,
+        actor: { id: null, name: 'System', role: null },
+        action: 'Funding agreement updated',
+        module: 'funding_agreement',
+        request_type: 'funding_agreement',
+        request_id: agreement._id?.toString(),
+        details: { title: agreement.agreement_title || null, type: agreement.agreement_type || null, amount: agreement.total_amount ?? null, status: agreement.status || null },
+        source: 'funding_agreement'
+      }));
+    }
+  });
+
+  allProjects.forEach((project) => {
+    events.push(normalizeEvent({
+      id: `project-created-${project._id}`,
+      timestamp: project.createdAt,
+      actor: { id: null, name: 'System', role: null },
+      action: 'Project added',
+      module: 'project',
+      request_type: 'project',
+      request_id: project._id?.toString(),
+      details: { title: project.project_name || null, category: project.phase || null, status: project.status || null },
+      source: 'project'
+    }));
+    if (project.updatedAt && new Date(project.updatedAt).getTime() - new Date(project.createdAt).getTime() > 1000) {
+      events.push(normalizeEvent({
+        id: `project-updated-${project._id}`,
+        timestamp: project.updatedAt,
+        actor: { id: null, name: 'System', role: null },
+        action: 'Project updated',
+        module: 'project',
+        request_type: 'project',
+        request_id: project._id?.toString(),
+        details: { title: project.project_name || null, category: project.phase || null, status: project.status || null },
+        source: 'project'
+      }));
+    }
+  });
+
+  allAssets.forEach((asset) => {
+    const actorUser = asset.created_by || null;
+    const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
+    events.push(normalizeEvent({
+      id: `asset-created-${asset._id}`,
+      timestamp: asset.created_at || asset.createdAt,
+      actor,
+      action: 'Asset added',
+      module: 'asset',
+      request_type: 'asset',
+      request_id: asset._id?.toString(),
+      details: { title: asset.asset_name || null, category: asset.category || null, type: asset.type || null, status: asset.status || null },
+      source: 'asset'
+    }));
+    if (asset.updatedAt && new Date(asset.updatedAt).getTime() - new Date(asset.created_at || asset.createdAt).getTime() > 1000) {
+      events.push(normalizeEvent({
+        id: `asset-updated-${asset._id}`,
+        timestamp: asset.updatedAt,
+        actor,
+        action: 'Asset updated',
+        module: 'asset',
+        request_type: 'asset',
+        request_id: asset._id?.toString(),
+        details: { title: asset.asset_name || null, category: asset.category || null, type: asset.type || null, status: asset.status || null },
+        source: 'asset'
+      }));
+    }
+  });
+
+  allSupportTickets.forEach((ticket) => {
+    const actorName = ticket.reporter?.name || ticket.reporter?.email || 'Support requester';
+    events.push(normalizeEvent({
+      id: `support-ticket-created-${ticket._id}`,
+      timestamp: ticket.created_at || ticket.createdAt,
+      actor: { id: ticket.reporter?.user_id?.toString() || null, name: actorName, role: null },
+      action: 'Support ticket created',
+      module: 'support_ticket',
+      request_type: 'support_ticket',
+      request_id: ticket._id?.toString(),
+      details: { title: ticket.summary || null, category: ticket.category || null, status: ticket.status || null, type: ticket.priority || null },
+      source: 'support_ticket'
+    }));
+    if (ticket.updatedAt && new Date(ticket.updatedAt).getTime() - new Date(ticket.created_at || ticket.createdAt).getTime() > 1000) {
+      events.push(normalizeEvent({
+        id: `support-ticket-updated-${ticket._id}`,
+        timestamp: ticket.updatedAt,
+        actor: { id: ticket.reporter?.user_id?.toString() || null, name: actorName, role: null },
+        action: 'Support ticket updated',
+        module: 'support_ticket',
+        request_type: 'support_ticket',
+        request_id: ticket._id?.toString(),
+        details: { title: ticket.summary || null, category: ticket.category || null, status: ticket.status || null, type: ticket.priority || null },
+        source: 'support_ticket'
+      }));
+    }
+  });
+
   const sorted = events
     .filter((e) => e.timestamp)
     .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
+  const filtered = sorted.filter((event) => {
+    const ts = new Date(event.timestamp);
+    if (Number.isNaN(ts.getTime())) return false;
+    if (hasValidStart && ts < startDate) return false;
+    if (hasValidEnd && ts > endDate) return false;
+    if (actorFilterUserId) {
+      const eventActorId = event.actor?.id ? String(event.actor.id) : '';
+      if (eventActorId !== String(actorFilterUserId)) return false;
+    }
+    if (moduleFilter && String(event.module || '').toLowerCase() !== moduleFilter) return false;
+    return true;
+  });
+
   res.json({
     success: true,
-    data: sorted
+    data: filtered
   });
 });
 

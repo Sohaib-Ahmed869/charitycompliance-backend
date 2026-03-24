@@ -73,6 +73,10 @@ router.post(
       .optional()
       .isISO8601()
       .withMessage('Invalid date format'),
+    body('review_date')
+      .optional()
+      .isISO8601()
+      .withMessage('Invalid date format'),
     body('expiry_date')
       .optional()
       .isISO8601()

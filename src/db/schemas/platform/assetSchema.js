@@ -20,7 +20,7 @@ const assetSchema = new mongoose.Schema({
   },
   category: {
     type: String,
-    enum: ['Computer', 'Printer', 'Network', 'Server', 'Mobile', 'Furniture', 'Software', 'Hardware', 'Subscription', 'Domain', 'Cloud Service', 'Other'],
+    enum: ['Computer', 'Printer', 'Network', 'Server', 'Mobile', 'Furniture', 'Software', 'Hardware', 'Subscription', 'Domain', 'Cloud Service', 'Banking Details', 'Other'],
     required: true,
     index: true
   },
