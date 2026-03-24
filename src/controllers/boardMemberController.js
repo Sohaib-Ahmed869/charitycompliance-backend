@@ -18,6 +18,7 @@ import emailService from '../services/emailService.js';
 import { getFileUrl, uploadToS3 } from '../services/s3Service.js';
 import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
+import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
 
 export const getBoardMembers = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -49,6 +50,16 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
           obj.profile_picture_url = await getFileUrl(bm.profile_picture_key, 604800);
         } catch (err) {
           logError('Failed to resolve profile picture URL for list', err, { boardMemberId: bm._id });
+        }
+      }
+      if (bm.contract?.file_key) {
+        try {
+          obj.contract = {
+            ...(obj.contract || {}),
+            file_url: await getFileUrl(bm.contract.file_key, 3600)
+          };
+        } catch (err) {
+          logError('Failed to resolve contract URL for list', err, { boardMemberId: bm._id });
         }
       }
       return obj;
@@ -88,6 +99,16 @@ export const getBoardMemberById = asyncHandler(async (req, res) => {
       obj.profile_picture_url = await getFileUrl(boardMember.profile_picture_key, 604800);
     } catch (err) {
       logError('Failed to resolve profile picture URL', err, { boardMemberId: boardMember._id });
+    }
+  }
+  if (boardMember.contract?.file_key) {
+    try {
+      obj.contract = {
+        ...(obj.contract || {}),
+        file_url: await getFileUrl(boardMember.contract.file_key, 3600)
+      };
+    } catch (err) {
+      logError('Failed to resolve contract URL', err, { boardMemberId: boardMember._id });
     }
   }
 
@@ -143,11 +164,40 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     ...invitationData
   });
 
-  // Send invitation email if requested
-  if (invite && system_access !== false && boardMemberData.email) {
+  // Send invitation email if requested (for both regular staff and volunteers)
+  if (invite && boardMemberData.email) {
     try {
       const recipientName = `${boardMemberData.given_names} ${boardMemberData.family_name}`;
       const position = boardMemberData.custom_position_title || boardMemberData.position;
+      let volunteerActionLinks = null;
+      if (is_volunteer) {
+        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const [complaintDoc, riskDoc, coiDoc] = await Promise.all([
+          createVolunteerActionToken({
+            orgId,
+            boardMemberId: boardMember._id,
+            actionType: 'complaint',
+            email: boardMemberData.email,
+          }),
+          createVolunteerActionToken({
+            orgId,
+            boardMemberId: boardMember._id,
+            actionType: 'risk',
+            email: boardMemberData.email,
+          }),
+          createVolunteerActionToken({
+            orgId,
+            boardMemberId: boardMember._id,
+            actionType: 'coi',
+            email: boardMemberData.email,
+          }),
+        ]);
+        volunteerActionLinks = {
+          complaint: `${frontendUrl}/public/volunteer/complaint/${complaintDoc.token}`,
+          risk: `${frontendUrl}/public/volunteer/risk/${riskDoc.token}`,
+          coi: `${frontendUrl}/public/volunteer/coi/${coiDoc.token}`,
+        };
+      }
 
       await emailService.sendBoardMemberInvitation({
         to: boardMemberData.email,
@@ -155,7 +205,8 @@ export const createBoardMember = asyncHandler(async (req, res) => {
         organizationName: org.name || 'Your Organization',
         position,
         invitationToken: invitationData.invitation_token,
-        inviterName: req.user?.firstName ? `${req.user.firstName} ${req.user.lastName || ''}`.trim() : null
+        inviterName: req.user?.firstName ? `${req.user.firstName} ${req.user.lastName || ''}`.trim() : null,
+        volunteerActionLinks
       });
 
       // Update invitation status to sent
@@ -242,6 +293,16 @@ export const createBoardMember = asyncHandler(async (req, res) => {
       logError('Failed to resolve profile picture URL', err, { boardMemberId: boardMember._id });
     }
   }
+  if (boardMember.contract?.file_key) {
+    try {
+      createObj.contract = {
+        ...(createObj.contract || {}),
+        file_url: await getFileUrl(boardMember.contract.file_key, 3600)
+      };
+    } catch (err) {
+      logError('Failed to resolve contract URL', err, { boardMemberId: boardMember._id });
+    }
+  }
   
   res.status(201).json({
     success: true,
@@ -285,6 +346,16 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
       obj.profile_picture_url = await getFileUrl(boardMember.profile_picture_key, 604800);
     } catch (err) {
       logError('Failed to resolve profile picture URL', err, { boardMemberId: boardMember._id });
+    }
+  }
+  if (boardMember.contract?.file_key) {
+    try {
+      obj.contract = {
+        ...(obj.contract || {}),
+        file_url: await getFileUrl(boardMember.contract.file_key, 3600)
+      };
+    } catch (err) {
+      logError('Failed to resolve contract URL', err, { boardMemberId: boardMember._id });
     }
   }
   
@@ -674,4 +745,67 @@ export const deletePoliceCheck = asyncHandler(async (req, res) => {
 
   logInfo('Police check certificate deleted', { boardMemberId, orgId });
   res.json({ success: true, message: 'Police check certificate removed' });
+});
+
+// ─── Contract file upload / view / delete ─────────────────────────────
+
+export const uploadContract = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+  if (!req.file) throw new AppError('No file uploaded', 400, 'NO_FILE');
+
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const member = await boardMemberRepo.findById(boardMemberId);
+  if (!member) throw new AppError('Board member not found', 404, 'NOT_FOUND');
+
+  const { buffer, originalname, mimetype } = req.file;
+  const { key } = await uploadToS3(buffer, originalname, mimetype, orgId, 'contracts');
+
+  const contractData = {
+    file_key: key,
+    file_name: originalname,
+    file_type: mimetype,
+    uploaded_at: new Date()
+  };
+
+  await boardMemberRepo.update(boardMemberId, { contract: contractData });
+  logInfo('Contract uploaded', { boardMemberId, orgId });
+
+  const file_url = await getFileUrl(key, 3600);
+  res.json({ success: true, data: { ...contractData, file_url } });
+});
+
+export const viewContract = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const member = await boardMemberRepo.findById(boardMemberId);
+  if (!member) throw new AppError('Board member not found', 404, 'NOT_FOUND');
+  if (!member.contract?.file_key) throw new AppError('No contract file on record', 404, 'NO_FILE');
+
+  const url = await getFileUrl(member.contract.file_key, 3600);
+  res.json({
+    success: true,
+    data: { url, file_name: member.contract.file_name, file_type: member.contract.file_type }
+  });
+});
+
+export const deleteContract = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const member = await boardMemberRepo.findById(boardMemberId);
+  if (!member) throw new AppError('Board member not found', 404, 'NOT_FOUND');
+
+  await boardMemberRepo.update(boardMemberId, {
+    contract: { file_key: null, file_name: null, file_type: null, uploaded_at: null }
+  });
+
+  logInfo('Contract deleted', { boardMemberId, orgId });
+  res.json({ success: true, message: 'Contract removed' });
 });

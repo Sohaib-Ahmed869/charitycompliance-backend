@@ -90,8 +90,29 @@ export class SocialMediaCampaignService {
     const existing = await repo.findById(campaignId);
     if (!existing) throw new AppError('Campaign not found', 404, 'NOT_FOUND');
     if (String(existing.org_id) !== String(orgObjectId)) throw new AppError('Forbidden', 403, 'FORBIDDEN');
-    if (!['draft', 'pending'].includes(String(existing.status || '').toLowerCase())) {
-      throw new AppError('Only draft/pending campaigns can be updated', 400, 'INVALID_STATUS');
+    const currentStatus = String(existing.status || '').toLowerCase();
+    const isEditableDraft = ['draft', 'pending'].includes(currentStatus);
+
+    // Allow post-approval performance tracking updates (views) via metadata.
+    if (!isEditableDraft) {
+      const keys = Object.keys(payload || {});
+      const metadataOnly = keys.length > 0 && keys.every((k) => k === 'metadata');
+      if (!metadataOnly) {
+        throw new AppError('Only performance metadata can be updated after approval', 400, 'INVALID_STATUS');
+      }
+
+      const mergedMetadata = { ...(existing.metadata || {}), ...(payload.metadata || {}) };
+      if (mergedMetadata.performance_views != null) {
+        const n = Number(mergedMetadata.performance_views);
+        if (!Number.isFinite(n) || n < 0) {
+          throw new AppError('performance_views must be a non-negative number', 400, 'VALIDATION_ERROR');
+        }
+        mergedMetadata.performance_views = Math.floor(n);
+      }
+
+      await repo.update(campaignId, { metadata: mergedMetadata });
+      const updatedLocked = await repo.findById(campaignId);
+      return await this._hydrateImageUrls(updatedLocked);
     }
 
     const allowed = ['title', 'platform', 'platforms', 'post_url', 'post_urls', 'objective', 'start_date', 'end_date', 'estimated_budget', 'ad_spend_estimate', 'currency', 'images', 'notes', 'metadata'];
@@ -119,6 +140,17 @@ export class SocialMediaCampaignService {
     }
     if (updates.estimated_budget != null) updates.estimated_budget = Number(updates.estimated_budget || 0);
     if (updates.ad_spend_estimate != null) updates.ad_spend_estimate = Number(updates.ad_spend_estimate || 0);
+    if (updates.metadata !== undefined) {
+      const mergedMetadata = { ...(existing.metadata || {}), ...(updates.metadata || {}) };
+      if (mergedMetadata.performance_views != null) {
+        const n = Number(mergedMetadata.performance_views);
+        if (!Number.isFinite(n) || n < 0) {
+          throw new AppError('performance_views must be a non-negative number', 400, 'VALIDATION_ERROR');
+        }
+        mergedMetadata.performance_views = Math.floor(n);
+      }
+      updates.metadata = mergedMetadata;
+    }
 
     await repo.update(campaignId, updates);
     const updated = await repo.findById(campaignId);

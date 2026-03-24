@@ -20,13 +20,13 @@ const socialMediaCampaignSchema = new mongoose.Schema({
   /** Backwards-compatible primary platform (first in platforms) */
   platform: {
     type: String,
-    enum: ['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'other'],
+    enum: ['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'flyers', 'other'],
     required: false
   },
   /** Multi-platform support */
   platforms: [{
     type: String,
-    enum: ['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'other']
+    enum: ['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'flyers', 'other']
   }],
   /** Backwards-compatible single link (first in post_urls) */
   post_url: {
@@ -36,7 +36,7 @@ const socialMediaCampaignSchema = new mongoose.Schema({
   },
   /** Per-platform live links */
   post_urls: [{
-    platform: { type: String, enum: ['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'other'], required: true },
+    platform: { type: String, enum: ['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'flyers', 'other'], required: true },
     url: { type: String, trim: true, default: '' }
   }],
   objective: {

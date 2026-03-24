@@ -85,6 +85,12 @@ const documentSchema = new mongoose.Schema({
   effective_date: {
     type: Date
   },
+  review_date: {
+    type: Date
+  },
+  last_reviewed: {
+    type: Date
+  },
   expiry_date: {
     type: Date
   },

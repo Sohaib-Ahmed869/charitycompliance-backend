@@ -17,6 +17,11 @@ const toISODate = (d) => {
   return isNaN(date.getTime()) ? null : date.toISOString();
 };
 
+const hasModuleViewPermission = (permissions = [], moduleId) => {
+  if (!Array.isArray(permissions)) return false;
+  return permissions.includes('*:*') || permissions.includes(`module:${moduleId}:view`);
+};
+
 /**
  * Helper function to format an event for calendar display
  */
@@ -42,6 +47,9 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
   const userId = req.user.userId;
   const orgId = req.orgId; // tenant slug (e.g. "shahid_afridi_foundation")
   const { start_date, end_date } = req.query;
+  const userPermissions = req.user?.permissions || [];
+  const canViewGoverningDocs = hasModuleViewPermission(userPermissions, 'charity_admin');
+  const canViewLegalDocs = hasModuleViewPermission(userPermissions, 'legal_docs') || hasModuleViewPermission(userPermissions, 'systems_legal');
 
   const tenantDb = await getTenantConnection(orgId);
   const calendarRepo = new CalendarRepository(tenantDb);
@@ -65,6 +73,8 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
   let boardMemberEvents = [];
   let fundingEvents = [];
   let documentEvents = [];
+  let governingReviewEvents = [];
+  let legalReviewEvents = [];
   let meetingEvents = [];
 
   try {
@@ -144,22 +154,61 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
     logError('Error retrieving funding events', { orgId, error: error.message, stack: error.stack });
   }
 
-  try {
-    // Governing documents & registration/license expiries (org-wide)
-    const documentExpiries = await calendarRepo.findUpcomingDocumentExpiries(orgObjectId, dateOptions);
-    documentEvents = documentExpiries.map((d) => formatCalendarEvent(
-      {
-        ...d,
-        title: `${d.title || d.document_type} - Expires`,
-        date: d.expiry_date,
-        description: d.document_type || d.category
-      },
-      'compliance',
-      d._id?.toString()
-    ));
-    logInfo('Document expiry events retrieved', { orgId, count: documentEvents.length });
-  } catch (error) {
-    logError('Error retrieving document expiry events', { orgId, error: error.message, stack: error.stack });
+  if (canViewGoverningDocs) {
+    try {
+      // Governing documents expiry events
+      const documentExpiries = await calendarRepo.findUpcomingDocumentExpiries(orgObjectId, dateOptions);
+      documentEvents = documentExpiries.map((d) => formatCalendarEvent(
+        {
+          ...d,
+          title: `${d.title || d.document_type} - Expires`,
+          date: d.expiry_date,
+          description: d.document_type || d.category
+        },
+        'compliance',
+        d._id?.toString()
+      ));
+      logInfo('Document expiry events retrieved', { orgId, count: documentEvents.length });
+    } catch (error) {
+      logError('Error retrieving document expiry events', { orgId, error: error.message, stack: error.stack });
+    }
+
+    try {
+      // Governing document review events
+      const governingReviews = await calendarRepo.findUpcomingGoverningDocumentReviews(orgObjectId, dateOptions);
+      governingReviewEvents = governingReviews.map((d) => formatCalendarEvent(
+        {
+          ...d,
+          title: `${d.title || d.document_type} - Review Due`,
+          date: d.review_date || d.effective_date || d.date_adopted,
+          description: d.document_type || d.category
+        },
+        'compliance',
+        `gov-review:${d._id?.toString()}`
+      ));
+      logInfo('Governing document review events retrieved', { orgId, count: governingReviewEvents.length });
+    } catch (error) {
+      logError('Error retrieving governing document review events', { orgId, error: error.message, stack: error.stack });
+    }
+  }
+
+  if (canViewLegalDocs) {
+    try {
+      const legalReviews = await calendarRepo.findUpcomingLegalDocumentReviews(orgId, dateOptions);
+      legalReviewEvents = legalReviews.map((d) => formatCalendarEvent(
+        {
+          ...d,
+          title: `${d.document_name} - Review Due`,
+          date: d.review_date || d.effective_date,
+          description: d.category || 'legal document'
+        },
+        'compliance',
+        `legal-review:${d._id?.toString()}`
+      ));
+      logInfo('Legal document review events retrieved', { orgId, count: legalReviewEvents.length });
+    } catch (error) {
+      logError('Error retrieving legal document review events', { orgId, error: error.message, stack: error.stack });
+    }
   }
   } // if (orgObjectId)
 
@@ -207,6 +256,8 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
     ...boardMemberEvents,
     ...fundingEvents,
     ...documentEvents,
+    ...governingReviewEvents,
+    ...legalReviewEvents,
     ...meetingEvents
   ];
 

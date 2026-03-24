@@ -144,6 +144,7 @@ export const createDocument = asyncHandler(async (req, res) => {
     date_adopted: req.body.date_adopted ? new Date(req.body.date_adopted) : undefined,
     date_last_amended: req.body.date_last_amended ? new Date(req.body.date_last_amended) : undefined,
     effective_date: req.body.effective_date ? new Date(req.body.effective_date) : undefined,
+    review_date: req.body.review_date ? new Date(req.body.review_date) : undefined,
     expiry_date: req.body.expiry_date ? new Date(req.body.expiry_date) : undefined
   });
 

@@ -22,6 +22,9 @@ export class ExternalTrainingEnrollmentRepository {
       const email = String(inv.email || '').trim().toLowerCase();
       if (!email) continue;
       const name = String(inv.name || '').trim();
+      const recipientType = String(inv.recipient_type || 'visitor').trim().toLowerCase();
+      const boardMemberId = inv.board_member_id ? String(inv.board_member_id) : null;
+      const donorId = inv.donor_id ? String(inv.donor_id) : null;
 
       const token = crypto.randomBytes(24).toString('hex');
       const doc = await this.ExternalTrainingEnrollment.findOneAndUpdate(
@@ -36,10 +39,21 @@ export class ExternalTrainingEnrollmentRepository {
             status: 'not_started',
             enrolled_at: new Date(),
             progress: [],
-            metadata: { invited_by_user_id: invitedByUserId || null }
+            metadata: {
+              invited_by_user_id: invitedByUserId || null,
+              recipient_type: recipientType,
+              board_member_id: boardMemberId,
+              donor_id: donorId
+            }
           },
           $set: {
-            name
+            name,
+            metadata: {
+              invited_by_user_id: invitedByUserId || null,
+              recipient_type: recipientType,
+              board_member_id: boardMemberId,
+              donor_id: donorId
+            }
           }
         },
         { upsert: true, new: true }

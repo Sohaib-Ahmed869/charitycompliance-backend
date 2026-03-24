@@ -17,6 +17,30 @@ import { getMasterKeyHex } from '../config/encryption.js';
 import archiver from 'archiver';
 import path from 'path';
 import fs from 'fs';
+import emailService from '../services/emailService.js';
+
+async function notifyVolunteersForPolicy(tenantDb, policyLike) {
+  try {
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const boardMemberRepo = new BoardMemberRepository(tenantDb);
+    const volunteers = await boardMemberRepo.findByOrgId(policyLike.org_id, false);
+    const recipients = (volunteers || []).filter(
+      (bm) => bm?.is_volunteer === true && bm?.email && (bm?.status || 'active') === 'active'
+    );
+    await Promise.all(
+      recipients.map((bm) =>
+        emailService.sendVolunteerPolicyNotification({
+          to: bm.email,
+          recipientName: `${bm.given_names || ''} ${bm.family_name || ''}`.trim() || 'Volunteer',
+          policyTitle: policyLike.title || 'Policy',
+          policyId: policyLike._id,
+        })
+      )
+    );
+  } catch {
+    // non-blocking
+  }
+}
 
 export const getPolicies = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -383,6 +407,8 @@ export const createPolicy = asyncHandler(async (req, res) => {
     success: true,
     data: { ...policy.toObject(), file_url: url }
   });
+
+  notifyVolunteersForPolicy(tenantDb, policy).catch(() => {});
 });
 
 export const updatePolicy = asyncHandler(async (req, res) => {
@@ -429,6 +455,8 @@ export const updatePolicy = asyncHandler(async (req, res) => {
     success: true,
     data: { ...policy.toObject(), file_url }
   });
+
+  notifyVolunteersForPolicy(tenantDb, policy).catch(() => {});
 });
 
 export const updatePolicyDocument = asyncHandler(async (req, res) => {
@@ -523,6 +551,8 @@ export const updatePolicyDocument = asyncHandler(async (req, res) => {
     success: true,
     data: { ...policy.toObject(), file_url: url }
   });
+
+  notifyVolunteersForPolicy(tenantDb, policy).catch(() => {});
 });
 
 /**
@@ -807,6 +837,8 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
       // Log but don't fail the review if workflow fails
       console.error('Error triggering policy approval workflow on update:', workflowErr);
     }
+
+    notifyVolunteersForPolicy(tenantDb, updatedPolicy).catch(() => {});
 
     return res.json({
       success: true,

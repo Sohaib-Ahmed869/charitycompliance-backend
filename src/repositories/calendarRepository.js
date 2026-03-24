@@ -13,6 +13,7 @@ import fundingAgreementSchema from '../db/schemas/platform/fundingAgreementSchem
 import activitySchema from '../db/schemas/platform/activitySchema.js';
 import documentSchema from '../db/schemas/platform/documentSchema.js';
 import meetingSchema from '../db/schemas/platform/meetingSchema.js';
+import legalDocumentSchema from '../db/schemas/platform/legalDocumentSchema.js';
 
 export class CalendarRepository {
   constructor(tenantDb) {
@@ -27,6 +28,7 @@ export class CalendarRepository {
     this.Activity = tenantDb.models.Activity || tenantDb.model('Activity', activitySchema);
     this.Document = tenantDb.models.Document || tenantDb.model('Document', documentSchema);
     this.Meeting = tenantDb.models.Meeting || tenantDb.model('Meeting', meetingSchema);
+    this.LegalDocument = tenantDb.models.LegalDocument || tenantDb.model('LegalDocument', legalDocumentSchema);
   }
 
   /**
@@ -288,6 +290,87 @@ export class CalendarRepository {
       .select('_id title document_type category expiry_date')
       .sort({ expiry_date: 1 })
       .lean();
+  }
+
+  /**
+   * Find governing document review dates.
+   * Uses review_date when available, with effective_date/date_adopted as fallback.
+   */
+  async findUpcomingGoverningDocumentReviews(orgId, options = {}) {
+    let orgIdObj = orgId;
+    try {
+      if (typeof orgId === 'string' && mongoose.Types.ObjectId.isValid(orgId)) {
+        orgIdObj = new mongoose.Types.ObjectId(orgId);
+      }
+    } catch (e) {
+      // Use original if conversion fails
+    }
+
+    const query = {
+      org_id: orgIdObj,
+      status: { $in: ['submitted', 'approved'] },
+      $or: [
+        { review_date: { $exists: true, $ne: null } },
+        { effective_date: { $exists: true, $ne: null } },
+        { date_adopted: { $exists: true, $ne: null } }
+      ],
+      category: { $in: ['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation'] }
+    };
+
+    const docs = await this.Document.find(query)
+      .select('_id title document_type category review_date effective_date date_adopted last_reviewed')
+      .sort({ review_date: 1, effective_date: 1, date_adopted: 1 })
+      .lean();
+
+    if (!options.start_date && !options.end_date) return docs;
+
+    const startDate = options.start_date ? new Date(options.start_date) : null;
+    const endDate = options.end_date ? new Date(options.end_date) : null;
+    return docs.filter((d) => {
+      const due = d.review_date || d.effective_date || d.date_adopted;
+      if (!due) return false;
+      const dueDate = new Date(due);
+      const lastReviewed = d.last_reviewed ? new Date(d.last_reviewed) : null;
+      if (lastReviewed && lastReviewed >= dueDate) return false;
+      if (startDate && dueDate < startDate) return false;
+      if (endDate && dueDate > endDate) return false;
+      return true;
+    });
+  }
+
+  /**
+   * Find legal document review dates.
+   * Uses review_date when available, with effective_date as fallback for legacy records.
+   */
+  async findUpcomingLegalDocumentReviews(orgId, options = {}) {
+    const query = {
+      org_id: orgId,
+      status: { $in: ['active'] },
+      $or: [
+        { review_date: { $exists: true, $ne: null } },
+        { effective_date: { $exists: true, $ne: null } }
+      ]
+    };
+
+    const docs = await this.LegalDocument.find(query)
+      .select('_id document_name category review_date effective_date last_reviewed')
+      .sort({ review_date: 1, effective_date: 1 })
+      .lean();
+
+    if (!options.start_date && !options.end_date) return docs;
+
+    const startDate = options.start_date ? new Date(options.start_date) : null;
+    const endDate = options.end_date ? new Date(options.end_date) : null;
+    return docs.filter((d) => {
+      const due = d.review_date || d.effective_date;
+      if (!due) return false;
+      const dueDate = new Date(due);
+      const lastReviewed = d.last_reviewed ? new Date(d.last_reviewed) : null;
+      if (lastReviewed && lastReviewed >= dueDate) return false;
+      if (startDate && dueDate < startDate) return false;
+      if (endDate && dueDate > endDate) return false;
+      return true;
+    });
   }
 
   /**

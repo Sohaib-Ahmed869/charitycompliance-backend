@@ -79,8 +79,7 @@ const boardMemberSchema = new mongoose.Schema({
     trim: true
   },
   appointment_date: {
-    type: Date,
-    required: true
+    type: Date
   },
   term_end_date: {
     type: Date
@@ -196,6 +195,26 @@ const boardMemberSchema = new mongoose.Schema({
       enum: ['not_uploaded', 'valid', 'expired'],
       default: 'not_uploaded'
     }
+  },
+
+  /** Employment/engagement contract file */
+  contract: {
+    file_key: { type: String, default: null },
+    file_name: { type: String, default: null },
+    file_type: { type: String, default: null },
+    uploaded_at: { type: Date, default: null }
+  },
+
+  /** Whether induction form has been completed */
+  induction_form_filled: {
+    type: Boolean,
+    default: false
+  },
+  /** Optional notes/comments for induction form completion state */
+  induction_form_comments: {
+    type: String,
+    trim: true,
+    default: ''
   }
 }, {
   timestamps: true,

@@ -153,6 +153,15 @@ const riskSchema = new mongoose.Schema({
   }],
   metadata: {
     type: mongoose.Schema.Types.Mixed
+  },
+  volunteer_submission: {
+    source: { type: String, enum: ['volunteer_link'], default: null },
+    board_member_id: { type: mongoose.Schema.Types.ObjectId, ref: 'BoardMember', default: null },
+    name: { type: String, default: null },
+    email: { type: String, default: null },
+    action_token: { type: String, default: null },
+    action_type: { type: String, enum: ['complaint', 'risk', 'coi'], default: null },
+    submitted_at: { type: Date, default: null }
   }
 }, {
   timestamps: true,

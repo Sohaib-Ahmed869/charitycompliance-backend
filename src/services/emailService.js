@@ -313,16 +313,31 @@ class EmailService {
    * @param {string} params.invitationToken - Unique invitation token
    * @param {string} params.inviterName - Name of person who sent the invite
    */
-  async sendBoardMemberInvitation({ to, recipientName, organizationName, position, invitationToken, inviterName }) {
+  async sendBoardMemberInvitation({ to, recipientName, organizationName, position, invitationToken, inviterName, volunteerActionLinks = null }) {
     const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const inviteLink = `${baseUrl}/invitation/${invitationToken}`;
 
     const subject = `You've been invited to join ${organizationName}`;
 
+    const volunteerLinksHtml = volunteerActionLinks
+      ? `
+      <div style="margin-top: 16px; text-align: left; max-width: 500px; margin-left: auto; margin-right: auto; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 12px;">
+        <p style="margin: 0 0 8px 0; font-size: 12px; color: #0F172A; font-weight: 600;">Volunteer quick actions</p>
+        <p style="margin: 0 0 6px 0; font-size: 12px;"><a href="${volunteerActionLinks.complaint}" style="color: #2563EB; text-decoration: none;">Submit a complaint</a></p>
+        <p style="margin: 0 0 6px 0; font-size: 12px;"><a href="${volunteerActionLinks.risk}" style="color: #2563EB; text-decoration: none;">Submit a risk</a></p>
+        <p style="margin: 0; font-size: 12px;"><a href="${volunteerActionLinks.coi}" style="color: #2563EB; text-decoration: none;">Declare conflict of interest (COI)</a></p>
+      </div>`
+      : '';
+
+    const roleText = position 
+      ? `as a <strong>${position}</strong>`
+      : `as a <strong>volunteer</strong>`;
+
     const bodyHtml = `
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${recipientName},</p>
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">${inviterName ? `${inviterName} has invited you` : 'You have been invited'} to join <strong>${organizationName}</strong> as a <strong>${position}</strong>.</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">${inviterName ? `${inviterName} has invited you` : 'You have been invited'} to join <strong>${organizationName}</strong> ${roleText}.</p>
       <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">To accept this invitation and set up your account, please click the button below:</p>
+      ${volunteerLinksHtml}
     `;
 
     const html = buildEmailTemplate({
@@ -612,6 +627,42 @@ class EmailService {
       buttonText: 'Start Training',
       buttonLink: trainingLink,
       infoBoxLines: ['This link is unique to you. Please do not share it.', 'Your progress and completion will be recorded for compliance reporting.']
+    });
+    return this.sendEmail({ to, subject, html });
+  }
+
+  async sendVolunteerTrainingNotification({ to, recipientName, trainingTitle }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const subject = `Volunteer training assigned: ${trainingTitle}`;
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName || 'Volunteer'},</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">A new training has been assigned to you: <strong>${trainingTitle}</strong>.</p>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Please open your dashboard and complete it.</p>
+    `;
+    const html = buildEmailTemplate({
+      heading: 'Training Assigned',
+      bodyHtml,
+      buttonText: 'Open My Training',
+      buttonLink: `${baseUrl}/human-resources/my-training`,
+      infoBoxLines: ['This is part of your compliance requirements.'],
+    });
+    return this.sendEmail({ to, subject, html });
+  }
+
+  async sendVolunteerPolicyNotification({ to, recipientName, policyTitle, policyId }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const subject = `Policy update for acknowledgement: ${policyTitle}`;
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName || 'Volunteer'},</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">A policy relevant to you has been added or updated: <strong>${policyTitle}</strong>.</p>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Please review and acknowledge it in the platform.</p>
+    `;
+    const html = buildEmailTemplate({
+      heading: 'Policy Acknowledgement Required',
+      bodyHtml,
+      buttonText: 'Review Policy',
+      buttonLink: `${baseUrl}/policies/acknowledge/${policyId}`,
+      infoBoxLines: ['Your acknowledgement is tracked for compliance reporting.'],
     });
     return this.sendEmail({ to, subject, html });
   }
