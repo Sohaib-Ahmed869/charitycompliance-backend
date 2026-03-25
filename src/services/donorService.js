@@ -34,7 +34,8 @@ export class DonorService {
       ...payload,
       org_id: this.orgId,
       size: donorSize,
-      expected_annual_donation: expectedAmount
+      expected_annual_donation: expectedAmount,
+      vip: !!payload.vip
     });
 
     // Trigger approval workflow
