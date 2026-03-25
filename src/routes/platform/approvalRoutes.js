@@ -179,8 +179,9 @@ router.post(
     body('comments')
       .optional()
       .trim(),
+    // null is sent from JSON when absent on non-final steps — treat as omitted (optional() only skips undefined by default)
     body('e_signature')
-      .optional()
+      .optional({ nullable: true })
       .isString()
       .withMessage('e_signature must be a string data URL when provided')
   ],
@@ -207,7 +208,7 @@ router.post(
       .optional()
       .trim(),
     body('e_signature')
-      .optional()
+      .optional({ nullable: true })
       .isString()
       .withMessage('e_signature must be a string data URL when provided')
   ],

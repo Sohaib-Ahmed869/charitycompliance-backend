@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { validationResult } from 'express-validator';
 import { getTenantConnection } from '../db/connectionManager.js';
 import { AppError, asyncHandler } from '../middleware/errorHandler.js';
@@ -6,7 +7,9 @@ import { OrganizationRepository } from '../repositories/organizationRepository.j
 import { ComplaintRepository } from '../repositories/complaintRepository.js';
 import { CoiRequestRepository } from '../repositories/coiRequestRepository.js';
 import { RiskRepository } from '../repositories/riskRepository.js';
-import { lookupTenant } from '../db/router.js';
+import { PolicyRepository } from '../repositories/policyRepository.js';
+import { PolicyAcknowledgementRepository } from '../repositories/policyAcknowledgementRepository.js';
+import { getFileStream } from '../services/s3Service.js';
 import {
   createVolunteerActionToken,
   resolveVolunteerActionToken,
@@ -79,6 +82,61 @@ export const generateVolunteerActionLinks = asyncHandler(async (req, res) => {
 
 export const getVolunteerActionContext = asyncHandler(async (req, res) => {
   const { actionType, token } = req.params;
+
+  if (actionType === 'policy_ack') {
+    const tokenDoc = await resolveVolunteerActionToken(token, 'policy_ack');
+    if (!tokenDoc) throw new AppError('Invalid or expired volunteer action link', 401, 'INVALID_TOKEN');
+    const policyIdRaw = tokenDoc.metadata?.policy_id;
+    if (!policyIdRaw) throw new AppError('Invalid policy link', 400, 'INVALID_POLICY_TOKEN');
+
+    const { volunteer, org, tenantDb } = await getVolunteerContextFromToken(token, 'policy_ack');
+    const policyRepo = new PolicyRepository(tenantDb);
+    const acknowledgementRepo = new PolicyAcknowledgementRepository(tenantDb);
+
+    let policyId;
+    try {
+      policyId = new mongoose.Types.ObjectId(String(policyIdRaw));
+    } catch {
+      throw new AppError('Invalid policy reference', 400, 'INVALID_POLICY_ID');
+    }
+
+    const policy = await policyRepo.findById(policyId);
+    if (!policy || policy.org_id.toString() !== org._id.toString()) {
+      throw new AppError('Policy not found', 404, 'NOT_FOUND');
+    }
+    if (policy.status !== 'active') {
+      throw new AppError('This policy is not active for acknowledgement', 400, 'POLICY_NOT_ACTIVE');
+    }
+
+    const existing = await acknowledgementRepo.findOneByPolicyAndBoardMember(policy._id, volunteer._id);
+    const volunteerName = [volunteer.given_names, volunteer.family_name].filter(Boolean).join(' ').trim() || 'Volunteer';
+
+    return res.json({
+      success: true,
+      data: {
+        volunteer: {
+          id: volunteer._id,
+          name: volunteerName,
+          email: volunteer.email,
+        },
+        organization: { name: org.name },
+        actionType: 'policy_ack',
+        policy: {
+          id: policy._id,
+          title: policy.title,
+          category: policy.category,
+          version: policy.version,
+          effective_date: policy.effective_date,
+          review_date: policy.review_date,
+          file_name: policy.file_name,
+          mime_type: policy.mime_type,
+          has_document: !!policy.file_path,
+        },
+        acknowledged: !!existing,
+      },
+    });
+  }
+
   const { volunteer, org } = await getVolunteerContextFromToken(token, actionType);
   res.json({
     success: true,
@@ -94,6 +152,86 @@ export const getVolunteerActionContext = asyncHandler(async (req, res) => {
       actionType,
     },
   });
+});
+
+/** Stream policy PDF for public volunteer acknowledgement (no login). */
+export const streamVolunteerPolicyPdf = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+  const tokenDoc = await resolveVolunteerActionToken(token, 'policy_ack');
+  if (!tokenDoc) throw new AppError('Invalid or expired volunteer action link', 401, 'INVALID_TOKEN');
+  const policyIdRaw = tokenDoc.metadata?.policy_id;
+  if (!policyIdRaw) throw new AppError('Invalid policy link', 400, 'INVALID_POLICY_TOKEN');
+
+  const { org, tenantDb } = await getVolunteerContextFromToken(token, 'policy_ack');
+  const policyRepo = new PolicyRepository(tenantDb);
+  let policyId;
+  try {
+    policyId = new mongoose.Types.ObjectId(String(policyIdRaw));
+  } catch {
+    throw new AppError('Invalid policy reference', 400, 'INVALID_POLICY_ID');
+  }
+  const policy = await policyRepo.findById(policyId);
+  if (!policy || policy.org_id.toString() !== org._id.toString()) {
+    throw new AppError('Policy not found', 404, 'NOT_FOUND');
+  }
+  if (!policy.file_path) {
+    throw new AppError('Policy has no document', 404, 'NO_CONTENT');
+  }
+
+  const rangeHeader = req.headers.range || null;
+  const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await getFileStream(policy.file_path, rangeHeader);
+
+  res.setHeader('Content-Type', ContentType || 'application/pdf');
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Accept-Ranges', 'bytes');
+  if (IsPartial && ContentRange) {
+    res.status(206);
+    res.setHeader('Content-Range', ContentRange);
+  }
+  if (ContentLength != null) res.setHeader('Content-Length', String(ContentLength));
+  Body.pipe(res);
+});
+
+/** Acknowledge policy via volunteer token (no login). */
+export const acknowledgeVolunteerPolicy = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+  const tokenDoc = await resolveVolunteerActionToken(token, 'policy_ack');
+  if (!tokenDoc) throw new AppError('Invalid or expired volunteer action link', 401, 'INVALID_TOKEN');
+  const policyIdRaw = tokenDoc.metadata?.policy_id;
+  if (!policyIdRaw) throw new AppError('Invalid policy link', 400, 'INVALID_POLICY_TOKEN');
+
+  const { volunteer, org, tenantDb } = await getVolunteerContextFromToken(token, 'policy_ack');
+  const policyRepo = new PolicyRepository(tenantDb);
+  const acknowledgementRepo = new PolicyAcknowledgementRepository(tenantDb);
+
+  let policyId;
+  try {
+    policyId = new mongoose.Types.ObjectId(String(policyIdRaw));
+  } catch {
+    throw new AppError('Invalid policy reference', 400, 'INVALID_POLICY_ID');
+  }
+
+  const policy = await policyRepo.findById(policyId);
+  if (!policy || policy.org_id.toString() !== org._id.toString()) {
+    throw new AppError('Policy not found', 404, 'NOT_FOUND');
+  }
+  if (policy.status !== 'active') {
+    throw new AppError('Only active policies can be acknowledged', 400, 'POLICY_NOT_ACTIVE');
+  }
+
+  const signatureData = typeof req.body?.signature_data === 'string' ? req.body.signature_data : null;
+  const userName = [volunteer.given_names, volunteer.family_name].filter(Boolean).join(' ').trim() || volunteer.email || 'Volunteer';
+  const userTitle = volunteer.position || volunteer.custom_position_title || undefined;
+
+  const acknowledgement = await acknowledgementRepo.acknowledgeByBoardMember(
+    policy._id,
+    volunteer._id,
+    signatureData,
+    userName,
+    userTitle
+  );
+
+  res.status(201).json({ success: true, data: acknowledgement });
 });
 
 // Get departments for public risk form (no auth required, but tied to volunteer action token)
