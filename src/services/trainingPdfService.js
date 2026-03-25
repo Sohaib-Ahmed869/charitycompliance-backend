@@ -4,6 +4,7 @@
  */
 
 import puppeteer from 'puppeteer';
+import { resolveLogoSrcForPdf } from '../utils/pdfLogo.js';
 
 const formatDate = (value) => {
   if (!value) return '—';
@@ -44,6 +45,8 @@ const normalizeUrl = (raw) => {
 };
 
 export const generateTrainingProgramPDF = async (report, logoUrl) => {
+  const logoSrc = await resolveLogoSrcForPdf(logoUrl);
+
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -243,7 +246,7 @@ export const generateTrainingProgramPDF = async (report, logoUrl) => {
 <body>
   <div class="container">
     <div class="header">
-      ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo" />` : ''}
+      ${logoSrc ? `<img src=${JSON.stringify(logoSrc)} alt="Logo" class="logo" />` : ''}
       <h1>Training Program Report</h1>
       <p class="subtitle">${esc(title)} — ${esc(category)}</p>
     </div>
@@ -288,6 +291,8 @@ export const generateTrainingProgramPDF = async (report, logoUrl) => {
 };
 
 export const generateTrainingMemberPDF = async (report, logoUrl) => {
+  const logoSrc = await resolveLogoSrcForPdf(logoUrl);
+
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -472,7 +477,7 @@ export const generateTrainingMemberPDF = async (report, logoUrl) => {
 <body>
   <div class="container">
     <div class="header">
-      ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo" />` : ''}
+      ${logoSrc ? `<img src=${JSON.stringify(logoSrc)} alt="Logo" class="logo" />` : ''}
       <h1>Training Completion Report</h1>
       <p class="subtitle">${esc(title)}</p>
     </div>

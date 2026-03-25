@@ -4,6 +4,7 @@
  */
 
 import puppeteer from 'puppeteer';
+import { resolveLogoSrcForPdf } from '../utils/pdfLogo.js';
 
 const formatDate = (value) => {
   if (!value) return '—';
@@ -35,6 +36,8 @@ const formatText = (text) => {
 };
 
 export const generateRiskDetailPDF = async (payload, logoUrl) => {
+  const logoSrc = await resolveLogoSrcForPdf(logoUrl);
+
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -230,7 +233,7 @@ export const generateRiskDetailPDF = async (payload, logoUrl) => {
 <body>
   <div class="container">
     <div class="header">
-      ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo" />` : ''}
+      ${logoSrc ? `<img src=${JSON.stringify(logoSrc)} alt="Logo" class="logo" />` : ''}
       <h1>Risk Detail Report</h1>
       <p class="subtitle">${esc(title)}</p>
     </div>
@@ -291,6 +294,8 @@ export const generateRiskDetailPDF = async (payload, logoUrl) => {
 };
 
 export const generateRiskRegisterPDF = async (payload, logoUrl) => {
+  const logoSrc = await resolveLogoSrcForPdf(logoUrl);
+
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -407,7 +412,7 @@ export const generateRiskRegisterPDF = async (payload, logoUrl) => {
 <body>
   <div class="container">
     <div class="header">
-      ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo" />` : ''}
+      ${logoSrc ? `<img src=${JSON.stringify(logoSrc)} alt="Logo" class="logo" />` : ''}
       <h1>Risk Register</h1>
       <p class="subtitle">${esc(org?.name || '')}</p>
     </div>

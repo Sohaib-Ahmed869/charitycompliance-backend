@@ -19,7 +19,11 @@ export class OrganizationService {
       if (!org) {
         throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
       }
-      return org;
+      const plain = org.toObject ? org.toObject() : org;
+      if (plain.logo_url && String(plain.logo_url).startsWith('blob:')) {
+        plain.logo_url = null;
+      }
+      return plain;
     } catch (error) {
       if (error instanceof AppError) {
         throw error;
@@ -31,6 +35,17 @@ export class OrganizationService {
 
   async updateOrganization(updateData) {
     try {
+      if (updateData.logo_url != null && typeof updateData.logo_url === 'string') {
+        const raw = updateData.logo_url.trim();
+        if (raw.startsWith('blob:')) {
+          throw new AppError(
+            'Invalid logo URL: browser preview URLs cannot be stored. Re-upload the logo from Organisation settings (the app will save a proper image).',
+            400,
+            'INVALID_LOGO_URL'
+          );
+        }
+      }
+
       // Get existing org to merge settings and metadata
       const existingOrg = await this.orgRepo.findOne();
       

@@ -265,4 +265,17 @@ router.delete(
   boardMemberController.deleteContract
 );
 
+// ── Directors Handbook upload / view ──
+router.post(
+  '/directors-handbook',
+  uploadSingle,
+  handleUploadError,
+  boardMemberController.uploadDirectorsHandbook
+);
+
+router.get(
+  '/directors-handbook/view',
+  boardMemberController.viewDirectorsHandbook
+);
+
 export default router;

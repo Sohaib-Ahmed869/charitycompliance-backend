@@ -4,6 +4,7 @@
  */
 
 import puppeteer from 'puppeteer';
+import { resolveLogoSrcForPdf } from '../utils/pdfLogo.js';
 
 /* ── Helpers ────────────────────────────────────────── */
 
@@ -39,6 +40,7 @@ const MODULE_MAP = {
   hr: 'Human Resources',
   coi: 'Conflict of Interest',
   complaint: 'Complaints',
+  asset: 'Assets & IT',
 };
 const getModuleLabel = (m) => MODULE_MAP[m] || 'General';
 
@@ -105,6 +107,8 @@ const esc = (str) => String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt
  * @param {string} logoUrl
  */
 export const generateAuditTrailPDF = async (allEvents, uniqueActors, entityInfo, module, requestId, logoUrl) => {
+  const logoSrc = await resolveLogoSrcForPdf(logoUrl);
+
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -365,7 +369,7 @@ export const generateAuditTrailPDF = async (allEvents, uniqueActors, entityInfo,
 <body>
   <div class="container">
     <div class="header">
-      ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo" />` : ''}
+      ${logoSrc ? `<img src=${JSON.stringify(logoSrc)} alt="Logo" class="logo" />` : ''}
       <h1>Audit Trail Report</h1>
       <p class="subtitle">Complete Governance & Compliance Audit Log</p>
     </div>
