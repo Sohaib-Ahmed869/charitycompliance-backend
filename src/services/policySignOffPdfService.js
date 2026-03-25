@@ -4,11 +4,14 @@
  */
 
 import puppeteer from 'puppeteer';
+import { resolveLogoSrcForPdf } from '../utils/pdfLogo.js';
 
 /**
  * Generate Policy Sign-Off Sheet PDF
  */
 export const generatePolicySignOffPDF = async (policy, acknowledgements, documentLogs, approvals, logoUrl, approvalRequest = null) => {
+  const logoSrc = await resolveLogoSrcForPdf(logoUrl);
+
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -390,7 +393,7 @@ export const generatePolicySignOffPDF = async (policy, acknowledgements, documen
 <body>
   <div class="container">
     <div class="header">
-      ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo" />` : ''}
+      ${logoSrc ? `<img src=${JSON.stringify(logoSrc)} alt="Logo" class="logo" />` : ''}
       <div class="header-text">
         <h1>Policy Sign-Off Sheet</h1>
         <p class="subtitle">Comprehensive Acknowledgement & Approval Log</p>

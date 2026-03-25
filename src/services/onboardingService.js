@@ -163,11 +163,17 @@ export class OnboardingService {
     return result;
   }
 
-  // Step 1: Organization Details (name, organizationType, size, turnover)
+  // Step 1: Organization Details (name, organizationType, size, turnover, ATSI community flag)
   async handleStep1(orgId, stepData) {
     const tenantDb = await this.getTenantDb();
     const orgRepo = new OrganizationRepository(tenantDb);
-    
+
+    const existing = await orgRepo.findOne();
+    const prevMeta =
+      existing?.metadata && typeof existing.metadata === 'object'
+        ? { ...(existing.metadata.toObject?.() ?? existing.metadata) }
+        : {};
+
     // Map size to employee_count range
     const sizeMapping = {
       '1-10': 5,
@@ -176,18 +182,24 @@ export class OnboardingService {
       '201-500': 350,
       '500+': 500
     };
-    
+
+    const metadata = {
+      ...prevMeta,
+      size: stepData.size,
+      organizationType: stepData.organizationType,
+      turnover: stepData.turnover
+    };
+    if (typeof stepData.works_with_aboriginal_torres_strait_islander === 'boolean') {
+      metadata.works_with_aboriginal_torres_strait_islander =
+        stepData.works_with_aboriginal_torres_strait_islander;
+    }
+
     await orgRepo.update({
       name: stepData.name,
       employee_count: sizeMapping[stepData.size] || 0,
-      // Store all onboarding data in metadata for later use
-      metadata: {
-        size: stepData.size,
-        organizationType: stepData.organizationType,
-        turnover: stepData.turnover
-      }
+      metadata
     });
-    
+
     return { success: true };
   }
 

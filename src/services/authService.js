@@ -520,7 +520,8 @@ export class AuthService {
         firstName: userObj.first_name || '',
         lastName: userObj.last_name || '',
         role: baseRoles[0] || 'board_member',
-        permissions: basePermissions
+        permissions: basePermissions,
+        is_board_member: false
       };
 
       const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
@@ -528,6 +529,8 @@ export class AuthService {
 
       // Get ALL active board_member records (user may hold multiple positions after BCP transfer)
       const allBoardMembers = await boardMemberRepo.findAllActiveByUserId(userObj._id, org._id);
+      const { userHoldsBoardLevelPosition } = await import('../utils/workflowBoardMember.js');
+      responseUser.is_board_member = await userHoldsBoardLevelPosition(tenantDb, userObj._id, org._id);
       if (allBoardMembers && allBoardMembers.length > 0) {
         // Primary position = first record (original position)
         const primaryBm = allBoardMembers[0];
@@ -695,13 +698,15 @@ export class AuthService {
           permissions
         });
 
+        const { userHoldsBoardLevelPosition } = await import('../utils/workflowBoardMember.js');
         const user = {
           id: existingUser._id.toString(),
           email: boardMember.email,
           firstName: boardMember.given_names,
           lastName: boardMember.family_name,
           role: 'board_member',
-          permissions
+          permissions,
+          is_board_member: await userHoldsBoardLevelPosition(tenantDb, existingUser._id, boardMember.org_id)
         };
         user.position = boardMember.custom_position_title || boardMember.position || null;
         if (boardMember.profile_picture_key) {
@@ -752,13 +757,15 @@ export class AuthService {
         permissions
       });
 
+      const { userHoldsBoardLevelPosition: holdsBoardLevel } = await import('../utils/workflowBoardMember.js');
       const user = {
         id: newUser._id.toString(),
         email: boardMember.email,
         firstName: boardMember.given_names,
         lastName: boardMember.family_name,
         role: 'board_member',
-        permissions
+        permissions,
+        is_board_member: await holdsBoardLevel(tenantDb, newUser._id, boardMember.org_id)
       };
       user.position = boardMember.custom_position_title || boardMember.position || null;
       if (boardMember.profile_picture_key) {
@@ -1010,11 +1017,14 @@ export class AuthService {
       firstName: userObj.first_name || '',
       lastName: userObj.last_name || '',
       role: baseRoles[0] || 'board_member',
-      permissions: basePermissions
+      permissions: basePermissions,
+      is_board_member: false
     };
 
     const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
     const boardMemberRepo = new BoardMemberRepository(tenantDb);
+    const { userHoldsBoardLevelPosition } = await import('../utils/workflowBoardMember.js');
+    responseUser.is_board_member = await userHoldsBoardLevelPosition(tenantDb, userObj._id, org._id);
     const boardMember = await boardMemberRepo.findByUserId(userObj._id, org._id);
     if (boardMember) {
       responseUser.position = boardMember.custom_position_title || boardMember.position || null;

@@ -4,6 +4,7 @@
  * Aggregates workflow actions across approvals and COI requests.
  */
 
+import mongoose from 'mongoose';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { getTenantConnection } from '../db/connectionManager.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
@@ -54,34 +55,63 @@ const normalizeEvent = (event) => ({
   source: event.source
 });
 
-export const getAuditTrail = asyncHandler(async (req, res) => {
-  const orgId = req.orgId;
-  const tenantDb = req.tenantDb || await getTenantConnection(orgId);
-
-  // Access model:
-  // - Admin (org owner): can view all events or filter by selected user
-  // - Non-admin: can only view their own actions
-  const userRepo = new UserRepository(tenantDb);
-  const user = await userRepo.findById(req.user?.userId);
-  const isAdmin = !!user?.is_org_owner;
-  const requestedUserId = String(req.query?.userId || '').trim();
-  const actorFilterUserId = isAdmin
-    ? (requestedUserId || null)
-    : String(req.user?.userId || '');
-  const startDate = req.query?.startDate ? new Date(req.query.startDate) : null;
-  const endDate = req.query?.endDate ? new Date(req.query.endDate) : null;
-  const hasValidStart = startDate && !Number.isNaN(startDate.getTime());
-  const hasValidEnd = endDate && !Number.isNaN(endDate.getTime());
-  const moduleFilter = String(req.query?.module || '').trim().toLowerCase();
-  // Inclusive end-date for day-based filters
-  if (hasValidEnd) endDate.setHours(23, 59, 59, 999);
-
-  const orgRepo = new OrganizationRepository(tenantDb);
-  const org = await orgRepo.findOne();
-  if (!org) {
-    throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+/** True if any primitive in details (shallow + one nested object level) equals rid — catches policy_id, risk_id, nested trail details, etc. */
+function detailsContainsId(details, rid, depth = 0) {
+  if (!details || typeof details !== 'object' || depth > 2) return false;
+  for (const v of Object.values(details)) {
+    if (v == null) continue;
+    if (typeof v === 'object' && !Array.isArray(v) && !(v instanceof Date)) {
+      if (detailsContainsId(v, rid, depth + 1)) return true;
+    } else if (Array.isArray(v)) {
+      for (const item of v) {
+        if (item != null && String(item) === rid) return true;
+        if (item && typeof item === 'object' && !(item instanceof Date) && detailsContainsId(item, rid, depth + 1)) return true;
+      }
+    } else if (String(v) === rid) return true;
   }
+  return false;
+}
 
+/**
+ * Same request grouping as frontend (AuditTrailDetailPage): COI rolls up to parent approval id when present.
+ * All ids normalized to strings so ObjectId vs string Map lookups match Mongoose lean() output.
+ */
+function filterEventsByRequestId(allEvents, requestId) {
+  const rid = String(requestId).trim();
+  if (!rid) return [];
+
+  const coiParentMap = new Map();
+  allEvents.forEach((e) => {
+    if ((e.module === 'coi' || e.request_type === 'coi') && e.details?.parent_approval_request_id) {
+      const cid = e.request_id != null ? String(e.request_id) : '';
+      if (cid) {
+        coiParentMap.set(cid, String(e.details.parent_approval_request_id));
+      }
+    }
+  });
+
+  const matches = (e) => {
+    const reqStr = e.request_id != null ? String(e.request_id) : '';
+    const parentFromMap = coiParentMap.get(reqStr);
+    const key = parentFromMap || reqStr || (e.id != null ? String(e.id) : '');
+    if (key && String(key) === rid) return true;
+    // Parent approval id on COI / nested details (download by approval id)
+    if (String(e.details?.parent_approval_request_id || '') === rid) return true;
+    // Entity id on approval-backed events (some UIs pass entity id)
+    if (String(e.details?.entity_id || '') === rid) return true;
+    // Linked ids inside details (complaint trail, risk_id, policy_id on acks, etc.)
+    if (detailsContainsId(e.details, rid)) return true;
+    // Composite event ids: policy-created-<mongoId>, document-uploaded-<mongoId>, etc.
+    if (e.id && typeof e.id === 'string' && e.id.endsWith(rid)) return true;
+    return false;
+  };
+
+  const out = allEvents.filter(matches);
+  return out.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+}
+
+
+async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
   // Ensure models for entity lookups
   const Policy = tenantDb.models.Policy || tenantDb.model('Policy', policySchema);
   const Expense = tenantDb.models.Expense || tenantDb.model('Expense', expenseSchema);
@@ -554,7 +584,7 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
       .populate('uploaded_by', 'first_name last_name email is_org_owner role position')
       .select('title document_type status createdAt updatedAt uploaded_by')
       .lean(),
-    LegalDocument.find({ org_id: orgId })
+    LegalDocument.find({ org_id: org._id })
       .populate('created_by', 'first_name last_name email is_org_owner role position')
       .select('document_name category category_other_text status createdAt updatedAt created_by')
       .lean(),
@@ -583,11 +613,11 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
     TrainingProgram.find({ org_id: org._id })
       .select('title category status createdAt updatedAt')
       .lean(),
-    Expense.find({ org_id: orgId })
+    Expense.find({ org_id: org._id })
       .populate('submitted_by', 'first_name last_name email is_org_owner role position')
       .select('expense_name description category amount status created_at updatedAt submitted_by')
       .lean(),
-    Donor.find({ org_id: orgId })
+    Donor.find({ org_id: org._id })
       .select('name donor_type size status createdAt updatedAt')
       .lean(),
     FundingAgreement.find({ org_id: org._id })
@@ -596,11 +626,19 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
     ProjectRegister.find({ org_id: org._id })
       .select('project_name agreement_title status phase warning createdAt updatedAt')
       .lean(),
-    Asset.find({ org_id: orgId })
+    // Assets store org_id as tenant key (req.orgId / org.orgId), not Organization._id — match all shapes
+    Asset.find({
+      $or: [
+        ...(tenantOrgKey ? [{ org_id: tenantOrgKey }] : []),
+        ...(org.orgId ? [{ org_id: org.orgId }] : []),
+        { org_id: org._id },
+        { org_id: String(org._id) }
+      ]
+    })
       .populate('created_by', 'first_name last_name email is_org_owner role position')
       .select('asset_name category type status created_at updatedAt created_by')
       .lean(),
-    SupportTicket.find({ org_id: orgId })
+    SupportTicket.find({ org_id: org._id })
       .select('ticket_number summary category priority status created_at updatedAt reporter')
       .lean()
   ]);
@@ -779,7 +817,8 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
       request_id: ack._id?.toString(),
       details: {
         title: policy?.title || null,
-        category: policy?.category || null
+        category: policy?.category || null,
+        policy_id: ack.policy_id?.toString() || null
       },
       source: 'policy_acknowledgement'
     }));
@@ -999,7 +1038,13 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
       module: 'asset',
       request_type: 'asset',
       request_id: asset._id?.toString(),
-      details: { title: asset.asset_name || null, category: asset.category || null, type: asset.type || null, status: asset.status || null },
+      details: {
+        title: asset.asset_name || null,
+        category: asset.category || null,
+        type: asset.type || null,
+        status: asset.status || null,
+        asset_id: asset._id?.toString() || null
+      },
       source: 'asset'
     }));
     if (asset.updatedAt && new Date(asset.updatedAt).getTime() - new Date(asset.created_at || asset.createdAt).getTime() > 1000) {
@@ -1011,7 +1056,13 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
         module: 'asset',
         request_type: 'asset',
         request_id: asset._id?.toString(),
-        details: { title: asset.asset_name || null, category: asset.category || null, type: asset.type || null, status: asset.status || null },
+        details: {
+          title: asset.asset_name || null,
+          category: asset.category || null,
+          type: asset.type || null,
+          status: asset.status || null,
+          asset_id: asset._id?.toString() || null
+        },
         source: 'asset'
       }));
     }
@@ -1044,6 +1095,38 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
       }));
     }
   });
+  return events;
+}
+
+export const getAuditTrail = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = req.tenantDb || await getTenantConnection(orgId);
+
+  // Access model:
+  // - Admin (org owner): can view all events or filter by selected user
+  // - Non-admin: can only view their own actions
+  const userRepo = new UserRepository(tenantDb);
+  const user = await userRepo.findById(req.user?.userId);
+  const isAdmin = !!user?.is_org_owner;
+  const requestedUserId = String(req.query?.userId || '').trim();
+  const actorFilterUserId = isAdmin
+    ? (requestedUserId || null)
+    : String(req.user?.userId || '');
+  const startDate = req.query?.startDate ? new Date(req.query.startDate) : null;
+  const endDate = req.query?.endDate ? new Date(req.query.endDate) : null;
+  const hasValidStart = startDate && !Number.isNaN(startDate.getTime());
+  const hasValidEnd = endDate && !Number.isNaN(endDate.getTime());
+  const moduleFilter = String(req.query?.module || '').trim().toLowerCase();
+  // Inclusive end-date for day-based filters
+  if (hasValidEnd) endDate.setHours(23, 59, 59, 999);
+
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) {
+    throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+  }
+
+  const events = await buildAuditTrailEventsArray(tenantDb, org, orgId);
 
   const sorted = events
     .filter((e) => e.timestamp)
@@ -1092,6 +1175,10 @@ export const downloadAuditTrailPDF = asyncHandler(async (req, res) => {
 
   const logoUrl = org?.logo_url || process.env.LOGO || '';
 
+  // Register ApprovalRequest / CoiRequest on this tenant connection (same as buildAuditTrailEventsArray)
+  new ApprovalRequestRepository(tenantDb);
+  new CoiRequestRepository(tenantDb);
+
   // Ensure models
   const Policy = tenantDb.models.Policy || tenantDb.model('Policy', policySchema);
   const Expense = tenantDb.models.Expense || tenantDb.model('Expense', expenseSchema);
@@ -1137,8 +1224,63 @@ export const downloadAuditTrailPDF = asyncHandler(async (req, res) => {
     }
   }
 
+  // URL may carry entity id (policy / expense / risk / document / …) while events use approval _id as request_id
+  if (!reqDoc && mongoose.Types.ObjectId.isValid(requestId)) {
+    reqDoc = await ApprovalRequest.findOne({
+      org_id: org._id,
+      entity_id: requestId
+    })
+      .sort({ created_at: -1 })
+      .populate('submitted_by', 'first_name last_name email is_org_owner')
+      .populate('approval_matrix_id', 'name')
+      .populate('approval_steps.approver_user_id', 'first_name last_name email is_org_owner')
+      .populate('approval_steps.approver_position_id', 'title')
+      .populate('approval_steps.approver_department_id', 'name')
+      .populate('rejection_reviews.rejected_by', 'first_name last_name email is_org_owner')
+      .populate('rejection_reviews.forwarded_to', 'first_name last_name email is_org_owner')
+      .lean();
+    if (reqDoc) source = 'approval';
+  }
+
   if (!reqDoc) {
-    throw new AppError('Request not found', 404, 'NOT_FOUND');
+    // Not an approval, COI, or complaint document id — use full audit aggregate + same grouping as UI
+    const allEvents = await buildAuditTrailEventsArray(tenantDb, org, orgId);
+    const grouped = filterEventsByRequestId(allEvents, requestId);
+    if (grouped.length === 0) {
+      throw new AppError('Request not found', 404, 'NOT_FOUND');
+    }
+    const sortedAgg = grouped
+      .filter((e) => e.timestamp)
+      .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const actorMapAgg = new Map();
+    sortedAgg.forEach((e) => {
+      if (e.actor?.id && !actorMapAgg.has(e.actor.id)) {
+        actorMapAgg.set(e.actor.id, { name: e.actor.name, role: e.actor.role });
+      }
+    });
+    const uniqueActorsAgg = Array.from(actorMapAgg.values());
+    const moduleAgg = sortedAgg[0]?.module || sortedAgg.find((e) => e.module)?.module || 'general';
+    const entityInfoAgg = {
+      title:
+        sortedAgg.find((e) => e.details?.entity_title)?.details?.entity_title ||
+        sortedAgg.find((e) => e.details?.complaint_title)?.details?.complaint_title ||
+        sortedAgg.find((e) => e.details?.title)?.details?.title ||
+        null
+    };
+    const { generateAuditTrailPDF: genPdfAgg } = await import('../services/auditTrailPdfService.js');
+    const pdfBufferAgg = await genPdfAgg(
+      sortedAgg,
+      uniqueActorsAgg,
+      entityInfoAgg,
+      moduleAgg,
+      requestId,
+      logoUrl
+    );
+    const fileNameAgg = `audit_trail_${requestId}_${Date.now()}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileNameAgg}"`);
+    res.setHeader('Content-Length', pdfBufferAgg.length);
+    return res.send(pdfBufferAgg);
   }
 
   // Build events for this single request (same logic as getAuditTrail but filtered)

@@ -4,6 +4,7 @@
  */
 
 import puppeteer from 'puppeteer';
+import { resolveLogoSrcForPdf } from '../utils/pdfLogo.js';
 
 /* ── Helpers ────────────────────────────────────────── */
 
@@ -69,6 +70,8 @@ const GOVERNANCE_LABELS = {
  * @param {string} logoUrl
  */
 export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUrl) => {
+  const logoSrc = await resolveLogoSrcForPdf(logoUrl);
+
   const browser = await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
@@ -437,7 +440,7 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
 <body>
     <div class="container">
     <div class="header">
-      ${logoUrl ? `<img src="${logoUrl}" alt="Logo" class="logo" />` : ''}
+      ${logoSrc ? `<img src=${JSON.stringify(logoSrc)} alt="Logo" class="logo" />` : ''}
       <h1>Approval Workflow Report</h1>
       <p class="subtitle">${esc(title)} — ${esc(category)}</p>
     </div>
