@@ -13,9 +13,18 @@ const policyAcknowledgementSchema = new mongoose.Schema(
       required: true,
       index: true
     },
+    /** Staff with login — one of user_id or board_member_id must be set */
     user_id: {
       type: mongoose.Schema.Types.ObjectId,
-      required: true,
+      ref: 'User',
+      required: false,
+      index: true
+    },
+    /** Volunteers without system access — acknowledgement tied to responsible-person record */
+    board_member_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'BoardMember',
+      required: false,
       index: true
     },
     user_name: {
@@ -38,6 +47,20 @@ const policyAcknowledgementSchema = new mongoose.Schema(
   }
 );
 
-policyAcknowledgementSchema.index({ policy_id: 1, user_id: 1 }, { unique: true });
+policyAcknowledgementSchema.pre('validate', function validateAckSubject(next) {
+  if (!this.user_id && !this.board_member_id) {
+    this.invalidate('user_id', 'Either user_id or board_member_id is required');
+  }
+  next();
+});
+
+policyAcknowledgementSchema.index(
+  { policy_id: 1, user_id: 1 },
+  { unique: true, partialFilterExpression: { user_id: { $exists: true, $ne: null } } }
+);
+policyAcknowledgementSchema.index(
+  { policy_id: 1, board_member_id: 1 },
+  { unique: true, partialFilterExpression: { board_member_id: { $exists: true, $ne: null } } }
+);
 
 export default policyAcknowledgementSchema;

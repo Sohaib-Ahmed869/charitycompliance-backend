@@ -2,7 +2,6 @@ import crypto from 'crypto';
 import { getRouterConnection } from '../config/database.js';
 
 const COLLECTION = 'volunteer_action_tokens';
-const DEFAULT_EXPIRY_DAYS = 30;
 
 function toDateOrNull(value) {
   if (!value) return null;
@@ -21,8 +20,9 @@ export async function createVolunteerActionToken({
   const routerDb = getRouterConnection();
   const col = routerDb.collection(COLLECTION);
   const token = crypto.randomBytes(24).toString('hex');
+  // Volunteer action links are reusable indefinitely unless expiresAt is explicitly set (e.g. tests)
   const expiry =
-    toDateOrNull(expiresAt) || new Date(Date.now() + DEFAULT_EXPIRY_DAYS * 24 * 60 * 60 * 1000);
+    expiresAt !== undefined && expiresAt !== null ? toDateOrNull(expiresAt) : null;
 
   const doc = {
     token,

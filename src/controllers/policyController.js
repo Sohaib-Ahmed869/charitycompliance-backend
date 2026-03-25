@@ -18,8 +18,11 @@ import archiver from 'archiver';
 import path from 'path';
 import fs from 'fs';
 import emailService from '../services/emailService.js';
+import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
 
-async function notifyVolunteersForPolicy(tenantDb, policyLike) {
+const FRONTEND_URL_POLICY = process.env.FRONTEND_URL || 'http://localhost:5173';
+
+async function notifyVolunteersForPolicy(orgId, tenantDb, policyLike) {
   try {
     const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
     const boardMemberRepo = new BoardMemberRepository(tenantDb);
@@ -28,14 +31,22 @@ async function notifyVolunteersForPolicy(tenantDb, policyLike) {
       (bm) => bm?.is_volunteer === true && bm?.email && (bm?.status || 'active') === 'active'
     );
     await Promise.all(
-      recipients.map((bm) =>
-        emailService.sendVolunteerPolicyNotification({
+      recipients.map(async (bm) => {
+        const tokenDoc = await createVolunteerActionToken({
+          orgId,
+          boardMemberId: bm._id,
+          actionType: 'policy_ack',
+          email: bm.email,
+          metadata: { policy_id: String(policyLike._id) },
+        });
+        const acknowledgeUrl = `${FRONTEND_URL_POLICY}/public/volunteer/policy_ack/${tokenDoc.token}`;
+        return emailService.sendVolunteerPolicyNotification({
           to: bm.email,
           recipientName: `${bm.given_names || ''} ${bm.family_name || ''}`.trim() || 'Volunteer',
           policyTitle: policyLike.title || 'Policy',
-          policyId: policyLike._id,
-        })
-      )
+          acknowledgeUrl,
+        });
+      })
     );
   } catch {
     // non-blocking
@@ -408,7 +419,7 @@ export const createPolicy = asyncHandler(async (req, res) => {
     data: { ...policy.toObject(), file_url: url }
   });
 
-  notifyVolunteersForPolicy(tenantDb, policy).catch(() => {});
+  notifyVolunteersForPolicy(orgId, tenantDb, policy).catch(() => {});
 });
 
 export const updatePolicy = asyncHandler(async (req, res) => {
@@ -456,7 +467,7 @@ export const updatePolicy = asyncHandler(async (req, res) => {
     data: { ...policy.toObject(), file_url }
   });
 
-  notifyVolunteersForPolicy(tenantDb, policy).catch(() => {});
+  notifyVolunteersForPolicy(orgId, tenantDb, policy).catch(() => {});
 });
 
 export const updatePolicyDocument = asyncHandler(async (req, res) => {
@@ -552,7 +563,7 @@ export const updatePolicyDocument = asyncHandler(async (req, res) => {
     data: { ...policy.toObject(), file_url: url }
   });
 
-  notifyVolunteersForPolicy(tenantDb, policy).catch(() => {});
+  notifyVolunteersForPolicy(orgId, tenantDb, policy).catch(() => {});
 });
 
 /**
@@ -838,7 +849,7 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
       console.error('Error triggering policy approval workflow on update:', workflowErr);
     }
 
-    notifyVolunteersForPolicy(tenantDb, updatedPolicy).catch(() => {});
+    notifyVolunteersForPolicy(orgId, tenantDb, updatedPolicy).catch(() => {});
 
     return res.json({
       success: true,
