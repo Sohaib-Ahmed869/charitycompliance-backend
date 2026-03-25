@@ -24,6 +24,9 @@ const FRONTEND_URL_POLICY = process.env.FRONTEND_URL || 'http://localhost:5173';
 
 async function notifyVolunteersForPolicy(orgId, tenantDb, policyLike) {
   try {
+    // Only email volunteers once the policy has been approved and is active.
+    if (!policyLike || policyLike.status !== 'active') return;
+
     const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
     const boardMemberRepo = new BoardMemberRepository(tenantDb);
     const volunteers = await boardMemberRepo.findByOrgId(policyLike.org_id, false);
@@ -234,6 +237,39 @@ export const getPolicyDocumentLogs = asyncHandler(async (req, res) => {
     throw new AppError('Policy not found', 404, 'NOT_FOUND');
   }
   const logs = await policyRepo.getDocumentLogs(policyId);
+
+  // Ensure the FE can display "Updated by" reliably.
+  // Some document logs are created without denormalized `updated_by_name`.
+  if (Array.isArray(logs) && logs.length > 0) {
+    const { UserRepository } = await import('../repositories/userRepository.js');
+    const userRepo = new UserRepository(tenantDb);
+    const masterKeyHex = getMasterKeyHex();
+
+    for (const log of logs) {
+      if (log.updated_by_name) continue;
+      if (!log.updated_by || !mongoose.Types.ObjectId.isValid(log.updated_by)) continue;
+
+      try {
+        const user = await userRepo.findById(log.updated_by);
+        if (!user) {
+          log.updated_by_name = 'Unknown User';
+          continue;
+        }
+
+        const firstName = isEncrypted(user.first_name)
+          ? decrypt(user.first_name, masterKeyHex)
+          : user.first_name;
+        const lastName = isEncrypted(user.last_name)
+          ? decrypt(user.last_name, masterKeyHex)
+          : user.last_name;
+
+        log.updated_by_name = `${firstName || ''} ${lastName || ''}`.trim() || 'Unknown User';
+      } catch {
+        log.updated_by_name = 'Unknown User';
+      }
+    }
+  }
+
   res.json({
     success: true,
     data: logs
@@ -788,7 +824,7 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
   // Handle different review actions
   if (action === 'approved_no_changes') {
     // Just add to review history and set next review date
-    await policyRepo.update(policyId, {
+    const updatedPolicy = await policyRepo.update(policyId, {
       $push: { review_history: reviewEntry },
       reviewed_by: userObjectId,
       reviewed_by_name: reviewerName,
@@ -798,6 +834,9 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
       is_under_review: false,
       status: 'active'
     });
+
+    // Fire-and-forget volunteer notifications (guarded inside notifyVolunteersForPolicy)
+    notifyVolunteersForPolicy(orgId, tenantDb, updatedPolicy).catch(() => {});
 
     return res.json({
       success: true,
