@@ -98,6 +98,22 @@ router.put(
   documentController.updateDocument
 );
 
+// Review and sign yearly statement (assigned board member only)
+router.post(
+  '/:documentId/review',
+  [
+    param('documentId')
+      .isMongoId()
+      .withMessage('Invalid document ID'),
+    body('signature')
+      .trim()
+      .notEmpty()
+      .withMessage('Signature is required')
+  ],
+  validate,
+  documentController.reviewYearlyStatement
+);
+
 // Delete document
 router.delete(
   '/:documentId',

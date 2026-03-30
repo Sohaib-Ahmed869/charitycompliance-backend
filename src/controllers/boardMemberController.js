@@ -112,42 +112,6 @@ export const getBoardMemberById = asyncHandler(async (req, res) => {
     }
   }
 
-  // Align with workflows: board-level = position_id in org's board-position set (see workflowBoardMember.js)
-  const { getBoardPositionIdsForOrg } = await import('../utils/workflowBoardMember.js');
-  const boardPositionIds = await getBoardPositionIdsForOrg(tenantDb, obj.org_id);
-  const posId =
-    obj.position_id && typeof obj.position_id === 'object' && obj.position_id._id
-      ? obj.position_id._id.toString()
-      : obj.position_id
-        ? String(obj.position_id)
-        : null;
-  obj.is_board_level = !!(posId && boardPositionIds.has(posId));
-
-  if (obj.position_id && typeof obj.position_id === 'object') {
-    const p = obj.position_id;
-    obj.granted_permissions = Array.isArray(p.granted_permissions) ? [...p.granted_permissions] : [];
-    obj.module_permissions = Array.isArray(p.module_permissions)
-      ? p.module_permissions.map((row) => ({ ...row }))
-      : [];
-    obj.approval_limit = typeof p.max_approval_amount === 'number' ? p.max_approval_amount : null;
-    obj.position_role_title = p.title ?? null;
-    obj.position_code = p.code ?? null;
-    obj.position_level = p.level;
-    obj.position_is_management = !!p.is_management;
-    obj.position_approval_flags = {
-      can_approve_expenses: !!p.can_approve_expenses,
-      can_approve_risks: !!p.can_approve_risks,
-      can_approve_grants: !!p.can_approve_grants,
-      can_approve_policies: !!p.can_approve_policies,
-      can_approve_hr: !!p.can_approve_hr
-    };
-  } else {
-    obj.granted_permissions = [];
-    obj.module_permissions = [];
-    obj.approval_limit = null;
-    obj.is_board_level = false;
-  }
-
   res.json({
     success: true,
     data: obj
@@ -427,10 +391,12 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
   const { DepartmentRepository } = await import('../repositories/departmentRepository.js');
   const { PositionRepository } = await import('../repositories/positionRepository.js');
   const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
 
   const orgRepo = new OrganizationRepository(tenantDb);
   const departmentRepo = new DepartmentRepository(tenantDb);
   const positionRepo = new PositionRepository(tenantDb);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
   // Get organization
   const org = await orgRepo.findOne();
@@ -444,9 +410,18 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
   // Get all active positions
   const positions = await positionRepo.findByOrgId(org._id);
 
-  // Same board-level set as handbook / workflow board detection (see workflowBoardMember.js)
-  const { getBoardPositionIdsForOrg } = await import('../utils/workflowBoardMember.js');
-  const boardPositionIds = await getBoardPositionIdsForOrg(tenantDb, org._id);
+  // Determine which positions are held by active board members (is_board_member=true)
+  const boardMembers = await boardMemberRepo.BoardMember.find({
+    org_id: org._id,
+    is_active: true,
+    is_board_member: true,
+    position_id: { $ne: null }
+  }).lean();
+  const boardPositionIds = new Set(
+    boardMembers
+      .map((bm) => bm.position_id?.toString?.())
+      .filter(Boolean)
+  );
 
   // Group positions by department
   const departmentsWithRoles = departments.map(dept => {
@@ -870,13 +845,19 @@ export const uploadDirectorsHandbook = asyncHandler(async (req, res) => {
 export const viewDirectorsHandbook = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
   const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
-  const { userHoldsBoardLevelPosition } = await import('../utils/workflowBoardMember.js');
   const orgRepo = new OrganizationRepository(tenantDb);
   const org = await orgRepo.findOne();
   if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
 
-  const canViewHandbook = await userHoldsBoardLevelPosition(tenantDb, req.user?.userId, org._id);
+  const boardMemberRecords = await boardMemberRepo.findAllActiveByUserId(req.user?.userId, org._id);
+  const boardRoleRegex = /(board|director|trustee|committee)/i;
+  const canViewHandbook = Array.isArray(boardMemberRecords) && boardMemberRecords.some((bm) => {
+    if (bm?.is_board_member) return true;
+    const title = `${bm?.custom_position_title || ''} ${bm?.position || ''}`.trim();
+    return boardRoleRegex.test(title);
+  });
   if (!canViewHandbook) {
     throw new AppError('Only board members can view directors handbook', 403, 'FORBIDDEN');
   }

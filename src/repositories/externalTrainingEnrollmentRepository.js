@@ -27,6 +27,14 @@ export class ExternalTrainingEnrollmentRepository {
       const donorId = inv.donor_id ? String(inv.donor_id) : null;
 
       const token = crypto.randomBytes(24).toString('hex');
+      // Do not put `metadata` in both $setOnInsert and $set — MongoDB rejects that as a path conflict.
+      const metadata = {
+        invited_by_user_id: invitedByUserId || null,
+        recipient_type: recipientType,
+        board_member_id: boardMemberId,
+        donor_id: donorId
+      };
+
       const doc = await this.ExternalTrainingEnrollment.findOneAndUpdate(
         { training_program_id: programId, email },
         {
@@ -38,22 +46,11 @@ export class ExternalTrainingEnrollmentRepository {
             token,
             status: 'not_started',
             enrolled_at: new Date(),
-            progress: [],
-            metadata: {
-              invited_by_user_id: invitedByUserId || null,
-              recipient_type: recipientType,
-              board_member_id: boardMemberId,
-              donor_id: donorId
-            }
+            progress: []
           },
           $set: {
             name,
-            metadata: {
-              invited_by_user_id: invitedByUserId || null,
-              recipient_type: recipientType,
-              board_member_id: boardMemberId,
-              donor_id: donorId
-            }
+            metadata
           }
         },
         { upsert: true, new: true }

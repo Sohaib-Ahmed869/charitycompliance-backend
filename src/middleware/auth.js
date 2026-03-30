@@ -7,6 +7,7 @@
 
 import jwt from 'jsonwebtoken';
 import dotenv from 'dotenv';
+import { buildAuditorPermissions } from '../utils/auditorAccess.js';
 
 dotenv.config();
 
@@ -236,10 +237,14 @@ export const authenticate = async (req, res, next) => {
 
     const decodedRoles = decoded.roles || [];
     let effectivePermissions = decoded.permissions || [];
+    const isAuditor = decoded.isAuditor === true;
 
-    // For non-admin users, recompute permissions from DB on each request so that
-    // changes to position/module permissions take effect without requiring re-login.
-    if (!decodedRoles.includes('admin') && decoded.orgId && decoded.userId) {
+    // Auditors: fixed view-only permissions; never merge position-based runtime perms
+    if (isAuditor) {
+      effectivePermissions = buildAuditorPermissions();
+    } else if (!decodedRoles.includes('admin') && decoded.orgId && decoded.userId) {
+      // For non-admin users, recompute permissions from DB on each request so that
+      // changes to position/module permissions take effect without requiring re-login.
       const runtimePerms = await computeRuntimePermissionsForUser(decoded.userId, decoded.orgId);
       if (runtimePerms.length > 0) {
         // Include basic self permissions plus module permissions
@@ -253,14 +258,15 @@ export const authenticate = async (req, res, next) => {
       orgId: decoded.orgId,
       email: decoded.email,
       roles: decodedRoles,
-      permissions: effectivePermissions
+      permissions: effectivePermissions,
+      isAuditor
     };
 
     // Attach token for potential refresh
     req.token = token;
 
-    // Check if user's position has been fully transferred (non-admin only)
-    if (!decoded.roles?.includes('admin') && decoded.orgId) {
+    // Check if user's position has been fully transferred (non-admin only; auditors skip)
+    if (!isAuditor && !decoded.roles?.includes('admin') && decoded.orgId) {
       try {
         const isBlocked = await checkTransferredUser(decoded.userId, decoded.orgId);
         if (isBlocked) {
@@ -320,7 +326,8 @@ export const optionalAuth = async (req, res, next) => {
         orgId: decoded.orgId,
         email: decoded.email,
         roles: decoded.roles || [],
-        permissions: decoded.permissions || []
+        permissions: decoded.permissions || [],
+        isAuditor: decoded.isAuditor === true
       };
       req.token = token;
     }

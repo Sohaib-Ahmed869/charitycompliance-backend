@@ -39,6 +39,7 @@ const toName = (user) => {
 const toRole = (user) => {
   if (!user) return null;
   if (user.is_org_owner) return 'Admin';
+  if (user.is_auditor === true) return 'Auditor';
   return user.role || user.position || null;
 };
 
@@ -1103,11 +1104,11 @@ export const getAuditTrail = asyncHandler(async (req, res) => {
   const tenantDb = req.tenantDb || await getTenantConnection(orgId);
 
   // Access model:
-  // - Admin (org owner): can view all events or filter by selected user
+  // - Admin (org owner) or Auditor: can view all events or filter by selected user
   // - Non-admin: can only view their own actions
   const userRepo = new UserRepository(tenantDb);
   const user = await userRepo.findById(req.user?.userId);
-  const isAdmin = !!user?.is_org_owner;
+  const isAdmin = !!user?.is_org_owner || user?.is_auditor === true;
   const requestedUserId = String(req.query?.userId || '').trim();
   const actorFilterUserId = isAdmin
     ? (requestedUserId || null)
@@ -1160,11 +1161,11 @@ export const downloadAuditTrailPDF = asyncHandler(async (req, res) => {
   const { requestId } = req.params;
   const tenantDb = req.tenantDb || await getTenantConnection(orgId);
 
-  // Admin-only
+  // Admin or Auditor only
   const userRepo = new UserRepository(tenantDb);
   const user = await userRepo.findById(req.user?.userId);
-  if (!user?.is_org_owner) {
-    throw new AppError('Only admins can download audit trail PDFs', 403, 'ADMIN_ONLY');
+  if (!user?.is_org_owner && user?.is_auditor !== true) {
+    throw new AppError('Only admins or auditors can download audit trail PDFs', 403, 'ADMIN_ONLY');
   }
 
   const orgRepo = new OrganizationRepository(tenantDb);

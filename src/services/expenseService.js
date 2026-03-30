@@ -42,6 +42,14 @@ export class ExpenseService {
         throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
       }
 
+      if (project.delivery_status === 'delivered_and_handed_off') {
+        throw new AppError(
+          'Project delivery is locked; new expenses cannot be created',
+          403,
+          'PROJECT_DELIVERY_LOCKED'
+        );
+      }
+
       // If project is linked to a funding agreement and none was explicitly provided on the expense,
       // auto-populate the funding_agreement_id so fund utilization and approvals can see the link.
       if (!resolvedFundingAgreementId && project.agreement_id) {
@@ -497,6 +505,24 @@ export class ExpenseService {
       }
     }
 
+    // After marking as paid, see if the project is ready for handoff completion.
+    if (isAccept) {
+      try {
+        await this._maybeTriggerProjectDeliveryCompletion({
+          tenantDb,
+          expenseRepo,
+          expenseId,
+          updatedExpense,
+          userId
+        });
+      } catch (e) {
+        logError('Project delivery trigger failed after payment review accept', {
+          error: e?.message,
+          expenseId
+        });
+      }
+    }
+
     return updatedExpense;
   }
 
@@ -549,6 +575,96 @@ export class ExpenseService {
       userId 
     });
 
+    // After marking expense as paid, check if the project is ready for delivery handoff.
+    try {
+      await this._maybeTriggerProjectDeliveryCompletion({
+        tenantDb,
+        expenseRepo,
+        expenseId,
+        updatedExpense,
+        userId
+      });
+    } catch (e) {
+      // Do not fail payment proof submission if delivery trigger fails
+      logError('Project delivery trigger failed after payment proof', { error: e?.message, expenseId });
+    }
+
     return updatedExpense;
+  }
+
+  /**
+   * If a project has all (non-cancelled) expenses in `paid` state, trigger
+   * the project delivery completion workflow (request_type: `project_delivery`).
+   */
+  async _maybeTriggerProjectDeliveryCompletion({ tenantDb, expenseRepo, updatedExpense, userId }) {
+    const projectId = updatedExpense?.project_id?._id || updatedExpense?.project_id;
+    if (!projectId) return;
+
+    const Project = tenantDb.model('ProjectRegister');
+    const project = await Project.findById(projectId);
+    if (!project) return;
+
+    if (project.delivery_status === 'delivered_and_handed_off') return;
+    if (!project.planned_end_date && project.metadata?.needs_deadline) return;
+
+    const readiness = await expenseRepo.getProjectDeliveryReadiness(projectId);
+    const totalRelevant = Number(readiness?.totalRelevant || 0);
+    const paidRelevant = Number(readiness?.paidRelevant || 0);
+    if (totalRelevant <= 0) return;
+    if (paidRelevant !== totalRelevant) return;
+
+    // Only proceed when the *full project budget* is fully used (remaining = 0).
+    // If you want “under budget” refunds, the workflow starts after docs upload (handled elsewhere).
+    const FundingAgreement = tenantDb.model('FundingAgreement');
+    const agreement = project.agreement_id ? await FundingAgreement.findById(project.agreement_id) : null;
+    const budget = Number(agreement?.total_amount || 0);
+    const paidTotal = Number(readiness?.paidAmount || 0);
+    const remaining = Math.max(0, budget - paidTotal);
+    if (budget > 0 && remaining !== 0) return;
+
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    // If docs not uploaded yet, notify the user to upload acquittal packs.
+    if (!project.metadata?.delivery_materials_ready) {
+      try {
+        const notificationRepo = new NotificationRepository(tenantDb);
+        const alreadyNotifiedAt = project.metadata?.delivery_docs_notified_at;
+        if (!alreadyNotifiedAt) {
+          const recipients = new Set();
+          if (userId) recipients.add(String(userId));
+          const projectSubmitter = project.submitted_by?._id || project.submitted_by;
+          if (projectSubmitter) recipients.add(String(projectSubmitter));
+
+          if (recipients.size > 0) {
+            await notificationRepo.createMany(
+              [...recipients].map((uid) => ({
+                user_id: uid,
+                type: 'project_delivery_documents_required',
+                title: 'Project completion documents required',
+                message: `Project "${project.project_name}" is fully paid and budget is fully used. Please upload the acquittal pack to start delivery approval.`,
+                link: `/grants-donors/project-monitoring?projectId=${projectId}&action=delivery-docs`,
+                related_entity_id: projectId,
+                related_entity_type: 'project',
+                read: false,
+                created_at: new Date()
+              }))
+            );
+          }
+
+          await Project.findByIdAndUpdate(projectId, {
+            metadata: {
+              ...(project.metadata || {}),
+              delivery_docs_notified_at: new Date()
+            }
+          });
+        }
+      } catch (e) {
+        logError('Failed to create project delivery documents notification', { projectId, error: e?.message });
+      }
+      return;
+    }
+
+    // Do NOT auto-create delivery workflow here anymore.
+    // Delivery workflow is created after completion docs are submitted.
+    return;
   }
 }

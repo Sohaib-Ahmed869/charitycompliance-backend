@@ -5,6 +5,7 @@
  */
 
 import authService, { getPositionPermissionsForUser } from '../services/authService.js';
+import { buildAuditorPermissions } from '../utils/auditorAccess.js';
 import { asyncHandler, AppError } from '../middleware/errorHandler.js';
 import { getTenantConnection } from '../db/connectionManager.js';
 
@@ -149,15 +150,18 @@ export const refreshPermissions = asyncHandler(async (req, res) => {
     throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
   }
 
-  const positionPermissions = await getPositionPermissionsForUser(tenantDb, userId, org._id);
-
   let basePermissions;
   if (req.user?.roles?.includes('admin')) {
     basePermissions = ['*:*'];
-  } else if (positionPermissions.length > 0) {
-    basePermissions = ['read:own', 'write:own', ...positionPermissions];
+  } else if (req.user?.isAuditor) {
+    basePermissions = buildAuditorPermissions();
   } else {
-    basePermissions = ['read:own', 'write:own'];
+    const positionPermissions = await getPositionPermissionsForUser(tenantDb, userId, org._id);
+    if (positionPermissions.length > 0) {
+      basePermissions = ['read:own', 'write:own', ...positionPermissions];
+    } else {
+      basePermissions = ['read:own', 'write:own'];
+    }
   }
 
   res.json({

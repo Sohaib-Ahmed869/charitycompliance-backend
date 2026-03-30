@@ -23,8 +23,9 @@ const meetingSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
-  description: {
+  agenda: {
     type: String,
+    required: true,
     trim: true
   },
   date: {
