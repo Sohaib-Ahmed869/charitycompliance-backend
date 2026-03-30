@@ -80,10 +80,71 @@ router.post(
       .isFloat({ min: 0 })
       .withMessage('amount must be a non-negative number'),
     body('notes').optional().trim(),
+    body('box_still_at_location')
+      .custom((v) => v === true || v === false || v === 'true' || v === 'false')
+      .withMessage('box_still_at_location must be true or false'),
+    body('collector_acknowledgement')
+      .custom((v) => v === true || v === 'true')
+      .withMessage('The collector must acknowledge this collection'),
+    body('second_person_counted').optional().custom((v) => v === undefined || v === true || v === false || v === 'true' || v === 'false'),
+    // Empty string must skip isMongoId (e.g. placeholder before user picks someone)
+    body('second_counter_user_id').optional({ checkFalsy: true }).isMongoId().withMessage('second_counter_user_id must be a valid user id'),
   ],
   validate,
   requirePermission('module:donation_boxes:edit'),
   donationBoxController.addDonationBoxEntry
+);
+
+router.post(
+  '/:boxId/entries/:entryId/second-counter-ack',
+  [
+    param('boxId').isMongoId().withMessage('Invalid donation box ID'),
+    param('entryId').isMongoId().withMessage('Invalid entryId'),
+  ],
+  validate,
+  requirePermission('module:donation_boxes:edit'),
+  donationBoxController.acknowledgeSecondCounter
+);
+
+router.post(
+  '/:boxId/entries/:entryId/office-ack',
+  [
+    param('boxId').isMongoId().withMessage('Invalid donation box ID'),
+    param('entryId').isMongoId().withMessage('Invalid entryId'),
+  ],
+  validate,
+  requirePermission('module:donation_boxes:edit'),
+  donationBoxController.acknowledgeOfficeReceipt
+);
+
+router.post(
+  '/:boxId/entries/:entryId/assign-proof',
+  [
+    param('boxId').isMongoId().withMessage('Invalid donation box ID'),
+    param('entryId').isMongoId().withMessage('Invalid entryId'),
+    body('assigned_to').optional().isMongoId().withMessage('assigned_to must be a user id'),
+  ],
+  validate,
+  requirePermission('module:donation_boxes:edit'),
+  donationBoxController.assignDonationBoxEntryProof
+);
+
+router.post(
+  '/:boxId/entries/:entryId/upload-proof',
+  [
+    param('boxId').isMongoId().withMessage('Invalid donation box ID'),
+    param('entryId').isMongoId().withMessage('Invalid entryId'),
+    body('files').isArray().withMessage('files is required'),
+    body('files.*.url').optional().isString(),
+    body('files.*.key').optional().isString(),
+    body('files.*.name').optional().isString(),
+    body('files.*.file_name').optional().isString(),
+    body('files.*.size').optional().isNumeric(),
+    body('files.*.type').optional().isString(),
+  ],
+  validate,
+  requirePermission('module:donation_boxes:edit'),
+  donationBoxController.uploadDonationBoxEntryProof
 );
 
 export default router;

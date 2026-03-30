@@ -28,6 +28,99 @@ const donationBoxEntrySchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    /** Cash handling workflow (per collection entry). */
+    workflow_status: {
+      type: String,
+      enum: [
+        'awaiting_second_counter_ack',
+        'awaiting_office_ack',
+        'awaiting_deposit',
+        'completed',
+      ],
+      index: true,
+    },
+    /** Person who physically collected / emptied the box for this entry. */
+    collector_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+    collector_acknowledged_at: { type: Date },
+    collector_acknowledged_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    /** Optional: a second person counted the cash (segregation of duties). */
+    second_person_counted: { type: Boolean, default: false },
+    second_counter_user_id: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+    second_counter_acknowledged_at: { type: Date },
+    second_counter_acknowledged_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    /** Office receipt acknowledgement (different person from collector where possible). */
+    office_acknowledged_at: { type: Date },
+    office_acknowledged_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    /** Final bank deposit confirmation (deposit slip). */
+    deposit_confirmed_at: { type: Date },
+    deposit_confirmed_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    entry_closed_at: { type: Date },
+    entry_closed_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+    },
+    workflow_events: [
+      {
+        step: { type: String, default: '' },
+        action: { type: String, default: '' },
+        at: { type: Date, default: Date.now },
+        actor_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        note: { type: String, default: '' },
+      },
+    ],
+    /**
+     * If false, the physical box is no longer at the location — box record may be set inactive.
+     */
+    box_still_at_location: { type: Boolean },
+    proof_status: {
+      type: String,
+      enum: ['pending', 'submitted'],
+      default: 'pending',
+      index: true,
+    },
+    proof_assigned_to: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+    proof_files: [
+      {
+        name: { type: String, default: '' },
+        size: { type: Number, default: 0 },
+        type: { type: String, default: '' },
+        url: { type: String, default: '' },
+        key: { type: String, default: '' },
+        uploaded_at: { type: Date, default: Date.now },
+      },
+    ],
+    proof_added_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+    proof_added_at: {
+      type: Date,
+    },
     created_by: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

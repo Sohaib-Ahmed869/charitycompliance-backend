@@ -111,6 +111,7 @@ import donationBoxRoutes from './routes/platform/donationBoxRoutes.js';
 import socialMediaCampaignRoutes from './routes/platform/socialMediaCampaignRoutes.js';
 import disciplinaryRoutes from './routes/platform/disciplinaryRoutes.js';
 import volunteerRoutes from './routes/platform/volunteerRoutes.js';
+import projectDeliveryRoutes from './routes/platform/projectDeliveryRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -150,6 +151,7 @@ app.use('/api/v1/platform/legal-documents', legalDocumentRoutes);
 app.use('/api/v1/platform/dashboard', dashboardRoutes);
 app.use('/api/v1/platform/chatbot', chatbotRoutes);
 app.use('/api/v1/platform/volunteers', volunteerRoutes);
+app.use('/api/v1/platform/project-delivery', projectDeliveryRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

@@ -115,4 +115,36 @@ export class ProjectRegisterService {
     }
     return project;
   }
+
+  async updateProject(projectId, updateData = {}) {
+    const tenantDb = await this.getTenantDb();
+    const repo = new ProjectRegisterRepository(tenantDb);
+
+    const existing = await repo.findById(projectId);
+    if (!existing) {
+      throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+    }
+
+    if (existing.delivery_status === 'delivered_and_handed_off') {
+      throw new AppError(
+        'Project delivery is completed and cannot be modified',
+        403,
+        'PROJECT_DELIVERY_IMMUTABLE'
+      );
+    }
+
+    const payload = {
+      ...(updateData.project_name !== undefined ? { project_name: updateData.project_name } : {}),
+      ...(updateData.description !== undefined ? { description: updateData.description } : {}),
+      ...(updateData.planned_start_date !== undefined ? { planned_start_date: updateData.planned_start_date || null } : {}),
+      ...(updateData.planned_end_date !== undefined ? { planned_end_date: updateData.planned_end_date || null } : {}),
+      ...(updateData.status !== undefined ? { status: updateData.status } : {}),
+      ...(updateData.phase !== undefined ? { phase: updateData.phase } : {}),
+      ...(updateData.warning !== undefined ? { warning: updateData.warning } : {}),
+      ...(updateData.metadata !== undefined ? { metadata: updateData.metadata } : {})
+    };
+
+    const updated = await repo.update(projectId, payload);
+    return updated;
+  }
 }

@@ -74,3 +74,27 @@ export const getProjectById = asyncHandler(async (req, res) => {
     data: project
   });
 });
+
+export const updateProject = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        details: errors.array()
+      }
+    });
+  }
+
+  const orgId = req.orgId;
+  const { projectId } = req.params;
+  const service = new ProjectRegisterService(orgId);
+  const project = await service.updateProject(projectId, req.body || {});
+
+  res.json({
+    success: true,
+    data: project
+  });
+});

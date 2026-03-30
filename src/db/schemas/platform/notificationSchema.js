@@ -34,7 +34,16 @@ const notificationSchema = new mongoose.Schema({
       // Complaints
       'complaint_assigned',
       // Registration & Licenses
-      'registration_license_expiry_reminder'
+      'registration_license_expiry_reminder',
+      // Grants & Donors
+      'project_deadline_required',
+      // Project handoff / delivery
+      'project_refund_partner_receipts_required',
+      'project_delivery_changes_partner_explanation_required',
+      'project_refund_partner_receipts_submitted',
+      'project_delivery_changes_partner_explanation_submitted',
+      'project_delivery_documents_required',
+      'project_delivery_workflow_started'
     ],
     required: true,
     index: true

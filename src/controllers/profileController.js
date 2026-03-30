@@ -47,9 +47,11 @@ export const getProfile = asyncHandler(async (req, res) => {
   }
   const firstName = boardMember ? (boardMember.given_names || '') : (user.first_name || '');
   const lastName = boardMember ? (boardMember.family_name || '') : (user.last_name || '');
-  const position = boardMember
-    ? (boardMember.custom_position_title || boardMember.position || null)
-    : 'Admin';
+  const position = user.is_auditor
+    ? 'Auditor'
+    : boardMember
+      ? (boardMember.custom_position_title || boardMember.position || null)
+      : 'Admin';
   res.json({
     success: true,
     data: {

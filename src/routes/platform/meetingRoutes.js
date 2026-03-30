@@ -28,6 +28,7 @@ router.post(
   [
     body('meeting_type').isIn(['board_trustee', 'general', 'resolution']).withMessage('Invalid meeting type'),
     body('title').trim().notEmpty().withMessage('Title is required'),
+    body('agenda').trim().notEmpty().withMessage('Agenda is required'),
     body('date').isISO8601().withMessage('Valid date is required'),
     body('attendees').isArray().withMessage('Attendees must be an array'),
   ],

@@ -7,11 +7,29 @@
 import mongoose from 'mongoose';
 import { getTenantConnection } from '../db/connectionManager.js';
 import { DocumentRepository } from '../repositories/documentRepository.js';
+import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { OnboardingProgressRepository } from '../repositories/onboardingProgressRepository.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
 import { AppError } from '../middleware/errorHandler.js';
 import { uploadToS3, deleteFromS3, getFileUrl } from '../services/s3Service.js';
+
+const safeParseMetadata = (raw) => {
+  if (!raw) return {};
+  if (typeof raw === 'object') return raw;
+  if (typeof raw === 'string') {
+    try {
+      let parsed = JSON.parse(raw);
+      if (typeof parsed === 'string') {
+        parsed = JSON.parse(parsed);
+      }
+      return typeof parsed === 'object' && parsed ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+  return {};
+};
 
 export const getDocuments = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -146,6 +164,9 @@ export const createDocument = asyncHandler(async (req, res) => {
     effective_date: req.body.effective_date ? new Date(req.body.effective_date) : undefined,
     review_date: req.body.review_date ? new Date(req.body.review_date) : undefined,
     expiry_date: req.body.expiry_date ? new Date(req.body.expiry_date) : undefined
+    ,
+    status: req.body.status || 'submitted',
+    metadata: safeParseMetadata(req.body.metadata)
   });
 
   // Update progress if this is a governing document
@@ -192,6 +213,61 @@ export const updateDocument = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: document
+  });
+});
+
+export const reviewYearlyStatement = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { documentId } = req.params;
+  const userIdString = req.user?.userId || req.user?._id;
+  const signature = String(req.body?.signature || '').trim();
+
+  if (!signature) {
+    throw new AppError('Signature is required', 400, 'SIGNATURE_REQUIRED');
+  }
+
+  const tenantDb = await getTenantConnection(orgId);
+  const documentRepo = new DocumentRepository(tenantDb);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+
+  const doc = await documentRepo.findById(documentId);
+  if (!doc) {
+    throw new AppError('Document not found', 404, 'NOT_FOUND');
+  }
+  if (doc.category !== 'financial_statement') {
+    throw new AppError('Only yearly statements can be reviewed here', 400, 'INVALID_CATEGORY');
+  }
+
+  const assignedBoardMemberId = doc?.metadata?.reviewer_board_member_id;
+  if (!assignedBoardMemberId) {
+    throw new AppError('No board reviewer is assigned for this statement', 400, 'REVIEWER_NOT_ASSIGNED');
+  }
+
+  const boardMember = await boardMemberRepo.findByUserId(userIdString, doc.org_id);
+  if (!boardMember || String(boardMember._id) !== String(assignedBoardMemberId)) {
+    throw new AppError('Only the assigned board member can review and sign this statement', 403, 'NOT_ASSIGNED_REVIEWER');
+  }
+
+  const now = new Date();
+  const reviewerName = [boardMember.given_names, boardMember.family_name].filter(Boolean).join(' ').trim();
+  const mergedMetadata = {
+    ...(doc.metadata || {}),
+    review_status: 'reviewed',
+    reviewed_at: now.toISOString(),
+    reviewed_by_board_member_id: String(boardMember._id),
+    reviewed_by_user_id: userIdString ? String(userIdString) : null,
+    reviewed_by_name: reviewerName || 'Board Member',
+    review_signature: signature
+  };
+
+  const updated = await documentRepo.update(documentId, {
+    status: 'reviewed',
+    metadata: mergedMetadata
+  });
+
+  res.json({
+    success: true,
+    data: updated
   });
 });
 

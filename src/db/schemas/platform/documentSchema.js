@@ -108,8 +108,12 @@ const documentSchema = new mongoose.Schema({
   // Status
   status: {
     type: String,
-    enum: ['draft', 'submitted', 'approved', 'archived'],
+    enum: ['draft', 'submitted', 'review_pending', 'reviewed', 'approved', 'archived'],
     default: 'submitted'
+  },
+  metadata: {
+    type: mongoose.Schema.Types.Mixed,
+    default: {}
   },
   uploaded_by: {
     type: mongoose.Schema.Types.ObjectId,

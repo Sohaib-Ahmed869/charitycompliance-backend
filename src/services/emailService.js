@@ -26,9 +26,8 @@ const CONTAINER_GRADIENT = 'linear-gradient(180deg, #FFFFFF 0%, #FDFCFE 50%, #FA
  * @param {string} options.buttonLink - CTA button href
  * @param {string[]} options.infoBoxLines - Info box lines (array of strings)
  * @param {string} [options.rsvpButtonsHtml] - Optional RSVP Accept/Decline buttons HTML
- * @param {boolean} [options.omitPrimaryCta] - If true, skip the main gradient CTA button (use for volunteer-only emails)
  */
-function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, buttonLink, infoBoxLines, rsvpButtonsHtml, omitPrimaryCta = false }) {
+function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, buttonLink, infoBoxLines, rsvpButtonsHtml }) {
   const logoHtml = LOGO_URL
     ? `<img src="${LOGO_URL}" alt="${APP_NAME}" style="max-width: 160px; height: auto;" />`
     : `<span style="font-size: 32px; font-weight: 600; letter-spacing: 1px; color: #5B6B9D;">${APP_NAME.toLowerCase()}</span>`;
@@ -93,7 +92,6 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
                                 </tr>
                             </table>
                             
-                            ${!omitPrimaryCta && buttonText && buttonLink ? `
                             <!-- CTA Button -->
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
@@ -110,7 +108,6 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
                                     </td>
                                 </tr>
                             </table>
-                            ` : ''}
                             ${rsvpButtonsHtml || ''}
                             <!-- Info Box -->
                             ${infoBoxContent ? `
@@ -313,109 +310,42 @@ class EmailService {
    * @param {string} params.recipientName - Recipient's full name
    * @param {string} params.organizationName - Organization name
    * @param {string} params.position - Position/role title
-   * @param {string} [params.invitationToken] - Unique invitation token (omitted when volunteer has no system access)
+   * @param {string} params.invitationToken - Unique invitation token
    * @param {string} params.inviterName - Name of person who sent the invite
-   * @param {Object|null} params.volunteerActionLinks - { complaint, risk, coi } full URLs (reusable; no expiry on tokens)
    */
   async sendBoardMemberInvitation({ to, recipientName, organizationName, position, invitationToken, inviterName, volunteerActionLinks = null }) {
     const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const hasAccountInvite = !!invitationToken;
-    const inviteLink = hasAccountInvite ? `${baseUrl}/invitation/${invitationToken}` : baseUrl;
+    const inviteLink = `${baseUrl}/invitation/${invitationToken}`;
 
-    const esc = (s) => String(s ?? '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+    const subject = `You've been invited to join ${organizationName}`;
 
-    const hasVolunteerLinks =
-      volunteerActionLinks &&
-      typeof volunteerActionLinks === 'object' &&
-      volunteerActionLinks.complaint &&
-      volunteerActionLinks.risk &&
-      volunteerActionLinks.coi;
-
-    const volunteerBtn = (href, label, sub) => `
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom: 12px;">
-        <tr>
-          <td style="background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px; padding: 14px 16px;">
-            <table width="100%" cellpadding="0" cellspacing="0" border="0">
-              <tr>
-                <td style="vertical-align: middle;">
-                  <p style="margin: 0 0 2px 0; font-size: 13px; font-weight: 600; color: #0F172A;">${label}</p>
-                  <p style="margin: 0; font-size: 11px; color: #64748B; line-height: 1.4;">${sub}</p>
-                </td>
-                <td width="120" align="right" style="vertical-align: middle;">
-                  <a href="${href}" style="display: inline-block; background: linear-gradient(103.82deg, #132E5E 6.74%, #7C6FD6 76.18%); color: #FFFFFF; text-decoration: none; font-size: 12px; font-weight: 600; padding: 10px 16px; border-radius: 999px;">Open form ↗</a>
-                </td>
-              </tr>
-            </table>
-          </td>
-        </tr>
-      </table>`;
-
-    const volunteerLinksHtml = hasVolunteerLinks
+    const volunteerLinksHtml = volunteerActionLinks
       ? `
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 20px auto 8px; max-width: 520px;">
-        <tr>
-          <td style="background: linear-gradient(180deg, #EEF2FF 0%, #F8FAFC 100%); border: 1px solid #C7D2FE; border-radius: 14px; padding: 20px 18px;">
-            <p style="margin: 0 0 6px 0; font-size: 14px; font-weight: 700; color: #132E5E; text-align: left;">Your volunteer compliance forms</p>
-            <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 1.55; color: #475569; text-align: left;">These links are for you only. You can use them again anytime — save or bookmark this email. No login required for these forms.</p>
-            ${volunteerBtn(volunteerActionLinks.complaint, 'Submit a complaint', 'Raise a concern safely with the organisation.')}
-            ${volunteerBtn(volunteerActionLinks.risk, 'Report a risk', 'Flag a governance or operational risk.')}
-            ${volunteerBtn(volunteerActionLinks.coi, 'Declare a conflict of interest', 'Submit a COI declaration when required.')}
-          </td>
-        </tr>
-      </table>`
+      <div style="margin-top: 16px; text-align: left; max-width: 500px; margin-left: auto; margin-right: auto; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 12px;">
+        <p style="margin: 0 0 8px 0; font-size: 12px; color: #0F172A; font-weight: 600;">Volunteer quick actions</p>
+        <p style="margin: 0 0 6px 0; font-size: 12px;"><a href="${volunteerActionLinks.complaint}" style="color: #2563EB; text-decoration: none;">Submit a complaint</a></p>
+        <p style="margin: 0 0 6px 0; font-size: 12px;"><a href="${volunteerActionLinks.risk}" style="color: #2563EB; text-decoration: none;">Submit a risk</a></p>
+        <p style="margin: 0; font-size: 12px;"><a href="${volunteerActionLinks.coi}" style="color: #2563EB; text-decoration: none;">Declare conflict of interest (COI)</a></p>
+      </div>`
       : '';
 
-    const roleText = position
-      ? `as <strong>${esc(position)}</strong>`
-      : 'as a <strong>volunteer</strong>';
+    const roleText = position 
+      ? `as a <strong>${position}</strong>`
+      : `as a <strong>volunteer</strong>`;
 
-    const inviteSentence = inviterName
-      ? `<strong>${esc(inviterName)}</strong> has invited you`
-      : 'You have been invited';
-
-    let introParagraph = '';
-    if (hasVolunteerLinks && !hasAccountInvite) {
-      introParagraph = `
-      <p style="margin: 0 0 14px 0; font-size: 14px; line-height: 1.55; color: #334155; text-align: center; max-width: 520px;">Hi ${esc(recipientName)},</p>
-      <p style="margin: 0 0 14px 0; font-size: 13px; line-height: 1.6; color: #475569; text-align: center; max-width: 520px;">${inviteSentence} to support <strong>${esc(organizationName)}</strong> ${roleText}. Below are secure links to submit compliance information when you need to.</p>`;
-    } else {
-      introParagraph = `
-      <p style="margin: 0 0 14px 0; font-size: 14px; line-height: 1.55; color: #334155; text-align: center; max-width: 520px;">Hi ${esc(recipientName)},</p>
-      <p style="margin: 0 0 14px 0; font-size: 13px; line-height: 1.6; color: #475569; text-align: center; max-width: 520px;">${inviteSentence} to join <strong>${esc(organizationName)}</strong> ${roleText}.</p>
-      ${hasAccountInvite ? `<p style="margin: 0 0 14px 0; font-size: 13px; line-height: 1.6; color: #475569; text-align: center; max-width: 520px;">Use the button below to accept your invitation and set up your account.</p>` : ''}`;
-    }
-
-    const afterLinks = hasVolunteerLinks && hasAccountInvite
-      ? `<p style="margin: 16px 0 0 0; font-size: 12px; line-height: 1.55; color: #64748B; text-align: center; max-width: 520px;">After you join, you can still use the volunteer forms above anytime — they stay valid for you.</p>`
-      : '';
-
-    const bodyHtml = `${introParagraph}${volunteerLinksHtml}${afterLinks}`;
-
-    const subject =
-      hasVolunteerLinks && !hasAccountInvite
-        ? `${organizationName} — your volunteer compliance links`
-        : `You're invited to join ${organizationName}`;
-
-    const infoBoxLines = [];
-    if (hasVolunteerLinks) {
-      infoBoxLines.push('Volunteer form links are tied to you and stay valid for ongoing use — bookmark this email.');
-    }
-    if (hasAccountInvite) {
-      infoBoxLines.push('The account invitation button expires in 7 days.');
-    }
-    infoBoxLines.push("If you didn't expect this email, you can ignore it or contact your organisation.");
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${recipientName},</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">${inviterName ? `${inviterName} has invited you` : 'You have been invited'} to join <strong>${organizationName}</strong> ${roleText}.</p>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">To accept this invitation and set up your account, please click the button below:</p>
+      ${volunteerLinksHtml}
+    `;
 
     const html = buildEmailTemplate({
-      heading: hasVolunteerLinks && !hasAccountInvite ? 'Your volunteer links' : "You're invited",
+      heading: "You're Invited",
       bodyHtml,
-      buttonText: hasAccountInvite ? 'Accept invitation & set up account' : '',
-      buttonLink: hasAccountInvite ? inviteLink : '',
-      omitPrimaryCta: !hasAccountInvite,
-      infoBoxLines: infoBoxLines.length ? infoBoxLines : ["If you didn't expect this email, you can ignore it."]
+      buttonText: 'Accept Invitation',
+      buttonLink: inviteLink,
+      infoBoxLines: ["If you didn't expect this invitation, you can ignore this email.", "This link expires in 7 days."]
     });
 
     return this.sendEmail({ to, subject, html });
@@ -719,22 +649,20 @@ class EmailService {
     return this.sendEmail({ to, subject, html });
   }
 
-  async sendVolunteerPolicyNotification({ to, recipientName, policyTitle, acknowledgeUrl }) {
+  async sendVolunteerPolicyNotification({ to, recipientName, policyTitle, policyId }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const subject = `Policy update for acknowledgement: ${policyTitle}`;
     const bodyHtml = `
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName || 'Volunteer'},</p>
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">A policy relevant to you has been added or updated: <strong>${policyTitle}</strong>.</p>
-      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Use the secure link below to read the document and acknowledge — no login required. You can return to this link later; it stays valid for you.</p>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Please review and acknowledge it in the platform.</p>
     `;
     const html = buildEmailTemplate({
-      heading: 'Policy acknowledgement',
+      heading: 'Policy Acknowledgement Required',
       bodyHtml,
-      buttonText: 'Open & acknowledge policy',
-      buttonLink: acknowledgeUrl,
-      infoBoxLines: [
-        'This link is personal to you and does not require a platform login.',
-        'Your acknowledgement is recorded for compliance reporting.',
-      ],
+      buttonText: 'Review Policy',
+      buttonLink: `${baseUrl}/policies/acknowledge/${policyId}`,
+      infoBoxLines: ['Your acknowledgement is tracked for compliance reporting.'],
     });
     return this.sendEmail({ to, subject, html });
   }

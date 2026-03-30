@@ -31,6 +31,37 @@ export class ExpenseRepository {
       tenantDb.model('Expense', expenseSchema);
   }
 
+  /**
+   * Aggregate project expense readiness:
+   * - Project is ready when *every* expense is `status === 'paid'`
+   * - Any other status (including `cancelled`) blocks handoff.
+   */
+  async getProjectDeliveryReadiness(projectId) {
+    const objId = mongoose.Types.ObjectId.isValid(projectId)
+      ? new mongoose.Types.ObjectId(projectId)
+      : projectId;
+
+    const res = await this.Expense.aggregate([
+      { $match: { project_id: objId } },
+      {
+        $group: {
+          _id: null,
+          totalRelevant: { $sum: 1 },
+          paidRelevant: {
+            $sum: { $cond: [{ $eq: ['$status', 'paid'] }, 1, 0] }
+          },
+          paidAmount: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'paid'] }, { $ifNull: ['$amount', 0] }, 0]
+            }
+          }
+        }
+      }
+    ]);
+
+    return res[0] || { totalRelevant: 0, paidRelevant: 0, paidAmount: 0 };
+  }
+
   async findByOrgId(orgId, filters = {}) {
     const query = { org_id: orgId };
     

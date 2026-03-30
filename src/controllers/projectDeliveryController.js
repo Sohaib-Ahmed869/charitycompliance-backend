@@ -1,0 +1,615 @@
+/**
+ * Project delivery / handoff controller
+ *
+ * Provides:
+ * - Internal endpoints (auth required) to list refund + delivery change records per project.
+ * - Public “partner” endpoints (token-based, no auth) to store refund receipts/explanations.
+ */
+
+import { getTenantConnection } from '../db/connectionManager.js';
+import { asyncHandler } from '../middleware/errorHandler.js';
+import { ProjectRefundRepository } from '../repositories/projectRefundRepository.js';
+import { ProjectDeliveryChangeRepository } from '../repositories/projectDeliveryChangeRepository.js';
+import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
+import { NotificationRepository } from '../repositories/notificationRepository.js';
+import { OrganizationRepository } from '../repositories/organizationRepository.js';
+import { ProjectRegisterRepository } from '../repositories/projectRegisterRepository.js';
+import { ExpenseRepository } from '../repositories/expenseRepository.js';
+import { ApprovalWorkflowService } from '../services/approvalWorkflowService.js';
+import emailService from '../services/emailService.js';
+import { AppError } from '../middleware/errorHandler.js';
+import crypto from 'crypto';
+
+const parsePublicToken = (token, req) => {
+  // Expected format: "<orgKey>.<token>"
+  const [prefix, rest] = String(token || '').split('.', 2);
+  const orgKey = prefix || req?.headers?.['x-org-id'] || null;
+  if (!orgKey || !rest) return null;
+  return { orgKey, token: rest };
+};
+
+export const listProjectRefunds = asyncHandler(async (req, res) => {
+  const { projectId } = req.query;
+  const tenantDb = await getTenantConnection(req.orgId);
+  const repo = new ProjectRefundRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  const orgId = org?._id;
+
+  const records = await repo.findByOrgId(orgId, projectId || null);
+  res.json({ success: true, data: records || [] });
+});
+
+export const listProjectDeliveryChanges = asyncHandler(async (req, res) => {
+  const { projectId } = req.query;
+  const tenantDb = await getTenantConnection(req.orgId);
+  const repo = new ProjectDeliveryChangeRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  const orgId = org?._id;
+
+  const records = await repo.findByOrgId(orgId, projectId || null);
+  res.json({ success: true, data: records || [] });
+});
+
+export const submitRefundPartnerResponse = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+
+  const parsed = parsePublicToken(token, req);
+  if (!parsed) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_TOKEN', message: 'Invalid or missing token' }
+    });
+  }
+
+  const tenantDb = await getTenantConnection(parsed.orgKey);
+  const repo = new ProjectRefundRepository(tenantDb);
+  const record = await repo.findByToken(parsed.token, parsed.orgKey);
+  if (!record) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Refund token not found' }
+    });
+  }
+
+  // Basic validation / normalization
+  const notes = String(req.body?.notes || req.body?.explanation || req.body?.admin_notes || '').trim();
+  const receipts = Array.isArray(req.body?.receipts) ? req.body.receipts : [];
+
+  const normalizedReceipts = receipts
+    .map((r) => ({
+      file_name: String(r?.file_name || r?.fileName || r?.name || '').trim(),
+      data_url: String(r?.data_url || r?.dataUrl || r?.data || '').trim()
+    }))
+    .filter((r) => r.file_name || r.data_url);
+
+  const updated = await repo.updateById(record._id, {
+    status: 'partner_receipts_submitted',
+    partner_submission: {
+      submitted_at: new Date(),
+      notes: notes || '',
+      receipts: normalizedReceipts
+    }
+  });
+
+  // Create internal refunds workflow after partner submission (store-only first).
+  try {
+    let approvalRequestId = record.internal_approval_request_id || null;
+    if (!approvalRequestId) {
+      if (!record.initiated_by) {
+        throw new AppError(
+          'Refund process has not been initiated yet',
+          400,
+          'REFUND_NOT_INITIATED'
+        );
+      }
+      const workflowService = new ApprovalWorkflowService(parsed.orgKey);
+      const created = await workflowService.createProjectRefundApprovalRequest(
+        record.project_id,
+        Number(record.refund_amount || 0),
+        record.initiated_by
+      );
+      approvalRequestId = created?._id || null;
+      if (approvalRequestId) {
+        await repo.updateById(record._id, { internal_approval_request_id: approvalRequestId });
+      }
+    }
+
+    // Notify internal approvers (if workflow request exists)
+    if (approvalRequestId) {
+      const approvalRepo = new ApprovalRequestRepository(tenantDb);
+      const approval = await approvalRepo.findById(approvalRequestId);
+      const userIds = new Set();
+      (approval?.approval_steps || []).forEach((s) => {
+        const uid = s?.approver_user_id?._id || s?.approver_user_id;
+        if (uid) userIds.add(String(uid));
+      });
+
+      if (userIds.size > 0) {
+        const notificationRepo = new NotificationRepository(tenantDb);
+        await notificationRepo.createMany(
+          [...userIds].map((uid) => ({
+            user_id: uid,
+            type: 'project_refund_partner_receipts_submitted',
+            title: 'Refund receipts submitted',
+            message: 'A partner has submitted refund receipts. Please review and approve the refund workflow.',
+            link: `/approvals/${approvalRequestId}`,
+            related_entity_id: approvalRequestId,
+            related_entity_type: 'approval_request',
+            read: false,
+            created_at: new Date()
+          }))
+        );
+      }
+    }
+  } catch (_) {
+    // Do not fail partner submission if notifications fail
+  }
+
+  res.json({ success: true, data: updated });
+});
+
+export const initiateRefundProcess = asyncHandler(async (req, res) => {
+  const { refundId } = req.params;
+  const tenantDb = await getTenantConnection(req.orgId);
+  const repo = new ProjectRefundRepository(tenantDb);
+  const refund = await repo.ProjectRefund.findById(refundId).populate('agreement_id').lean();
+  if (!refund) throw new AppError('Refund record not found', 404, 'REFUND_NOT_FOUND');
+
+  if (refund.status === 'completed') {
+    throw new AppError('Refund is already completed', 400, 'REFUND_ALREADY_COMPLETED');
+  }
+  if (refund.status === 'partner_receipts_submitted') {
+    throw new AppError('Partner has already submitted receipts for this refund', 400, 'REFUND_ALREADY_SUBMITTED');
+  }
+
+  const agreement = refund.agreement_id || null;
+  let partnerEmail =
+    agreement?.metadata?.partner_email ||
+    agreement?.metadata?.partnerEmail ||
+    agreement?.metadata?.contact_email ||
+    agreement?.partner_email ||
+    '';
+
+  // Prefer partner vetting primary contact email.
+  const partnerNameRaw =
+    agreement?.partner_name ||
+    agreement?.metadata?.partner_name ||
+    agreement?.metadata?.partnerName ||
+    '';
+
+  if (!partnerEmail && partnerNameRaw) {
+    try {
+      const partnerVettingSchema = (await import('../db/schemas/platform/partnerVettingSchema.js')).default;
+      const PartnerVetting = tenantDb.models.PartnerVetting || tenantDb.model('PartnerVetting', partnerVettingSchema);
+      const escRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const name = String(partnerNameRaw || '').trim();
+      const rx = new RegExp(`^${escRegex(name)}$`, 'i');
+      const partner = await PartnerVetting.findOne({
+        status: 'approved',
+        $or: [
+          { organization_name: rx },
+          { trading_name: rx },
+          { 'metadata.organization_name': rx },
+          { 'metadata.trading_name': rx }
+        ]
+      }).sort({ updatedAt: -1, createdAt: -1 }).lean();
+      if (partner?.contact?.email) partnerEmail = String(partner.contact.email).trim();
+    } catch (_) {
+      // Ignore and continue with fallback values.
+    }
+  }
+
+  if (!partnerEmail || !String(partnerEmail).includes('@')) {
+    throw new AppError(
+      'Partner primary contact email is required in Partner Vetting before initiating refund process',
+      400,
+      'PARTNER_PRIMARY_CONTACT_EMAIL_REQUIRED'
+    );
+  }
+
+  const formLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/public/projects/refunds/${req.orgId}.${refund.token}`;
+  await emailService.sendProjectRefundExternalFormEmail({
+    to: partnerEmail,
+    recipientName: agreement?.partner_name || 'Partner',
+    projectName: refund?.project_id?.project_name || 'Project',
+    refundAmount: refund.refund_amount,
+    formLink
+  });
+
+  const updated = await repo.updateById(refundId, {
+    status: 'awaiting_partner_receipts',
+    initiated_at: new Date(),
+    initiated_by: req.user?.userId || req.userId || null,
+    partner_contact_email: partnerEmail
+  });
+
+  res.json({ success: true, data: updated });
+});
+
+export const submitDeliveryChangePartnerResponse = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+
+  const parsed = parsePublicToken(token, req);
+  if (!parsed) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_TOKEN', message: 'Invalid or missing token' }
+    });
+  }
+
+  const tenantDb = await getTenantConnection(parsed.orgKey);
+
+  const repo = new ProjectDeliveryChangeRepository(tenantDb);
+  const record = await repo.findByToken(parsed.token, parsed.orgKey);
+  if (!record) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Delivery change token not found' }
+    });
+  }
+
+  const notes = String(req.body?.notes || req.body?.explanation || req.body?.partner_notes || '').trim();
+  const receipts = Array.isArray(req.body?.receipts) ? req.body.receipts : [];
+
+  const normalizedReceipts = receipts
+    .map((r) => ({
+      file_name: String(r?.file_name || r?.fileName || r?.name || '').trim(),
+      data_url: String(r?.data_url || r?.dataUrl || r?.data || '').trim()
+    }))
+    .filter((r) => r.file_name || r.data_url);
+
+  const updated = await repo.updateById(record._id, {
+    status: 'partner_explanation_submitted',
+    partner_submission: {
+      submitted_at: new Date(),
+      notes: notes || '',
+      receipts: normalizedReceipts
+    }
+  });
+
+  // Notify internal approvers (if workflow request exists)
+  try {
+    if (record.internal_approval_request_id) {
+      const approvalRepo = new ApprovalRequestRepository(tenantDb);
+      const approval = await approvalRepo.findById(record.internal_approval_request_id);
+      const userIds = new Set();
+      (approval?.approval_steps || []).forEach((s) => {
+        const uid = s?.approver_user_id?._id || s?.approver_user_id;
+        if (uid) userIds.add(String(uid));
+      });
+
+      if (userIds.size > 0) {
+        const notificationRepo = new NotificationRepository(tenantDb);
+        await notificationRepo.createMany(
+          [...userIds].map((uid) => ({
+            user_id: uid,
+            type: 'project_delivery_changes_partner_explanation_submitted',
+            title: 'Budget exceed explanation submitted',
+            message: 'A partner has submitted the explanation and attachments for delivery changes. Please review and approve the workflow.',
+            link: `/approvals/${record.internal_approval_request_id}`,
+            related_entity_id: record.internal_approval_request_id,
+            related_entity_type: 'approval_request',
+            read: false,
+            created_at: new Date()
+          }))
+        );
+      }
+    }
+  } catch (_) {
+    // Ignore notification errors for partner submission
+  }
+
+  res.json({ success: true, data: updated });
+});
+
+/**
+ * Internal: submit project completion materials (e.g. acquittal reports).
+ * If all expenses are paid and materials are provided, this will create
+ * the `project_delivery` approval workflow (and keep the project unlockable
+ * until it is completed).
+ */
+export const submitProjectDeliveryMaterials = asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+
+  const tenantDb = await getTenantConnection(req.orgId);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+
+  const project = await projectRepo.findById(projectId);
+  if (!project) {
+    throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+  }
+
+  if (project.delivery_status === 'delivered_and_handed_off') {
+    throw new AppError('Project delivery is completed and materials cannot be updated', 403, 'PROJECT_DELIVERY_IMMUTABLE');
+  }
+
+  const userId = req.user?.userId || req.userId;
+  const files = Array.isArray(req.body?.files) ? req.body.files : [];
+  if (!project.metadata?.delivery_materials_ready && files.length === 0) {
+    throw new AppError('At least one acquittal document is required', 400, 'AQUITTAL_DOC_REQUIRED');
+  }
+
+  const normalizedFiles = files
+    .map((f) => ({
+      name: String(f?.file_name || f?.name || '').trim(),
+      url: String(f?.url || '').trim(),
+      key: String(f?.key || '').trim(),
+      size: Number(f?.size || 0),
+      type: String(f?.type || f?.file_type || '').trim()
+    }))
+    .filter((f) => f.name && f.url);
+
+  const existingFiles = Array.isArray(project?.metadata?.delivery_materials?.files)
+    ? project.metadata.delivery_materials.files
+    : [];
+  const mergedFiles = [...existingFiles, ...normalizedFiles].reduce((acc, f) => {
+    const key = String(f?.key || f?.url || f?.name || '').trim();
+    if (!key) return acc;
+    if (acc._seen.has(key)) return acc;
+    acc._seen.add(key);
+    acc.files.push(f);
+    return acc;
+  }, { _seen: new Set(), files: [] }).files;
+
+  const newMetadata = {
+    ...(project.metadata || {}),
+    delivery_materials_ready: true,
+    delivery_materials_submitted_at: new Date(),
+    // Store the S3 upload references here (URLs + keys).
+    delivery_materials: {
+      files: mergedFiles
+    }
+  };
+
+  let updatedProject = await projectRepo.update(projectId, { metadata: newMetadata });
+
+  // Only create project_delivery approval workflow after:
+  // - all expenses are paid
+  // - remaining budget is 0 (budget fully used)
+  const expenseRepo = new ExpenseRepository(tenantDb);
+  const readiness = await expenseRepo.getProjectDeliveryReadiness(projectId);
+  const totalRelevant = Number(readiness?.totalRelevant || 0);
+  const paidRelevant = Number(readiness?.paidRelevant || 0);
+  const paidTotal = Number(readiness?.paidAmount || 0);
+
+  const FundingAgreement = tenantDb.model('FundingAgreement');
+  const agreement = updatedProject.agreement_id ? await FundingAgreement.findById(updatedProject.agreement_id) : null;
+  const budget = Number(agreement?.total_amount || 0);
+  const remaining = Math.max(0, budget - paidTotal);
+
+  let createdApprovalRequest = null;
+  if (
+    totalRelevant > 0 &&
+    paidRelevant === totalRelevant &&
+    (budget <= 0 || remaining === 0) &&
+    updatedProject.delivery_status !== 'in_progress'
+  ) {
+    const workflowService = new ApprovalWorkflowService(req.orgId);
+    createdApprovalRequest = await workflowService.createProjectDeliveryCompletionRequest(projectId, userId);
+  }
+
+  if (createdApprovalRequest?._id) {
+    updatedProject = await projectRepo.update(projectId, {
+      metadata: {
+        ...(updatedProject.metadata || {}),
+        delivery_approval_request_id: createdApprovalRequest._id
+      }
+    });
+  }
+
+  res.json({
+    success: true,
+    data: {
+      project: updatedProject,
+      deliveryApprovalRequestId: createdApprovalRequest?._id || null
+    }
+  });
+});
+
+export const addProjectUpdateEntry = asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const tenantDb = await getTenantConnection(req.orgId);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+  const project = await projectRepo.findById(projectId);
+  if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+
+  const files = Array.isArray(req.body?.files) ? req.body.files : [];
+  const normalizedFiles = files
+    .map((f) => ({
+      name: String(f?.name || f?.file_name || '').trim(),
+      url: String(f?.url || '').trim(),
+      key: String(f?.key || '').trim(),
+      size: Number(f?.size || 0),
+      type: String(f?.type || '').trim()
+    }))
+    .filter((f) => f.name && f.url);
+
+  const updates = Array.isArray(project?.metadata?.project_updates)
+    ? [...project.metadata.project_updates]
+    : [];
+
+  updates.unshift({
+    id: crypto.randomBytes(10).toString('hex'),
+    entry_date: req.body?.entry_date ? new Date(req.body.entry_date) : new Date(),
+    title: String(req.body?.title || '').trim(),
+    entry_type: String(req.body?.entry_type || 'report').trim().toLowerCase() === 'media' ? 'media' : 'report',
+    notes: String(req.body?.notes || '').trim(),
+    files: normalizedFiles,
+    created_at: new Date(),
+    created_by: req.user?.userId || req.userId || null
+  });
+
+  const updated = await projectRepo.update(projectId, {
+    metadata: {
+      ...(project.metadata || {}),
+      project_updates: updates
+    }
+  });
+
+  res.json({ success: true, data: updated });
+});
+
+export const addProjectExtraExpense = asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const tenantDb = await getTenantConnection(req.orgId);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+  const project = await projectRepo.findById(projectId);
+  if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+
+  if (project.delivery_status === 'delivered_and_handed_off') {
+    throw new AppError('Project already delivered and handed off', 400, 'PROJECT_ALREADY_COMPLETED');
+  }
+
+  const amount = Number(req.body?.amount || 0);
+  if (!(amount > 0)) {
+    throw new AppError('Extra expense amount must be greater than 0', 400, 'INVALID_EXTRA_EXPENSE_AMOUNT');
+  }
+
+  const adminDetails = String(req.body?.admin_details || '').trim();
+  if (!adminDetails) {
+    throw new AppError('Extra expense details are required', 400, 'EXTRA_EXPENSE_DETAILS_REQUIRED');
+  }
+
+  const dcRepo = new ProjectDeliveryChangeRepository(tenantDb);
+  const existingActive = await dcRepo.findActiveByProjectId(projectId);
+  if (existingActive && existingActive.status !== 'completed') {
+    throw new AppError(
+      'There is already an extra expense request pending approval for this project',
+      400,
+      'PROJECT_EXTRA_EXPENSE_PENDING'
+    );
+  }
+
+  const workflowService = new ApprovalWorkflowService(req.orgId);
+  const approvalRequest = await workflowService.createProjectDeliveryChangesApprovalRequest(
+    projectId,
+    amount,
+    req.user?.userId || req.userId
+  );
+
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+
+  const dcRecord = await dcRepo.create({
+    org_key: req.orgId,
+    org_id: org?._id,
+    project_id: projectId,
+    agreement_id: project.agreement_id || null,
+    token: crypto.randomBytes(24).toString('hex'),
+    over_budget_amount: amount,
+    admin_details: adminDetails,
+    // For internal extra-expense requests, submission is already provided by admin.
+    status: 'partner_explanation_submitted',
+    partner_submission: {
+      submitted_at: new Date(),
+      notes: adminDetails,
+      receipts: []
+    },
+    internal_approval_request_id: approvalRequest?._id || null
+  });
+
+  res.json({
+    success: true,
+    data: {
+      deliveryChange: dcRecord,
+      approvalRequestId: approvalRequest?._id || null
+    }
+  });
+});
+
+export const completeProject = asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const tenantDb = await getTenantConnection(req.orgId);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+  const project = await projectRepo.findById(projectId);
+  if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+
+  if (project.delivery_status === 'delivered_and_handed_off') {
+    throw new AppError('Project already delivered and handed off', 400, 'PROJECT_ALREADY_COMPLETED');
+  }
+
+  const dcRepo = new ProjectDeliveryChangeRepository(tenantDb);
+  const activeDeliveryChange = await dcRepo.findActiveByProjectId(projectId);
+  if (activeDeliveryChange && activeDeliveryChange.status !== 'completed') {
+    throw new AppError(
+      'There is an extra expense for this project that is yet to be approved',
+      400,
+      'PROJECT_EXTRA_EXPENSE_PENDING'
+    );
+  }
+
+  if (!project.metadata?.delivery_materials_ready) {
+    throw new AppError(
+      'Upload acquittal documents before completing the project',
+      400,
+      'AQUITTAL_DOC_REQUIRED'
+    );
+  }
+
+  const expenseRepo = new ExpenseRepository(tenantDb);
+  const readiness = await expenseRepo.getProjectDeliveryReadiness(projectId);
+  const paidTotal = Number(readiness?.paidAmount || 0);
+
+  const FundingAgreement = tenantDb.model('FundingAgreement');
+  const agreement = project.agreement_id ? await FundingAgreement.findById(project.agreement_id) : null;
+  const budget = Number(agreement?.total_amount || 0);
+  const remaining = Math.max(0, budget - paidTotal);
+
+  // Create delivery workflow if not already active.
+  const workflowService = new ApprovalWorkflowService(req.orgId);
+  let deliveryApprovalRequestId = project.metadata?.delivery_approval_request_id || null;
+  if (project.delivery_status !== 'in_progress') {
+    const ar = await workflowService.createProjectDeliveryCompletionRequest(
+      projectId,
+      req.user?.userId || req.userId
+    );
+    deliveryApprovalRequestId = ar?._id || null;
+  }
+
+  // Create refund entity immediately when project is completed with remaining funds.
+  let refundRecord = null;
+  if (remaining > 0) {
+    const refundRepo = new ProjectRefundRepository(tenantDb);
+    const existingRefund = await refundRepo.findActiveByProjectId(projectId);
+    if (!existingRefund) {
+      const orgRepo = new OrganizationRepository(tenantDb);
+      const org = await orgRepo.findOne();
+      const token = crypto.randomBytes(24).toString('hex');
+
+      refundRecord = await refundRepo.create({
+        org_key: req.orgId,
+        org_id: org?._id,
+        project_id: projectId,
+        agreement_id: project.agreement_id || null,
+        token,
+        refund_amount: remaining,
+        admin_explanation: `Remaining fund after project completion: ${remaining}`,
+        status: 'pending_initiation'
+      });
+    } else {
+      refundRecord = existingRefund;
+    }
+  }
+
+  const updated = await projectRepo.update(projectId, {
+    status: 'completed',
+    metadata: {
+      ...(project.metadata || {}),
+      completed_requested_at: new Date(),
+      delivery_approval_request_id: deliveryApprovalRequestId
+    }
+  });
+
+  res.json({
+    success: true,
+    data: {
+      project: updated,
+      deliveryApprovalRequestId,
+      remaining_amount: remaining,
+      refund: refundRecord
+    }
+  });
+});
+

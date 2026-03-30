@@ -54,6 +54,16 @@ const projectRegisterSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Project handoff/delivery locking (set after completion workflow).
+  delivery_status: {
+    type: String,
+    enum: ['not_started', 'in_progress', 'delivered_and_handed_off'],
+    default: 'not_started',
+    index: true
+  },
+  delivery_locked_at: {
+    type: Date
+  },
   metadata: {
     type: mongoose.Schema.Types.Mixed
   }

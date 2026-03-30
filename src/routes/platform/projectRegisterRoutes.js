@@ -44,4 +44,21 @@ router.get(
   projectRegisterController.getProjectById
 );
 
+router.patch(
+  '/:projectId',
+  [
+    param('projectId').isMongoId().withMessage('Invalid project ID'),
+    body('project_name').optional().trim().notEmpty().withMessage('Project name cannot be empty'),
+    body('description').optional().isString(),
+    body('planned_start_date').optional({ nullable: true }).isISO8601().toDate(),
+    body('planned_end_date').optional({ nullable: true }).isISO8601().toDate(),
+    body('status').optional().isIn(['active', 'pending', 'at_risk', 'completed']),
+    body('phase').optional().isString(),
+    body('warning').optional().isString(),
+    body('metadata').optional().isObject()
+  ],
+  validate,
+  projectRegisterController.updateProject
+);
+
 export default router;

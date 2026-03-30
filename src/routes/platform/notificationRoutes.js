@@ -14,6 +14,19 @@ const router = express.Router();
 
 router.use(authAndResolveTenant);
 
+router.use((req, res, next) => {
+  if (req.user?.isAuditor) {
+    if (req.method === 'GET') {
+      return res.json({ success: true, data: [], unreadCount: 0 });
+    }
+    return res.status(403).json({
+      success: false,
+      error: 'Notifications are not available for auditor access.'
+    });
+  }
+  next();
+});
+
 router.get('/', notificationController.listNotifications);
 
 router.patch(

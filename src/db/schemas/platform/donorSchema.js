@@ -34,12 +34,6 @@ const donorSchema = new mongoose.Schema({
     enum: ['endorsed', 'not_applicable', 'pending', 'not_endorsed'],
     default: 'not_applicable'
   },
-  /** VIP donors get highlighted in the UI (no special workflow by default) */
-  vip: {
-    type: Boolean,
-    default: false,
-    index: true
-  },
   description: {
     type: String,
     trim: true

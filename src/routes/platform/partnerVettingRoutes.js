@@ -19,6 +19,15 @@ router.post(
   '/',
   [
     body('organization_name').trim().notEmpty().withMessage('Organization name is required'),
+    body('contact.email').optional().isEmail().withMessage('Primary contact email must be valid'),
+    body('contact_email').optional().isEmail().withMessage('Primary contact email must be valid'),
+    body().custom((value) => {
+      const email = value?.contact?.email || value?.contact_email || '';
+      if (!String(email).trim()) {
+        throw new Error('Primary contact email is required');
+      }
+      return true;
+    }),
     body('country').optional().trim(),
     body('status').optional().isIn(['pending', 'approved', 'rejected']),
     body('risk_rating').optional().isIn(['low', 'medium', 'high']),

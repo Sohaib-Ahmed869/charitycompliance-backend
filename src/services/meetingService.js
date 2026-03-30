@@ -99,7 +99,7 @@ export class MeetingService {
       created_by: createdBy,
       meeting_type: meetingData.meeting_type,
       title: meetingData.title,
-      description: meetingData.description,
+      agenda: meetingData.agenda,
       date: meetingData.date,
       duration_minutes: meetingData.duration_minutes || 60,
       location: meetingData.location,

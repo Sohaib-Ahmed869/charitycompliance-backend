@@ -408,6 +408,47 @@ export const getApprovalRequestById = asyncHandler(async (req, res) => {
   // Convert to plain object
   const doc = approvalRequest.toObject ? approvalRequest.toObject() : { ...approvalRequest };
 
+  // Attach project delivery change details so the approval UI can show
+  // extra amount + reason/context for project_delivery_changes workflows.
+  if (doc.request_type === 'project_delivery_changes') {
+    try {
+      const { ProjectDeliveryChangeRepository } = await import('../repositories/projectDeliveryChangeRepository.js');
+      const dcRepo = new ProjectDeliveryChangeRepository(tenantDb);
+      const dc = await dcRepo.ProjectDeliveryChange.findOne({
+        internal_approval_request_id: approvalRequest._id
+      })
+        .populate('project_id', 'project_name project_code')
+        .populate('agreement_id', 'agreement_title partner_name')
+        .lean();
+      if (dc) {
+        doc.project_delivery_change = dc;
+      }
+    } catch (_) {
+      // Non-blocking: keep approval details usable even if enrichment fails.
+    }
+  }
+
+  // Enrich donor refund approvals so Approval Detail can show entity details.
+  // Donor refund workflows currently use request_type "refunds" and store the
+  // donor-refund record id in entity_id (entity_type may be "other").
+  if (doc.request_type === 'refunds') {
+    try {
+      const { DonorRefundRepository } = await import('../repositories/donorRefundRepository.js');
+      const donorRefundRepo = new DonorRefundRepository(tenantDb);
+      const donorRefund = await donorRefundRepo.findById(doc.entity_id);
+      if (donorRefund) {
+        doc.donor_refund = donorRefund;
+        // Re-map for frontend detail rendering paths that expect donor entity.
+        if (donorRefund.donor_id?._id) {
+          doc.entity_type = 'donor';
+          doc.entity_id = donorRefund.donor_id._id;
+        }
+      }
+    } catch (_) {
+      // Non-blocking enrichment
+    }
+  }
+
   // Ensure acknowledgement_files from raw Mongo doc are present (bypass any Mongoose quirks)
   try {
     const raw = await approvalRequestRepo.ApprovalRequest.collection.findOne(

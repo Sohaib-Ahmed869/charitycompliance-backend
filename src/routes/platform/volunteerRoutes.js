@@ -9,8 +9,6 @@ import {
   submitVolunteerRisk,
   submitVolunteerCoi,
   getPublicDepartments,
-  streamVolunteerPolicyPdf,
-  acknowledgeVolunteerPolicy,
 } from '../../controllers/volunteerController.js';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
@@ -21,27 +19,11 @@ const router = express.Router();
 router.get(
   '/public/:actionType/:token/context',
   [
-    param('actionType').isIn(['complaint', 'risk', 'coi', 'policy_ack']).withMessage('Invalid action type'),
+    param('actionType').isIn(['complaint', 'risk', 'coi']).withMessage('Invalid action type'),
     param('token').notEmpty().withMessage('Token is required'),
   ],
   validate,
   getVolunteerActionContext
-);
-
-// Policy PDF for volunteer acknowledgement (no auth)
-router.get(
-  '/public/policy_ack/:token/pdf',
-  [param('token').notEmpty().withMessage('Token is required')],
-  validate,
-  streamVolunteerPolicyPdf
-);
-
-// Policy acknowledgement submit (no auth)
-router.post(
-  '/public/policy_ack/:token/acknowledge',
-  [param('token').notEmpty().withMessage('Token is required')],
-  validate,
-  acknowledgeVolunteerPolicy
 );
 
 // Get departments for public risk form (tied to public link token)

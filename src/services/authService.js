@@ -16,6 +16,7 @@ import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo, logWarn } from '../utils/logger.js';
 import { decrypt, isEncrypted } from '../utils/encryption.js';
 import emailService from './emailService.js';
+import { buildAuditorPermissions } from '../utils/auditorAccess.js';
 
 const SALT_ROUNDS = 12;
 const MAX_FAILED_ATTEMPTS = 5;
@@ -370,8 +371,8 @@ export class AuthService {
         );
       }
 
-      // Check if all of this user's positions have been transferred
-      if (!user.is_org_owner) {
+      // Check if all of this user's positions have been transferred (auditors are not on the board)
+      if (!user.is_org_owner && !user.is_auditor) {
         try {
           const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
           const bmRepo = new BoardMemberRepository(tenantDb);
@@ -407,6 +408,46 @@ export class AuthService {
 
       // Normalize orgId to lowercase for consistency (needed for both MFA and non-MFA paths)
       const normalizedOrgId = orgId.toLowerCase().trim();
+
+      // Auditors: view-only token, no MFA branch
+      if (user.is_auditor) {
+        const decryptedUser = await userRepo.findById(user._id);
+        const rawUserAud = decryptedUser.toObject ? decryptedUser.toObject() : decryptedUser;
+        const masterKeyHexAud = getMasterKeyHex();
+        if (!masterKeyHexAud) {
+          throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
+        }
+        const userObjAud = decryptUserFields(rawUserAud, masterKeyHexAud);
+        if (rawUserAud.email && isEncrypted(rawUserAud.email) && !userObjAud.email) {
+          userObjAud.email = email;
+        }
+        const auditorPerms = buildAuditorPermissions();
+        const token = generateToken({
+          userId: userObjAud._id.toString(),
+          orgId: normalizedOrgId,
+          email: userObjAud.email || email,
+          roles: ['auditor'],
+          permissions: auditorPerms,
+          isAuditor: true
+        });
+        logInfo('Auditor logged in', { userId: userObjAud._id, orgId: normalizedOrgId });
+        return {
+          user: {
+            id: userObjAud._id.toString(),
+            email: userObjAud.email || email,
+            firstName: userObjAud.first_name || '',
+            lastName: userObjAud.last_name || '',
+            role: 'auditor',
+            permissions: auditorPerms,
+            is_board_member: false,
+            is_auditor: true,
+            position: 'Auditor',
+            positions: [{ id: null, title: 'Auditor' }]
+          },
+          token,
+          orgId: normalizedOrgId
+        };
+      }
 
       // Check if MFA is enabled
       if (user.mfa_enabled) {
@@ -509,7 +550,8 @@ export class AuthService {
         orgId: normalizedOrgId,
         email: userObj.email || email,
         roles: baseRoles,
-        permissions: basePermissions
+        permissions: basePermissions,
+        isAuditor: false
       });
 
       logInfo('User logged in', { userId: userObj._id, orgId: normalizedOrgId });
@@ -521,7 +563,8 @@ export class AuthService {
         lastName: userObj.last_name || '',
         role: baseRoles[0] || 'board_member',
         permissions: basePermissions,
-        is_board_member: false
+        is_board_member: false,
+        is_auditor: false
       };
 
       const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
@@ -988,6 +1031,37 @@ export class AuthService {
     const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
     const orgRepo = new OrganizationRepository(tenantDb);
     const org = await orgRepo.findOne();
+
+    if (userObj.is_auditor) {
+      const auditorPerms = buildAuditorPermissions();
+      const token = generateToken({
+        userId: userObj._id.toString(),
+        orgId: normalizedOrgId,
+        email: userObj.email,
+        roles: ['auditor'],
+        permissions: auditorPerms,
+        isAuditor: true
+      });
+      const responseUser = {
+        id: userObj._id.toString(),
+        email: userObj.email || '',
+        firstName: userObj.first_name || '',
+        lastName: userObj.last_name || '',
+        role: 'auditor',
+        permissions: auditorPerms,
+        is_board_member: false,
+        is_auditor: true,
+        position: 'Auditor',
+        positions: [{ id: null, title: 'Auditor' }]
+      };
+      return {
+        token,
+        user: responseUser,
+        orgId: normalizedOrgId,
+        user_id: userObj._id.toString()
+      };
+    }
+
     const positionPermissions = org ? await getPositionPermissionsForUser(tenantDb, userObj._id, org._id) : [];
 
     let baseRoles;
@@ -1008,7 +1082,8 @@ export class AuthService {
       orgId: normalizedOrgId,
       email: userObj.email,
       roles: baseRoles,
-      permissions: basePermissions
+      permissions: basePermissions,
+      isAuditor: false
     });
 
     const responseUser = {
@@ -1018,7 +1093,8 @@ export class AuthService {
       lastName: userObj.last_name || '',
       role: baseRoles[0] || 'board_member',
       permissions: basePermissions,
-      is_board_member: false
+      is_board_member: false,
+      is_auditor: false
     };
 
     const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
