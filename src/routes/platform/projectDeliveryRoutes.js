@@ -155,6 +155,17 @@ router.post(
   projectDeliveryController.initiateRefundProcess
 );
 
+router.post(
+  '/refunds/:refundId/close',
+  [
+    param('refundId').isMongoId().withMessage('Invalid refundId'),
+    body('signature_data_url').isString().trim().notEmpty().withMessage('signature_data_url is required'),
+    body('note').optional().isString()
+  ],
+  validate,
+  projectDeliveryController.closeRefundAndProject
+);
+
 router.get(
   '/delivery-changes',
   [

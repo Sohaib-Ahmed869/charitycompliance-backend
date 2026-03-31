@@ -81,6 +81,21 @@ const projectRefundSchema = new mongoose.Schema(
     },
     internal_approved_at: {
       type: Date
+    },
+    completed_at: {
+      type: Date
+    },
+    completed_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    completed_note: {
+      type: String,
+      default: ''
+    },
+    completed_signature_data: {
+      type: String,
+      default: ''
     }
   },
   {

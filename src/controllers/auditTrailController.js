@@ -1212,6 +1212,55 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
       }));
     }
   });
+
+  // ── Project refunds / close-outs ───────────────────────────────────────────
+  try {
+    const projectRefundSchema = (await import('../db/schemas/platform/projectRefundSchema.js')).default;
+    tenantDb.models.ProjectRefund || tenantDb.model('ProjectRefund', projectRefundSchema);
+    const ProjectRefund = tenantDb.model('ProjectRefund');
+
+    const refunds = await ProjectRefund.find({ org_id: org?._id })
+      .populate('project_id', 'project_name project_code agreement_title')
+      .populate('completed_by', 'first_name last_name email is_org_owner')
+      .lean();
+
+    (refunds || []).forEach((r) => {
+      const proj = r.project_id || null;
+      const actorUser = r.completed_by || null;
+      const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser) || 'System', role: toRole(actorUser) };
+      const title = proj?.project_name || proj?.agreement_title || 'Project';
+
+      if (r.partner_submission?.submitted_at) {
+        events.push(normalizeEvent({
+          id: `project-refund-receipts-submitted-${r._id}`,
+          timestamp: r.partner_submission.submitted_at,
+          actor: { id: null, name: 'External partner', role: null },
+          action: 'Refund receipts submitted',
+          module: 'project_delivery',
+          request_type: 'project_refund',
+          request_id: r._id?.toString(),
+          details: { title, amount: r.refund_amount ?? null, status: r.status || null },
+          source: 'project_refund'
+        }));
+      }
+
+      if (r.completed_at) {
+        events.push(normalizeEvent({
+          id: `project-closed-refund-${r._id}`,
+          timestamp: r.completed_at,
+          actor,
+          action: 'Project closed (refund sign-off)',
+          module: 'project_delivery',
+          request_type: 'project_refund',
+          request_id: r._id?.toString(),
+          details: { title, amount: r.refund_amount ?? null, note: r.completed_note || null, status: r.status || null },
+          source: 'project_refund'
+        }));
+      }
+    });
+  } catch (_) {
+    // Ignore audit enrichment failures
+  }
   return events;
 }
 
