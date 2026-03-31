@@ -392,16 +392,25 @@ export class MeetingService {
   /**
    * Update meeting status
    */
-  async updateMeetingStatus(meetingId, status) {
+  async updateMeetingStatus(meetingId, statusOrData) {
     const tenantDb = await this.getTenantDb();
     const meetingRepo = new MeetingRepository(tenantDb);
+
+    // Handle both string status and object with completion_audit
+    let status, updateData;
+    
+    if (typeof statusOrData === 'string') {
+      status = statusOrData;
+      updateData = { status, updated_at: new Date() };
+    } else {
+      status = statusOrData.status;
+      updateData = { ...statusOrData, updated_at: new Date() };
+    }
 
     const validStatuses = ['scheduled', 'in_progress', 'completed', 'cancelled'];
     if (!validStatuses.includes(status)) {
       throw new AppError('Invalid meeting status', 400, 'INVALID_STATUS');
     }
-
-    const updateData = { status, updated_at: new Date() };
 
     if (status === 'completed') {
       updateData.completed_at = new Date();

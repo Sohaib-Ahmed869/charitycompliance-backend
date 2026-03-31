@@ -53,6 +53,12 @@ router.post(
       .trim()
       .notEmpty()
       .withMessage('Invoice file is required'),
+    body('supplier_name')
+      .optional()
+      .trim(),
+    body('supplier_information')
+      .optional()
+      .trim(),
     body('status')
       .optional()
       .isIn(['draft', 'pending'])
@@ -125,6 +131,13 @@ router.put(
       .trim()
       .notEmpty()
       .withMessage('Description cannot be empty')
+    ,
+    body('supplier_name')
+      .optional()
+      .trim(),
+    body('supplier_information')
+      .optional()
+      .trim()
   ],
   validate,
   expenseController.updateExpense
@@ -213,7 +226,7 @@ router.post(
       .trim()
       .notEmpty()
       .withMessage('Payment method is required')
-      .isIn(['Bank Transfer', 'Cash', 'Check', 'Credit Card', 'Debit Card', 'Online Payment', 'Other'])
+      .isString()
       .withMessage('Invalid payment method'),
     body('payments.*.payment_proof')
       .trim()
@@ -272,7 +285,7 @@ router.post(
       .trim()
       .notEmpty()
       .withMessage('Payment method is required')
-      .isIn(['Bank Transfer', 'Cash', 'Check', 'Credit Card', 'Debit Card', 'Online Payment', 'Other'])
+      .isString()
       .withMessage('Invalid payment method'),
     body('payment_proof')
       .trim()

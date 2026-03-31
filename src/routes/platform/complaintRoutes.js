@@ -246,6 +246,17 @@ router.post(
   complaintController.adminRejectComplaint
 );
 
+// Mark as Invalid/Non-Substantial
+router.post(
+  '/:complaintId/workflow/mark-invalid',
+  [
+    param('complaintId').notEmpty().withMessage('Complaint ID is required'),
+    body('reason').trim().notEmpty().withMessage('Reason is required'),
+  ],
+  validate,
+  complaintController.markComplaintInvalid
+);
+
 // Dept Head Approval
 router.post(
   '/:complaintId/workflow/dept-head-approve',

@@ -5,6 +5,8 @@
 
 import puppeteer from 'puppeteer';
 import { resolveLogoSrcForPdf } from '../utils/pdfLogo.js';
+import { generateApprovalFlowchart } from '../utils/approvalFlowchart.js';
+import { getFileUrl } from './s3Service.js';
 
 /* ── Helpers ────────────────────────────────────────── */
 
@@ -64,12 +66,81 @@ const GOVERNANCE_LABELS = {
 };
 
 /**
+ * Refresh all S3 file URLs in approval request to ensure they are not expired
+ * Presigned URLs expire after 7 days, so we regenerate them at PDF export time
+ */
+async function refreshApprovalFileUrls(approvalRequest) {
+  try {
+    // Process approval steps
+    if (Array.isArray(approvalRequest.approval_steps)) {
+      for (const step of approvalRequest.approval_steps) {
+        // Refresh acknowledgement files
+        if (Array.isArray(step.acknowledgement_files)) {
+          for (const file of step.acknowledgement_files) {
+            if (file.key) {
+              file.url = await getFileUrl(file.key, 604800); // 7 days
+            }
+          }
+        }
+        // Refresh rejection review files
+        if (Array.isArray(step.rejection_reviews)) {
+          for (const review of step.rejection_reviews) {
+            if (Array.isArray(review.rejection_files)) {
+              for (const file of review.rejection_files) {
+                if (file.key) {
+                  file.url = await getFileUrl(file.key, 604800);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Refresh escalation files
+    if (Array.isArray(approvalRequest.escalations)) {
+      for (const esc of approvalRequest.escalations) {
+        if (Array.isArray(esc.escalation_files)) {
+          for (const file of esc.escalation_files) {
+            if (file.key) {
+              file.url = await getFileUrl(file.key, 604800);
+            }
+          }
+        }
+      }
+    }
+
+    // Refresh request-level rejection review files
+    if (Array.isArray(approvalRequest.rejection_reviews)) {
+      for (const rr of approvalRequest.rejection_reviews) {
+        if (Array.isArray(rr.rejection_files)) {
+          for (const file of rr.rejection_files) {
+            if (file.key) {
+              file.url = await getFileUrl(file.key, 604800);
+            }
+          }
+        }
+      }
+    }
+
+    return approvalRequest;
+  } catch (error) {
+    // Log error but don't fail PDF generation if URL refresh fails
+    console.error('Warning: Could not refresh some S3 URLs for PDF:', error.message);
+    return approvalRequest;
+  }
+}
+
+/**
  * @param {Object} approvalRequest – Full approval request (populated)
  * @param {Object} expense         – Expense entity (or null)
  * @param {Object} risk            – Risk entity (or null)
  * @param {string} logoUrl
  */
 export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUrl) => {
+  // Refresh all S3 file URLs to ensure they are not expired
+  approvalRequest = await refreshApprovalFileUrls(approvalRequest);
+
   const logoSrc = await resolveLogoSrcForPdf(logoUrl);
 
   const browser = await puppeteer.launch({
@@ -435,6 +506,24 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
     }
     
     .footer p { margin: 5px 0; }
+    
+    /* Flowchart styles */
+    svg {
+      display: block;
+      margin: 15px auto;
+      background: white;
+      border-radius: 8px;
+      overflow: visible;
+    }
+    
+    .flowchart-container {
+      overflow-x: auto;
+      margin: 15px 0;
+      padding: 10px;
+      background: #fafbfc;
+      border-radius: 8px;
+      border: 1px solid #e2e8f0;
+    }
   </style>
 </head>
 <body>
@@ -457,6 +546,11 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
     </table>
 
     ${entityHTML}
+
+    <h2>Approval Journey</h2>
+    <div class="flowchart-container">
+      ${generateApprovalFlowchart(approvalRequest)}
+    </div>
 
     <h2>Approval Steps (${steps.length})</h2>
     <table>

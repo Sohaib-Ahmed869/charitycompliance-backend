@@ -679,6 +679,7 @@ const PRIORITY_LEVEL_MAP = { high: 3, medium: 2, low: 1 };
 
 export const createApprovalMatrix = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
+  const userId = req.user?.userId || null;
   const { name, action_type, priority, priority_level, description, positions, workflow_category, workflow_type, effective_from, effective_to } = req.body;
 
   const tenantDb = await getTenantConnection(orgId);
@@ -782,7 +783,9 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
     priority_level: priority_level || null,
     rules: [rule],
     is_default: false,
-    is_active: true
+    is_active: true,
+    created_by: userId,
+    updated_by: userId
   };
 
   // Add optional fields
@@ -827,6 +830,7 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
 export const updateApprovalMatrix = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { matrixId } = req.params;
+  const userId = req.user?.userId || null;
   const { name, description, priority, priority_level, positions, workflow_category, workflow_type, effective_from, effective_to } = req.body;
 
   const tenantDb = await getTenantConnection(orgId);
@@ -942,6 +946,7 @@ export const updateApprovalMatrix = asyncHandler(async (req, res) => {
   }
 
   Object.assign(matrix, updateData);
+  if (userId) matrix.updated_by = userId;
   await matrix.save();
 
   res.json({
@@ -976,6 +981,7 @@ export const revokeApprovalMatrix = asyncHandler(async (req, res) => {
   matrix.is_active = false;
   matrix.revoked_at = new Date();
   matrix.revoked_by = userId;
+  if (userId) matrix.updated_by = userId;
   await matrix.save();
 
   res.json({ success: true, data: matrix });
@@ -1088,6 +1094,7 @@ export const approveRiskWithPriority = asyncHandler(async (req, res) => {
 
 export const updateWorkflowPositions = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
+  const userId = req.user?.userId || null;
   const { actionType } = req.params;
   const { positions } = req.body;
 
@@ -1175,6 +1182,7 @@ export const updateWorkflowPositions = asyncHandler(async (req, res) => {
   const rule = matrix.rules[ruleIndex];
   rule.requires_approval_from = requiresApprovalFrom;
   matrix.markModified('rules');
+  if (userId) matrix.updated_by = userId;
   await matrix.save();
 
   res.json({

@@ -500,8 +500,14 @@ class EmailService {
       ? `<p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Attendees:</strong> ${attendeeNames.slice(0, 5).join(', ')}${attendeeNames.length > 5 ? ` +${attendeeNames.length - 5} more` : ''}</p>`
       : '';
 
-    const agendaHtml = agenda && agenda.length > 0
-      ? `<div style="margin: 12px 0; text-align: left;"><p style="margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #333333;">Agenda:</p><ul style="margin: 0; padding-left: 20px;">${agenda.map(item => `<li style="font-size: 12px; color: #333333; margin: 4px 0;">${item}</li>`).join('')}</ul></div>`
+    const agendaItems = Array.isArray(agenda)
+      ? agenda
+      : typeof agenda === 'string' && agenda.trim()
+        ? [agenda.trim()]
+        : [];
+
+    const agendaHtml = agendaItems.length > 0
+      ? `<div style="margin: 12px 0; text-align: left;"><p style="margin: 0 0 6px 0; font-size: 12px; font-weight: 600; color: #333333;">Agenda:</p><ul style="margin: 0; padding-left: 20px;">${agendaItems.map(item => `<li style="font-size: 12px; color: #333333; margin: 4px 0;">${item}</li>`).join('')}</ul></div>`
       : '';
 
     const meetingLinkHtml = meetingLink
@@ -664,6 +670,237 @@ class EmailService {
       buttonLink: `${baseUrl}/policies/acknowledge/${policyId}`,
       infoBoxLines: ['Your acknowledgement is tracked for compliance reporting.'],
     });
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
+   * Send approval request email (notify assignees that action is required)
+   * @param {Object} params
+   * @param {string} params.to - Recipient email
+   * @param {string} params.recipientName - Recipient's name
+   * @param {string} params.approvalRequestId - Approval request ID
+   * @param {string} params.requestType - Type of request (expense, risk, policy, etc.)
+   * @param {string} params.entityTitle - Title/description of the entity being approved
+   * @param {number} params.approvalLevel - What level this approver is at
+   * @param {string} params.submitterName - Name of person who submitted
+   * @param {string} params.approvalType - Sequential, parallel, or any
+   */
+  async sendApprovalRequestEmail({ to, recipientName, approvalRequestId, requestType, entityTitle, approvalLevel, submitterName, approvalType = 'sequential' }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const approvalLink = `${baseUrl}/approvals/${approvalRequestId}`;
+    
+    const typeLabel = {
+      expense: 'Expense',
+      purchase: 'Purchase',
+      risk: 'Risk',
+      policy: 'Policy',
+      grant: 'Grant',
+      funding: 'Funding Agreement',
+      donation: 'Donation',
+      contract: 'Contract',
+      complaint: 'Complaint'
+    }[requestType] || requestType.charAt(0).toUpperCase() + requestType.slice(1);
+
+    const subject = `Action Required: ${typeLabel} approval - ${entityTitle}`;
+
+    const urgencyText = approvalType === 'sequential' 
+      ? 'This is a sequential approval workflow. You are step ' + approvalLevel + '.'
+      : 'You are one of the approvers for this request.';
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
+      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">A new <strong>${typeLabel}</strong> approval request requires your action. ${submitterName ? `<strong>${submitterName}</strong> submitted it.` : ''}</p>
+      <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
+        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #132E5E;">Request Details:</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Type:</strong> ${typeLabel}</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Item:</strong> ${entityTitle}</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Your Role:</strong> Level ${approvalLevel} approver - ${urgencyText}</p>
+      </div>
+    `;
+
+    const html = buildEmailTemplate({
+      heading: 'New Approval Required',
+      bodyHtml,
+      buttonText: 'Review & Approve',
+      buttonLink: approvalLink,
+      infoBoxLines: [
+        'Please review all details carefully before making your decision.',
+        'Your approval can be approved, rejected, or escalated for additional opinion.'
+      ]
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
+   * Send approval decision email (notify submitter and other stakeholders)
+   * @param {Object} params
+   * @param {string} params.to - Recipient email
+   * @param {string} params.recipientName - Recipient's name
+   * @param {string} params.approvalRequestId - Approval request ID
+   * @param {string} params.requestType - Type of request
+   * @param {string} params.entityTitle - Title of entity
+   * @param {string} params.decision - 'approved' or 'rejected'
+   * @param {string} params.decidedByName - Name of approver who made decision
+   * @param {string} params.comments - Any comments/rejection reason
+   * @param {number} [params.remainingSteps] - Number of steps remaining (for sequential)
+   */
+  async sendApprovalDecisionEmail({ to, recipientName, approvalRequestId, requestType, entityTitle, decision, decidedByName, comments, remainingSteps }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const approvalLink = `${baseUrl}/approvals/${approvalRequestId}`;
+
+    const typeLabel = {
+      expense: 'Expense',
+      purchase: 'Purchase',
+      risk: 'Risk',
+      policy: 'Policy',
+      grant: 'Grant',
+      funding: 'Funding Agreement',
+      donation: 'Donation',
+      contract: 'Contract',
+      complaint: 'Complaint'
+    }[requestType] || requestType.charAt(0).toUpperCase() + requestType.slice(1);
+
+    const isApproved = decision === 'approved';
+    const subject = `${typeLabel} ${isApproved ? 'Approved' : 'Rejected'}: ${entityTitle}`;
+    
+    const statusColor = isApproved ? '#10B981' : '#EF4444';
+    const statusText = isApproved ? 'APPROVED' : 'REJECTED';
+    const statusBg = isApproved ? '#D1FAE5' : '#FEE2E2';
+    
+    const stepsInfo = remainingSteps !== undefined && !isApproved
+      ? `<p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Remaining Steps:</strong> ${remainingSteps}</p>`
+      : '';
+
+    const commentsSection = comments
+      ? `<p style="margin: 12px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Comments:</strong></p><p style="margin: 0; padding: 8px; background: #F3F4F6; border-left: 3px solid ${statusColor}; font-size: 12px; color: #333333;">${comments}</p>`
+      : '';
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
+      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;"><strong>${decidedByName}</strong> has <strong>${isApproved ? 'approved' : 'rejected'}</strong> the ${typeLabel.toLowerCase()} for <strong>${entityTitle}</strong>.</p>
+      <div style="background: ${statusBg}; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: center; border: 2px solid ${statusColor};">
+        <p style="margin: 0; font-size: 16px; font-weight: 700; color: ${statusColor};">${statusText}</p>
+      </div>
+      <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
+        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #132E5E;">Decision Details:</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Request:</strong> ${entityTitle}</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Decided By:</strong> ${decidedByName}</p>
+        ${stepsInfo}
+        ${commentsSection}
+      </div>
+    `;
+
+    const html = buildEmailTemplate({
+      heading: isApproved ? 'Request Approved' : 'Request Declined',
+      bodyHtml,
+      buttonText: 'View Details',
+      buttonLink: approvalLink,
+      infoBoxLines: isApproved 
+        ? ['Your request has been approved. Next steps will follow.']
+        : ['Please review the comments and take any necessary action.']
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
+   * Send escalation request email (request opinion from colleague)
+   * @param {Object} params
+   * @param {string} params.to - Recipient email
+   * @param {string} params.recipientName - Recipient's name
+   * @param {string} params.approvalRequestId - Approval request ID
+   * @param {string} params.requestType - Type of request
+   * @param {string} params.entityTitle - Title of entity
+   * @param {string} params.escalatedByName - Name of person requesting opinion
+   * @param {string} params.requestComments - Comments/context for the escalation
+   */
+  async sendEscalationRequestEmail({ to, recipientName, approvalRequestId, requestType, entityTitle, escalatedByName, requestComments }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const approvalLink = `${baseUrl}/approvals/${approvalRequestId}`;
+
+    const typeLabel = {
+      expense: 'Expense',
+      purchase: 'Purchase',
+      risk: 'Risk',
+      policy: 'Policy',
+      grant: 'Grant',
+      funding: 'Funding Agreement',
+      donation: 'Donation',
+      contract: 'Contract',
+      complaint: 'Complaint'
+    }[requestType] || requestType.charAt(0).toUpperCase() + requestType.slice(1);
+
+    const subject = `Opinion Requested: ${typeLabel} review - ${entityTitle}`;
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
+      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;"><strong>${escalatedByName}</strong> is requesting your input/opinion on a ${typeLabel.toLowerCase()} before they make their final decision.</p>
+      <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
+        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #132E5E;">Request for Opinion:</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Request Type:</strong> ${typeLabel}</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Item:</strong> ${entityTitle}</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Requested By:</strong> ${escalatedByName}</p>
+        ${requestComments ? `<p style="margin: 12px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Context:</strong></p><p style="margin: 0; padding: 8px; background: #FFFFFF; border-left: 3px solid #9A78EC; font-size: 12px; color: #333333;">${requestComments}</p>` : ''}
+      </div>
+    `;
+
+    const html = buildEmailTemplate({
+      heading: 'Your Opinion Requested',
+      bodyHtml,
+      buttonText: 'Provide Your Input',
+      buttonLink: approvalLink,
+      infoBoxLines: [
+        'Your opinion will help the approver make a better decision.',
+        'They will proceed with the approval once you respond.'
+      ]
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  async sendProjectRefundExternalFormEmail({ to, recipientName, projectName, refundAmount, formLink }) {
+    const subject = `Refund receipts required: ${projectName}`;
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${recipientName || 'Partner'},</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Please submit the refund receipts/payment proof for <strong>${projectName || 'your project'}</strong>${refundAmount ? ` (refund amount: <strong>${refundAmount}</strong>)` : ''}.</p>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Use the button below to upload receipts and add any notes.</p>
+    `;
+
+    const html = buildEmailTemplate({
+      heading: 'Refund receipts required',
+      bodyHtml,
+      buttonText: 'Submit receipts',
+      buttonLink: formLink,
+      infoBoxLines: [
+        "If you didn't expect this request, please contact the organisation.",
+        'This link may be used to submit your receipts once.'
+      ]
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  async sendProjectProgressReportExternalFormEmail({ to, recipientName, projectName, reportType, formLink }) {
+    const label = String(reportType || 'interim').toLowerCase() === 'final' ? 'Final' : 'Interim';
+    const subject = `${label} progress report required: ${projectName}`;
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${recipientName || 'Partner'},</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Please submit the <strong>${label.toLowerCase()}</strong> progress report for <strong>${projectName || 'your project'}</strong>.</p>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">This report includes project narrative, impact, financials (if final), acquittals/invoices, and media.</p>
+    `;
+
+    const html = buildEmailTemplate({
+      heading: `${label} Progress Report`,
+      bodyHtml,
+      buttonText: 'Submit report',
+      buttonLink: formLink,
+      infoBoxLines: [
+        'Please submit accurate information and attach any supporting files.',
+        'If you cannot access the link, contact the organisation for a new request.'
+      ]
+    });
+
     return this.sendEmail({ to, subject, html });
   }
 }

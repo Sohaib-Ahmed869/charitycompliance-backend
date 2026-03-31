@@ -62,15 +62,31 @@ export class ComplaintRepository {
     }
 
     return await this.Complaint.find(query)
-      .populate('assigned_to', 'first_name last_name email')
-      .populate('category', 'name')
+      .populate('assigned_to', 'first_name last_name email position')
+      .populate({
+        path: 'category',
+        select: 'name head_user_id head_position_id',
+        populate: [
+          { path: 'head_user_id', select: 'first_name last_name email position' },
+          { path: 'head_position_id', select: 'title code' }
+        ]
+      })
+      .populate('board_signoff_user_id', 'first_name last_name email position')
       .sort({ created_at: -1 });
   }
 
   async findById(complaintId) {
     return await this.Complaint.findById(complaintId)
-      .populate('assigned_to', 'first_name last_name email')
-      .populate('category', 'name');
+      .populate('assigned_to', 'first_name last_name email position')
+      .populate({
+        path: 'category',
+        select: 'name head_user_id head_position_id',
+        populate: [
+          { path: 'head_user_id', select: 'first_name last_name email position' },
+          { path: 'head_position_id', select: 'title code' }
+        ]
+      })
+      .populate('board_signoff_user_id', 'first_name last_name email position');
   }
 
   async update(complaintId, updateData) {
@@ -78,16 +94,32 @@ export class ComplaintRepository {
       complaintId,
       { ...updateData, updated_at: new Date() },
       { new: true }
-    ).populate('assigned_to', 'first_name last_name email')
-     .populate('category', 'name');
+    ).populate('assigned_to', 'first_name last_name email position')
+     .populate({
+       path: 'category',
+       select: 'name head_user_id head_position_id',
+       populate: [
+         { path: 'head_user_id', select: 'first_name last_name email position' },
+         { path: 'head_position_id', select: 'title code' }
+       ]
+     })
+     .populate('board_signoff_user_id', 'first_name last_name email position');
   }
 
   async updateWithOps(complaintId, ops = {}, options = {}) {
     const $set = { ...(ops.$set || {}), updated_at: new Date() };
     const update = { ...ops, $set };
     return await this.Complaint.findByIdAndUpdate(complaintId, update, { new: true, ...options })
-      .populate('assigned_to', 'first_name last_name email')
-      .populate('category', 'name');
+      .populate('assigned_to', 'first_name last_name email position')
+      .populate({
+        path: 'category',
+        select: 'name head_user_id head_position_id',
+        populate: [
+          { path: 'head_user_id', select: 'first_name last_name email position' },
+          { path: 'head_position_id', select: 'title code' }
+        ]
+      })
+      .populate('board_signoff_user_id', 'first_name last_name email position');
   }
 
   async delete(complaintId) {

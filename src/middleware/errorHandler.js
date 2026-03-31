@@ -96,6 +96,15 @@ export const errorHandler = (err, req, res, next) => {
     error = new AppError('Data decryption failed', 500, 'DECRYPTION_ERROR');
   }
 
+  // Body parser (payload too large)
+  if (err.type === 'entity.too.large' || err.status === 413) {
+    error = new AppError(
+      'Payload too large. Please upload smaller files or reduce attachments.',
+      413,
+      'PAYLOAD_TOO_LARGE'
+    );
+  }
+
   // Send error response
   const response = {
     success: false,

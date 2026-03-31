@@ -77,7 +77,15 @@ const createUserSchema = () => {
       },
       // Password reset
       password_reset_token: { type: String, default: null },
-      password_reset_expires: { type: Date, default: null }
+      password_reset_expires: { type: Date, default: null },
+
+      // Audit: who created this user (admin invite/manual create) or self (set to own id)
+      created_by: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        default: null,
+        index: true
+      }
     }, {
       timestamps: true
     });

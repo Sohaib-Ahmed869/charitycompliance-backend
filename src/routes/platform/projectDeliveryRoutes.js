@@ -34,8 +34,56 @@ router.post(
   projectDeliveryController.submitDeliveryChangePartnerResponse
 );
 
+router.post(
+  '/reports/public/:token/submit',
+  [
+    param('token').notEmpty().withMessage('Token is required'),
+    body('notes').optional().isString(),
+    body('attachments').optional().isArray(),
+  ],
+  validate,
+  projectDeliveryController.submitProgressReportPartnerResponse
+);
+
 // Internal endpoints (auth required)
 router.use(authAndResolveTenant);
+
+router.post(
+  '/:projectId/progress-reports/initiate',
+  [
+    param('projectId').isMongoId().withMessage('Invalid projectId'),
+    body('report_type').optional().isIn(['interim', 'final']).withMessage('report_type must be interim or final')
+  ],
+  validate,
+  projectDeliveryController.initiatePartnerProgressReport
+);
+
+router.post(
+  '/:projectId/progress-reports/:reportId/vet',
+  [
+    param('projectId').isMongoId().withMessage('Invalid projectId'),
+    param('reportId').notEmpty().withMessage('reportId is required'),
+    body('vetted').isBoolean().withMessage('vetted must be boolean'),
+    body('vetting_notes').optional().isString()
+  ],
+  validate,
+  projectDeliveryController.vetPartnerProgressReport
+);
+
+router.post(
+  '/:projectId/physical-monitoring',
+  [
+    param('projectId').isMongoId().withMessage('Invalid projectId'),
+    body('conducted').optional().isBoolean(),
+    body('conducted_by_name').optional().isString(),
+    body('conducted_by_role').optional().isString(),
+    body('signoff_name').optional().isString(),
+    body('signoff_title').optional().isString(),
+    body('signature_data_url').optional().isString()
+  ],
+  validate,
+  projectDeliveryController.setPhysicalMonitoring
+);
 
 router.post(
   '/:projectId/updates',

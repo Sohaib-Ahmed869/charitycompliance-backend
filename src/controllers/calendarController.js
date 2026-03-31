@@ -17,6 +17,15 @@ const toISODate = (d) => {
   return isNaN(date.getTime()) ? null : date.toISOString();
 };
 
+/** Set a date to 9:00 AM - used for expiring items to appear as earliest calendar entry */
+const setTimeToNineAM = (d) => {
+  if (!d) return null;
+  const date = d instanceof Date ? d : new Date(d);
+  if (isNaN(date.getTime())) return null;
+  date.setHours(9, 0, 0, 0);
+  return date;
+};
+
 const hasModuleViewPermission = (permissions = [], moduleId) => {
   if (!Array.isArray(permissions)) return false;
   return permissions.includes('*:*') || permissions.includes(`module:${moduleId}:view`);
@@ -24,18 +33,22 @@ const hasModuleViewPermission = (permissions = [], moduleId) => {
 
 /**
  * Helper function to format an event for calendar display
+ * System events (expiring items) are normalized to 9:00 AM on the due date
  */
 const formatCalendarEvent = (event, type, sourceId = null) => {
   const date = event.date || event.review_date || event.term_end_date || event.end_date;
+  // For system-generated events, normalize to 9:00 AM
+  const normalizedDate = setTimeToNineAM(date);
   return {
     id: event._id?.toString() || sourceId,
     _id: event._id,
     title: event.title,
-    date: toISODate(date) || date,
+    date: toISODate(normalizedDate) || toISODate(date) || date,
     type,
     description: event.description || `${type} event`,
     is_custom: false,
-    source: type
+    source: type,
+    source_id: event._id || sourceId
   };
 };
 
@@ -108,12 +121,17 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
       id: t._id?.toString(),
       type: 'training',
       is_custom: false,
-      source: 'training'
+      source: 'training',
+      date: toISODate(setTimeToNineAM(t.date)) || t.date
     }));
     // Training program renewal events: published_at/createdAt + renewal_months (org-wide)
     const programRenewalEvents = await calendarRepo.findTrainingProgramRenewalEvents(orgObjectId, dateOptions);
+    const normalizedProgramEvents = programRenewalEvents.map(pe => ({
+      ...pe,
+      date: toISODate(setTimeToNineAM(pe.date)) || pe.date
+    }));
    
-    trainingEvents = [...enrollmentTrainingEvents, ...programRenewalEvents];
+    trainingEvents = [...enrollmentTrainingEvents, ...normalizedProgramEvents];
    
   } catch (error) {
     logError('Error retrieving training events', { userId, orgId, error: error.message, stack: error.stack });
@@ -128,7 +146,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
         title: `${m.given_names} ${m.family_name} (${m.position}) - Term Ends`,
         date: m.term_end_date
       },
-      'compliance',
+      'board_member',
       m._id?.toString()
     ));
     logInfo('Board member events retrieved', { orgId, count: boardMemberEvents.length });
@@ -165,7 +183,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
           date: d.expiry_date,
           description: d.document_type || d.category
         },
-        'compliance',
+        'governance_structure',
         d._id?.toString()
       ));
       logInfo('Document expiry events retrieved', { orgId, count: documentEvents.length });
@@ -183,8 +201,8 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
           date: d.review_date || d.effective_date || d.date_adopted,
           description: d.document_type || d.category
         },
-        'compliance',
-        `gov-review:${d._id?.toString()}`
+        'governance_structure',
+        d._id?.toString()
       ));
       logInfo('Governing document review events retrieved', { orgId, count: governingReviewEvents.length });
     } catch (error) {
@@ -202,8 +220,8 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
           date: d.review_date || d.effective_date,
           description: d.category || 'legal document'
         },
-        'compliance',
-        `legal-review:${d._id?.toString()}`
+        'legal_document',
+        d._id?.toString()
       ));
       logInfo('Legal document review events retrieved', { orgId, count: legalReviewEvents.length });
     } catch (error) {

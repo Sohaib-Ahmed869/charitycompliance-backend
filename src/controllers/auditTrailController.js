@@ -29,11 +29,25 @@ import fundingAgreementSchema from '../db/schemas/platform/fundingAgreementSchem
 import projectRegisterSchema from '../db/schemas/platform/projectRegisterSchema.js';
 import assetSchema from '../db/schemas/platform/assetSchema.js';
 import supportTicketSchema from '../db/schemas/platform/supportTicketSchema.js';
+import approvalThresholdSchema from '../db/schemas/platform/approvalThresholdSchema.js';
+import { decrypt, isEncrypted } from '../utils/encryption.js';
+import { getMasterKeyHex } from '../config/encryption.js';
+import { decryptBoardMemberFields } from '../utils/decryptBoardMember.js';
 
 const toName = (user) => {
   if (!user) return '—';
-  const name = `${user.first_name || ''} ${user.last_name || ''}`.trim();
-  return name || user.email || '—';
+  const keyHex = getMasterKeyHex();
+  const first = (keyHex && user.first_name && typeof user.first_name === 'string' && isEncrypted(user.first_name))
+    ? (() => { try { return decrypt(user.first_name, keyHex); } catch (_) { return ''; } })()
+    : (user.first_name || '');
+  const last = (keyHex && user.last_name && typeof user.last_name === 'string' && isEncrypted(user.last_name))
+    ? (() => { try { return decrypt(user.last_name, keyHex); } catch (_) { return ''; } })()
+    : (user.last_name || '');
+  const email = (keyHex && user.email && typeof user.email === 'string' && isEncrypted(user.email))
+    ? (() => { try { return decrypt(user.email, keyHex); } catch (_) { return ''; } })()
+    : (user.email || '');
+  const name = `${first} ${last}`.trim();
+  return name || email || '—';
 };
 
 const toRole = (user) => {
@@ -131,6 +145,10 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
   const ProjectRegister = tenantDb.models.ProjectRegister || tenantDb.model('ProjectRegister', projectRegisterSchema);
   const Asset = tenantDb.models.Asset || tenantDb.model('Asset', assetSchema);
   const SupportTicket = tenantDb.models.SupportTicket || tenantDb.model('SupportTicket', supportTicketSchema);
+  const ApprovalThreshold = tenantDb.models.ApprovalThreshold || tenantDb.model('ApprovalThreshold', approvalThresholdSchema);
+  // Register User model (tenant)
+  new UserRepository(tenantDb);
+  const User = tenantDb.models.User;
 
   const approvalRepo = new ApprovalRequestRepository(tenantDb);
   // Use model directly to populate rejection reviews
@@ -580,7 +598,7 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
   });
 
   // Additional immutable-style operational events for weekly compliance reporting.
-  const [governingDocs, legalDocs, boardMembers, workflows, standaloneRisks, policyAcknowledgements, completedTrainingCompletions, allPolicies, allTrainings, allExpenses, allDonors, allFundingAgreements, allProjects, allAssets, allSupportTickets] = await Promise.all([
+  const [governingDocs, legalDocs, boardMembers, workflows, thresholds, users, standaloneRisks, policyAcknowledgements, completedTrainingCompletions, allPolicies, allTrainings, allExpenses, allDonors, allFundingAgreements, allProjects, allAssets, allSupportTickets] = await Promise.all([
     Document.find({ org_id: org._id, category: 'governing_document' })
       .populate('uploaded_by', 'first_name last_name email is_org_owner role position')
       .select('title document_type status createdAt updatedAt uploaded_by')
@@ -591,11 +609,22 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
       .lean(),
     BoardMember.find({ org_id: org._id })
       .populate('user_id', 'first_name last_name email is_org_owner role position')
-      .select('given_names family_name status is_active createdAt updatedAt user_id')
+      .select('given_names family_name email position custom_position_title status is_active createdAt updatedAt user_id')
       .lean(),
     ApprovalMatrix.find({ org_id: org._id })
       .populate('revoked_by', 'first_name last_name email is_org_owner role position')
-      .select('name workflow_category is_active revoked_at createdAt updatedAt revoked_by')
+      .populate('created_by', 'first_name last_name email is_org_owner role position')
+      .populate('updated_by', 'first_name last_name email is_org_owner role position')
+      .select('name workflow_category workflow_type is_active revoked_at createdAt updatedAt revoked_by created_by updated_by')
+      .lean(),
+    ApprovalThreshold.findOne({ org_id: org._id })
+      .populate('updated_by', 'first_name last_name email is_org_owner role position')
+      .select('currency tiers created_at updated_at updated_by')
+      .lean(),
+    User.find({})
+      .populate('created_by', 'first_name last_name email is_org_owner role position')
+      .select('email first_name last_name status createdAt created_by')
+      .sort({ createdAt: -1 })
       .lean(),
     Risk.find({ org_id: org._id })
       .populate('submitted_by', 'first_name last_name email is_org_owner role position')
@@ -727,9 +756,12 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
   });
 
   boardMembers.forEach((person) => {
+    decryptBoardMemberFields(person, getMasterKeyHex());
     const actorUser = person.user_id || null;
     const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
     const personName = [person.given_names, person.family_name].filter(Boolean).join(' ').trim() || 'Responsible person';
+    const personEmail = person.email || null;
+    const personPosition = person.custom_position_title || person.position || null;
     events.push(normalizeEvent({
       id: `person-added-${person._id}`,
       timestamp: person.createdAt,
@@ -738,7 +770,7 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
       module: 'responsible_people',
       request_type: 'responsible_people',
       request_id: person._id?.toString(),
-      details: { person_name: personName, status: person.status || null },
+      details: { person_name: personName, person_email: personEmail, position: personPosition, status: person.status || null },
       source: 'responsible_people'
     }));
     const removed = person.status === 'removed' || person.status === 'resigned' || person.is_active === false;
@@ -751,39 +783,123 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
         module: 'responsible_people',
         request_type: 'responsible_people',
         request_id: person._id?.toString(),
-        details: { person_name: personName, status: person.status || null },
+        details: { person_name: personName, person_email: personEmail, position: personPosition, status: person.status || null },
         source: 'responsible_people'
       }));
     }
   });
 
   workflows.forEach((wf) => {
-    const actorUser = wf.revoked_by || null;
-    const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
+    const createdUser = wf.created_by || null;
+    const updatedUser = wf.updated_by || null;
+    const revokedUser = wf.revoked_by || null;
+    const createdActor = { id: createdUser?._id?.toString() || null, name: toName(createdUser), role: toRole(createdUser) };
+    const updatedActor = { id: updatedUser?._id?.toString() || null, name: toName(updatedUser), role: toRole(updatedUser) };
+    const revokedActor = { id: revokedUser?._id?.toString() || null, name: toName(revokedUser), role: toRole(revokedUser) };
+
+    const wfDetails = {
+      workflow_name: wf.name || null,
+      category: wf.workflow_category || null,
+      workflow_type: wf.workflow_type || null,
+      active: wf.is_active
+    };
     events.push(normalizeEvent({
       id: `workflow-created-${wf._id}`,
       timestamp: wf.createdAt,
-      actor: actorUser ? actor : { id: null, name: 'System', role: null },
-      action: 'Workflow generated',
+      actor: createdUser ? createdActor : { id: null, name: 'System', role: null },
+      action: 'Workflow created',
       module: 'approval_workflow',
       request_type: 'approval_workflow',
       request_id: wf._id?.toString(),
-      details: { workflow_name: wf.name || null, category: wf.workflow_category || null, active: wf.is_active },
+      details: wfDetails,
       source: 'approval_workflow'
     }));
+
+    // Updated (non-revocation) — only if there is a meaningful update after create.
+    if (wf.updatedAt && new Date(wf.updatedAt).getTime() - new Date(wf.createdAt).getTime() > 1000 && !wf.revoked_at) {
+      events.push(normalizeEvent({
+        id: `workflow-updated-${wf._id}`,
+        timestamp: wf.updatedAt,
+        actor: updatedUser ? updatedActor : { id: null, name: 'System', role: null },
+        action: 'Workflow updated',
+        module: 'approval_workflow',
+        request_type: 'approval_workflow',
+        request_id: wf._id?.toString(),
+        details: wfDetails,
+        source: 'approval_workflow'
+      }));
+    }
     if (wf.revoked_at) {
       events.push(normalizeEvent({
         id: `workflow-revoked-${wf._id}`,
         timestamp: wf.revoked_at,
-        actor,
-        action: 'Workflow completed',
+        actor: revokedUser ? revokedActor : { id: null, name: 'System', role: null },
+        action: 'Workflow revoked',
         module: 'approval_workflow',
         request_type: 'approval_workflow',
         request_id: wf._id?.toString(),
-        details: { workflow_name: wf.name || null, category: wf.workflow_category || null },
+        details: wfDetails,
         source: 'approval_workflow'
       }));
     }
+  });
+
+  // Financial thresholds events (single doc per org)
+  if (thresholds) {
+    const actorUser = thresholds.updated_by || null;
+    const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
+    const details = {
+      currency: thresholds.currency || null,
+      tiers: Array.isArray(thresholds.tiers) ? thresholds.tiers : null
+    };
+    events.push(normalizeEvent({
+      id: `thresholds-created-${org._id}`,
+      timestamp: thresholds.created_at || thresholds.updated_at,
+      actor: actorUser ? actor : { id: null, name: 'System', role: null },
+      action: 'Financial thresholds created',
+      module: 'financial_thresholds',
+      request_type: 'financial_thresholds',
+      request_id: String(org._id),
+      details,
+      source: 'approval_thresholds'
+    }));
+    if (thresholds.updated_at && thresholds.created_at && new Date(thresholds.updated_at).getTime() - new Date(thresholds.created_at).getTime() > 1000) {
+      events.push(normalizeEvent({
+        id: `thresholds-updated-${org._id}`,
+        timestamp: thresholds.updated_at,
+        actor: actorUser ? actor : { id: null, name: 'System', role: null },
+        action: 'Financial thresholds updated',
+        module: 'financial_thresholds',
+        request_type: 'financial_thresholds',
+        request_id: String(org._id),
+        details,
+        source: 'approval_thresholds'
+      }));
+    }
+  }
+
+  // New users added (team members)
+  (users || []).forEach((u) => {
+    const actorUser = u.created_by || null;
+    const actor = { id: actorUser?._id?.toString() || null, name: toName(actorUser), role: toRole(actorUser) };
+    const userId = u._id?.toString();
+    events.push(normalizeEvent({
+      id: `user-created-${userId}`,
+      timestamp: u.createdAt,
+      actor: actorUser ? actor : { id: null, name: 'System', role: null },
+      action: 'User added',
+      module: 'users',
+      request_type: 'user',
+      request_id: userId,
+      details: {
+        user_id: userId,
+        email: u.email || null,
+        first_name: u.first_name || null,
+        last_name: u.last_name || null,
+        status: u.status || null
+      },
+      source: 'user'
+    }));
   });
 
   standaloneRisks.forEach((risk) => {

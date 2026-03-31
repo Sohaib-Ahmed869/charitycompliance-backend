@@ -21,6 +21,7 @@ export class MeetingRepository {
     return await this.Meeting.findById(meetingId)
       .populate('created_by', 'first_name last_name email')
       .populate('attendees.user_id', 'first_name last_name email')
+      .populate('completion_audit.completed_by', 'first_name last_name email')
       .lean();
   }
 
@@ -43,6 +44,7 @@ export class MeetingRepository {
     return await this.Meeting.find(query)
       .populate('created_by', 'first_name last_name email')
       .populate('attendees.user_id', 'first_name last_name email')
+      .populate('completion_audit.completed_by', 'first_name last_name email')
       .sort({ date: -1 })
       .lean();
   }
@@ -55,15 +57,18 @@ export class MeetingRepository {
     )
       .populate('created_by', 'first_name last_name email')
       .populate('attendees.user_id', 'first_name last_name email')
+      .populate('completion_audit.completed_by', 'first_name last_name email')
       .lean();
   }
 
   async updateAttendance(meetingId, userId, status) {
+    const shouldStampRsvp = ['confirmed', 'declined'].includes(status);
     return await this.Meeting.findByIdAndUpdate(
       meetingId,
       {
         $set: {
-          'attendees.$[elem].attendance_status': status
+          'attendees.$[elem].attendance_status': status,
+          ...(shouldStampRsvp ? { 'attendees.$[elem].rsvp_at': new Date() } : {})
         }
       },
       {
@@ -85,10 +90,11 @@ export class MeetingRepository {
   async updateAttendanceByToken(meetingId, token, status) {
     if (!token || !['confirmed', 'declined'].includes(status)) return null;
 
+    const now = new Date();
     // Try attendees first
     const byAttendee = await this.Meeting.findOneAndUpdate(
       { _id: meetingId, 'attendees.rsvp_token': token },
-      { $set: { 'attendees.$[elem].attendance_status': status } },
+      { $set: { 'attendees.$[elem].attendance_status': status, 'attendees.$[elem].rsvp_at': now } },
       { new: true, arrayFilters: [{ 'elem.rsvp_token': token }] }
     )
       .populate('created_by', 'first_name last_name email')
@@ -100,7 +106,7 @@ export class MeetingRepository {
     // Try external_attendees
     return await this.Meeting.findByIdAndUpdate(
       meetingId,
-      { $set: { 'external_attendees.$[elem].attendance_status': status } },
+      { $set: { 'external_attendees.$[elem].attendance_status': status, 'external_attendees.$[elem].rsvp_at': now } },
       { new: true, arrayFilters: [{ 'elem.rsvp_token': token }] }
     )
       .populate('created_by', 'first_name last_name email')

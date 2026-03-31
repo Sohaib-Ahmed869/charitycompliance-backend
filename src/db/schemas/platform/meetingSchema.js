@@ -99,7 +99,8 @@ const meetingSchema = new mongoose.Schema({
       enum: ['invited', 'confirmed', 'declined', 'attended'],
       default: 'invited'
     },
-    rsvp_token: { type: String, trim: true }
+    rsvp_token: { type: String, trim: true },
+    rsvp_at: { type: Date, default: null }
   }],
   
   // External attendees (non-system users, identified by email)
@@ -124,7 +125,8 @@ const meetingSchema = new mongoose.Schema({
       enum: ['invited', 'confirmed', 'declined', 'attended'],
       default: 'invited'
     },
-    rsvp_token: { type: String, trim: true }
+    rsvp_token: { type: String, trim: true },
+    rsvp_at: { type: Date, default: null }
   }],
   
   created_by: {
@@ -202,6 +204,21 @@ const meetingSchema = new mongoose.Schema({
       default: 'pending'
     },
     final_resolution: String
+  },
+  
+  // Completion audit (tracks who marked the meeting as complete)
+  completion_audit: {
+    completed_by: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
+    completed_at: Date,
+    completion_signature: String, // Base64 data URL of e-signature
+    completion_checklist_snapshot: [{ // Record of items checked at completion
+      item: String,
+      completed: Boolean,
+      checked_at: Date
+    }]
   },
   
   // Audit & Access control

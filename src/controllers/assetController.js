@@ -42,6 +42,15 @@ export const createAsset = asyncHandler(async (req, res) => {
   const userId = req.user.userId;
   const assetData = req.body;
 
+  // metadata may arrive as JSON string from multipart forms
+  if (typeof assetData?.metadata === 'string') {
+    try {
+      assetData.metadata = JSON.parse(assetData.metadata);
+    } catch {
+      assetData.metadata = {};
+    }
+  }
+
   const uploadResult = await uploadToS3(
     req.file.buffer,
     req.file.originalname,
@@ -146,6 +155,14 @@ export const updateAsset = asyncHandler(async (req, res) => {
   const { assetId } = req.params;
   const assetData = req.body;
 
+  if (typeof assetData?.metadata === 'string') {
+    try {
+      assetData.metadata = JSON.parse(assetData.metadata);
+    } catch {
+      assetData.metadata = {};
+    }
+  }
+
   if (req.file) {
     const uploadResult = await uploadToS3(
       req.file.buffer,
@@ -243,9 +260,16 @@ export const updateAssetCredentials = asyncHandler(async (req, res) => {
   const asset = await assetService.getAssetById(assetId);
 
   const accessMode = access_mode === 'authorized_person_only' ? 'authorized_person_only' : 'direct_credentials';
-  const credentialType = ['bank_credentials', 'banking_portal'].includes(credential_type)
-    ? credential_type
-    : 'general';
+  const allowedCredentialTypes = new Set([
+    'general',
+    'bank_credentials',
+    'banking_portal',
+    'online_presence',
+    'google_workspace',
+    'google_ads',
+    'social_media'
+  ]);
+  const credentialType = allowedCredentialTypes.has(credential_type) ? credential_type : 'general';
 
   const payload = encryptSecret(
     JSON.stringify({
@@ -320,6 +344,20 @@ export const getAssetCredentials = asyncHandler(async (req, res) => {
     } catch {
       // keep safe defaults for backward compatibility
     }
+  }
+
+  // Normalize credential_type to supported values
+  const allowedCredentialTypes = new Set([
+    'general',
+    'bank_credentials',
+    'banking_portal',
+    'online_presence',
+    'google_workspace',
+    'google_ads',
+    'social_media'
+  ]);
+  if (!allowedCredentialTypes.has(parsed.credential_type)) {
+    parsed.credential_type = 'general';
   }
 
   res.json({

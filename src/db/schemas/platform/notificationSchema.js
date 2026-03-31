@@ -43,7 +43,13 @@ const notificationSchema = new mongoose.Schema({
       'project_refund_partner_receipts_submitted',
       'project_delivery_changes_partner_explanation_submitted',
       'project_delivery_documents_required',
-      'project_delivery_workflow_started'
+      'project_delivery_workflow_started',
+      // Generic reminders
+      'reminder_expiring',
+      'reminder_overdue',
+      'reminder_meeting',
+      'reminder_escalated_dept_head',
+      'reminder_escalated_board'
     ],
     required: true,
     index: true

@@ -30,8 +30,9 @@ const corsOptions = {
 app.use(cors(corsOptions));
 
 // Body Parser
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '50mb';
+app.use(express.json({ limit: requestBodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
 
 // Rate Limiting
 const limiter = rateLimit({

@@ -521,6 +521,12 @@ export const updatePolicyDocument = asyncHandler(async (req, res) => {
     throw new AppError('Policy not found', 404, 'NOT_FOUND');
   }
 
+  const notes = req.body.notes?.trim() || undefined;
+  const changeControl = req.body.change_control?.trim() || undefined;
+  if (!changeControl) {
+    throw new AppError('Change control is required when updating a policy document', 400, 'MISSING_CHANGE_CONTROL');
+  }
+
   if (existing.file_path) {
     try {
       await deleteFromS3(existing.file_path);
@@ -538,7 +544,6 @@ export const updatePolicyDocument = asyncHandler(async (req, res) => {
   );
 
   const newVersion = incrementVersion(existing.version || 'v1.0');
-  const notes = req.body.notes?.trim() || undefined;
   let userId = null;
   if (userIdString) {
     try {
@@ -588,11 +593,36 @@ export const updatePolicyDocument = asyncHandler(async (req, res) => {
     file_name: req.file.originalname,
     action: 'Document Updated',
     notes: notes || undefined,
+    change_control: changeControl,
     description: notes || 'Policy document updated',
     updated_by: userId,
     updated_by_name: updatedByName,
     updated_by_title: updatedByTitle
   });
+
+  // Trigger approval workflow so approvers can review the change note + updated document.
+  // If no workflow exists, keep the policy active and proceed without blocking the upload.
+  try {
+    if (userId) {
+      const workflowService = new ApprovalWorkflowService(orgId);
+      await workflowService.createPolicyApprovalRequest(policy._id, userId, changeControl);
+    }
+  } catch (err) {
+    const errCode = err?.code;
+    const isNoWorkflow =
+      err?.name === 'CastError' ||
+      errCode === 'INVALID_ID' ||
+      errCode === 'NO_APPROVAL_MATRIX' ||
+      errCode === 'NO_MATCHING_RULE';
+    if (!isNoWorkflow) {
+      throw err;
+    }
+    try {
+      await policyRepo.update(policyId, { status: 'active' });
+    } catch {
+      // ignore
+    }
+  }
 
   res.json({
     success: true,
@@ -732,7 +762,7 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user?.userId || req.userId;
   const { policyId } = req.params;
-  const { action, comments, next_review_date, changes, e_signature } = req.body;
+  const { action, comments, next_review_date, changes, e_signature, change_control } = req.body;
 
   // Validate action
   if (!['approved_no_changes', 'updated', 'rejected'].includes(action)) {
@@ -854,6 +884,9 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
     if (!changes) {
       throw new AppError('Changes required when action is "updated"', 400, 'MISSING_CHANGES');
     }
+    if (!change_control || !String(change_control).trim()) {
+      throw new AppError('Change control is required when updating a policy', 400, 'MISSING_CHANGE_CONTROL');
+    }
 
     // Increment version
     const newVersion = incrementVersion(policy.version);
@@ -881,7 +914,7 @@ export const reviewPolicy = asyncHandler(async (req, res) => {
       await workflowService.createPolicyApprovalRequest(
         policyId,
         userId,
-        'policy_update_review'
+        String(change_control).trim()
       );
     } catch (workflowErr) {
       // Log but don't fail the review if workflow fails
