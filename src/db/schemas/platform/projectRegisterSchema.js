@@ -42,7 +42,7 @@ const projectRegisterSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'pending', 'at_risk', 'completed'],
+    enum: ['active', 'pending', 'at_risk', 'completed', 'closed'],
     default: 'pending',
     index: true
   },

@@ -11,6 +11,7 @@ import { closeAllConnections } from './src/db/connectionManager.js';
 import emailService from './src/services/emailService.js';
 import { logError, logInfo, logWarn } from './src/utils/logger.js';
 import { startRegistrationLicenseReminderScheduler } from './src/services/registrationLicenseReminderService.js';
+import { startMeetingReminderScheduler } from './src/services/meetingReminderService.js';
 
 dotenv.config();
 
@@ -28,6 +29,8 @@ const startServer = async () => {
       emailService.initialize().catch(() => {});
       // Start scheduled reminders (registration/license expiries)
       startRegistrationLicenseReminderScheduler();
+      // Start scheduled meeting reminders (1-hour before, checks every 10 mins)
+      startMeetingReminderScheduler();
     });
 
     const gracefulShutdown = async (signal) => {

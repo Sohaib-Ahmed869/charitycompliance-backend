@@ -1291,6 +1291,47 @@ export class ApprovalWorkflowService {
 
       await approvalRequestRepo.updateStatus(approvalRequestId, 'approved');
 
+      // If this approval corresponds to a project refund sign-off, close the project after approval.
+      // We correlate using ProjectRefund.internal_approval_request_id.
+      try {
+        const { ProjectRefundRepository } = await import('../repositories/projectRefundRepository.js');
+        const refundRepo = new ProjectRefundRepository(tenantDb);
+        const refund = await refundRepo.ProjectRefund
+          .findOne({ internal_approval_request_id: approvalRequestId })
+          .lean();
+
+        if (refund && refund.project_id) {
+          await refundRepo.updateById(refund._id, {
+            status: 'completed',
+            internal_approved_at: new Date()
+          });
+
+          const projectRepo = new ProjectRegisterRepository(tenantDb);
+          const projId = refund.project_id?._id || refund.project_id;
+
+          const existingProject = await projectRepo.findById(projId).catch(() => null);
+          const existingMeta = existingProject?.metadata && typeof existingProject.metadata === 'object'
+            ? existingProject.metadata
+            : {};
+
+          await projectRepo.update(projId, {
+            status: 'closed',
+            delivery_status: 'delivered_and_handed_off',
+            metadata: {
+              ...existingMeta,
+              project_closed_at: new Date(),
+              project_closed_via: 'refund_receipts_approval',
+              project_closed_by: userId,
+              refund_completed_at: new Date(),
+              refund_id: refund._id
+            }
+          });
+        }
+      } catch (err) {
+        // Do not fail approval completion if close-out fails; log and continue.
+        logError('Failed to close project after refund approval', { approvalRequestId, error: err?.message });
+      }
+
       if (request.entity_type === 'expense') {
         await expenseRepo.updateStatus(request.entity_id, 'approved', { approved_at: new Date() });
         logInfo('Expense status updated from approval', { approvalRequestId, entityId: request.entity_id });
@@ -2419,6 +2460,53 @@ export class ApprovalWorkflowService {
 
     // Use the over-budget amount for threshold matching against project_delivery_changes rules
     const amount = Number(overBudgetAmount || 0);
+    const { matrix, rule } = await this.findMatchingRule('project_delivery_changes', amount, orgObjectId);
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'project_delivery_changes',
+      entity_id: projectId,
+      entity_type: 'project',
+      amount,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Create approval request for a project refund sign-off (uses project_delivery_changes workflow rules)
+   * (workflow category: project_delivery_changes, request_type: project_delivery_changes)
+   *
+   * We keep entity_type as 'project' (schema constraint) and later correlate by
+   * ProjectRefund.internal_approval_request_id.
+   */
+  async createProjectRefundApprovalRequest(projectId, refundAmount, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const Project = tenantDb.model('ProjectRegister');
+    const project = await Project.findById(projectId);
+    if (!project) {
+      throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+    }
+
+    const amount = Number(refundAmount || 0);
     const { matrix, rule } = await this.findMatchingRule('project_delivery_changes', amount, orgObjectId);
     const approvers = await this.resolveApprovers(rule, orgObjectId);
 

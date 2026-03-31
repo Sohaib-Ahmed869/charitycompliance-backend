@@ -163,8 +163,24 @@ export const initiateRefundProcess = asyncHandler(async (req, res) => {
   if (refund.status === 'completed') {
     throw new AppError('Refund is already completed', 400, 'REFUND_ALREADY_COMPLETED');
   }
+  // If partner already submitted receipts but the internal approval workflow was not created (older runs),
+  // allow "initiate" to create the approval workflow without re-sending partner emails.
   if (refund.status === 'partner_receipts_submitted') {
-    throw new AppError('Partner has already submitted receipts for this refund', 400, 'REFUND_ALREADY_SUBMITTED');
+    let approvalRequestId = refund.internal_approval_request_id || null;
+    if (!approvalRequestId) {
+      const workflowService = new ApprovalWorkflowService(req.orgId);
+      const created = await workflowService.createProjectRefundApprovalRequest(
+        refund.project_id?._id || refund.project_id,
+        Number(refund.refund_amount || 0),
+        req.user?.userId || req.userId || refund.initiated_by || null
+      );
+      approvalRequestId = created?._id || null;
+      if (approvalRequestId) {
+        const updated = await repo.updateById(refundId, { internal_approval_request_id: approvalRequestId });
+        return res.json({ success: true, data: updated });
+      }
+    }
+    return res.json({ success: true, data: refund });
   }
 
   const agreement = refund.agreement_id || null;
@@ -229,6 +245,66 @@ export const initiateRefundProcess = asyncHandler(async (req, res) => {
   });
 
   res.json({ success: true, data: updated });
+});
+
+/**
+ * Internal: close refund + close project after partner receipts submitted, using direct e-signature (no workflow).
+ * POST /platform/project-delivery/refunds/:refundId/close
+ */
+export const closeRefundAndProject = asyncHandler(async (req, res) => {
+  const { refundId } = req.params;
+  const tenantDb = await getTenantConnection(req.orgId);
+  const refundRepo = new ProjectRefundRepository(tenantDb);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+
+  const refund = await refundRepo.ProjectRefund.findById(refundId).lean();
+  if (!refund) throw new AppError('Refund record not found', 404, 'REFUND_NOT_FOUND');
+
+  const status = String(refund.status || '').toLowerCase();
+  if (status === 'completed') {
+    return res.json({ success: true, data: refund });
+  }
+  if (status !== 'partner_receipts_submitted') {
+    throw new AppError('Refund cannot be closed until partner receipts are submitted', 400, 'REFUND_NOT_READY_TO_CLOSE');
+  }
+
+  const signature = String(req.body?.signature_data_url || '').trim();
+  if (!signature) {
+    throw new AppError('signature_data_url is required', 400, 'MISSING_SIGNATURE');
+  }
+  const note = String(req.body?.note || '').trim();
+
+  const now = new Date();
+  const userId = req.user?.userId || req.userId || null;
+
+  const updatedRefund = await refundRepo.updateById(refundId, {
+    status: 'completed',
+    completed_at: now,
+    completed_by: userId,
+    completed_note: note,
+    completed_signature_data: signature,
+    internal_approved_at: refund.internal_approved_at || now
+  });
+
+  const projectId = refund.project_id?._id || refund.project_id;
+  const project = projectId ? await projectRepo.findById(projectId) : null;
+  if (project) {
+    const meta = project.metadata && typeof project.metadata === 'object' ? project.metadata : {};
+    await projectRepo.update(projectId, {
+      status: 'closed',
+      delivery_status: 'delivered_and_handed_off',
+      metadata: {
+        ...meta,
+        project_closed_at: now,
+        project_closed_via: 'refund_direct_signoff',
+        project_closed_by: userId,
+        refund_completed_at: now,
+        refund_id: refundId
+      }
+    });
+  }
+
+  res.json({ success: true, data: updatedRefund });
 });
 
 export const submitDeliveryChangePartnerResponse = asyncHandler(async (req, res) => {
@@ -524,6 +600,9 @@ export const setPhysicalMonitoring = asyncHandler(async (req, res) => {
   const projectRepo = new ProjectRegisterRepository(tenantDb);
   const project = await projectRepo.findById(projectId);
   if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+  if (project.delivery_status === 'delivered_and_handed_off' || project.status === 'closed') {
+    throw new AppError('Project is closed and cannot be updated', 403, 'PROJECT_CLOSED_IMMUTABLE');
+  }
 
   const current = project.metadata || {};
   const next = {
@@ -561,7 +640,7 @@ export const submitProjectDeliveryMaterials = asyncHandler(async (req, res) => {
     throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
   }
 
-  if (project.delivery_status === 'delivered_and_handed_off') {
+  if (project.delivery_status === 'delivered_and_handed_off' || project.status === 'closed') {
     throw new AppError('Project delivery is completed and materials cannot be updated', 403, 'PROJECT_DELIVERY_IMMUTABLE');
   }
 
