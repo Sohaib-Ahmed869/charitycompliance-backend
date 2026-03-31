@@ -2447,6 +2447,52 @@ export class ApprovalWorkflowService {
   }
 
   /**
+   * Create approval request for project delivery completion / handoff
+   * (workflow category: project_delivery, request_type: project_delivery)
+   *
+   * Note: amount is 0 because this workflow is compliance-driven (not monetary).
+   * Configure approval matrix rules with action_type "project_delivery".
+   */
+  async createProjectDeliveryCompletionRequest(projectId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const Project = tenantDb.model('ProjectRegister');
+    const project = await Project.findById(projectId);
+    if (!project) {
+      throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+    }
+
+    const { matrix, rule } = await this.findMatchingRule('project_delivery', 0, orgObjectId);
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id || undefined,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'project_delivery',
+      entity_id: projectId,
+      entity_type: 'project',
+      amount: 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    return approvalRequest;
+  }
+
+  /**
    * Create approval workflow for complaint resolution
    * Called when admin approves a complaint - initiates the complaint_resolution workflow
    * This workflow has three steps:
