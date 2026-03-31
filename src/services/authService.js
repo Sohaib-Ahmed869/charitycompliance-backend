@@ -230,6 +230,13 @@ export class AuthService {
         status: 'active',
         is_org_owner: true
       });
+
+      // Self-created: set created_by to own id for audit trail attribution
+      try {
+        await userRepo.update(user._id, { created_by: user._id });
+      } catch (_) {
+        // Non-blocking
+      }
       
       // Verify email_hash was created
       if (!user.email_hash) {
@@ -773,6 +780,13 @@ export class AuthService {
         last_name: boardMember.family_name,
         status: 'active'
       });
+
+      // Self-created via invitation acceptance: set created_by to own id
+      try {
+        await userRepo.update(newUser._id, { created_by: newUser._id });
+      } catch (_) {
+        // Non-blocking
+      }
 
       // Link user to board member and mark invitation as accepted
       await boardMemberRepo.update(boardMember._id, {

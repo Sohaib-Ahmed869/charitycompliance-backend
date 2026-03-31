@@ -108,6 +108,8 @@ const approvalRequestSchema = new mongoose.Schema({
       'funding_agreement',
       'project',
       'emergency',
+      'project_delivery',
+      'project_delivery_changes',
       // legacy
       'policy_approval',
       'document_approval',
@@ -174,6 +176,14 @@ const approvalRequestSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
+  },
+  /**
+   * Change control note for the CURRENT attempt (what changed since last submission/version).
+   * This is shown to approvers in the workflow detail view.
+   */
+  change_control: {
+    type: String,
+    default: null
   },
   /** For risk_treatment requests: index of the treatment in risk.treatments array */
   treatment_index: {

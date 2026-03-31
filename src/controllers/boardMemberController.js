@@ -251,7 +251,8 @@ export const createBoardMember = asyncHandler(async (req, res) => {
           password_hash,
           first_name: boardMemberData.given_names,
           last_name: boardMemberData.family_name,
-          status: 'active'
+          status: 'active',
+          created_by: req.user?.userId || null
         });
         await boardMemberRepo.update(boardMember._id, {
           user_id: newUser._id,

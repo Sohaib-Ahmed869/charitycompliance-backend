@@ -88,6 +88,8 @@ export class ExpenseService {
       invoice_file_name: expenseData.invoice_file_name,
       invoice_date: expenseData.invoice_date,
       vendor_name: expenseData.vendor_name,
+      supplier_name: expenseData.supplier_name,
+      supplier_information: expenseData.supplier_information,
       vendor_email: expenseData.vendor_email,
       project_id: expenseData.project_id,
       funding_agreement_id: resolvedFundingAgreementId,

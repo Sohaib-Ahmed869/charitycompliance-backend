@@ -119,13 +119,28 @@ const complaintSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['new', 'assigned', 'in_progress', 'resolved'],
+      enum: ['new', 'assigned', 'in_progress', 'resolved', 'invalid'],
       default: 'new',
     },
     workflow_stage: {
       type: String,
       enum: ['admin_triage', 'dept_head_review', 'workflow_resolution', 'board_signoff', 'resolved'],
       default: 'admin_triage',
+      index: true,
+    },
+    is_invalid: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    invalid_reason: {
+      type: String,
+      trim: true,
+      default: null,
+    },
+    invalid_marked_at: {
+      type: Date,
+      default: null,
       index: true,
     },
     is_major: {

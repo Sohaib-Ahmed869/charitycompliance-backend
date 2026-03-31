@@ -223,7 +223,44 @@ export class ApprovalWorkflowService {
       approversCount: approvers.length
     });
 
-    // TODO: Send notifications to approvers
+    // Send email notifications to approvers
+    try {
+      const userRepo = new UserRepository(tenantDb);
+      const submitter = await userRepo.findById(submittedBy);
+      const submitterName = submitter ? `${submitter.first_name} ${submitter.last_name}` : 'A user';
+
+      for (const approver of approvers) {
+        if (!approver.user_id) continue; // Skip if no user assigned yet
+        
+        const approverUser = await userRepo.findById(approver.user_id);
+        if (!approverUser?.email) continue; // Skip if no email
+
+        const approverName = `${approverUser.first_name} ${approverUser.last_name}`;
+        
+        await emailService.sendApprovalRequestEmail({
+          to: approverUser.email,
+          recipientName: approverName,
+          approvalRequestId: approvalRequest._id.toString(),
+          requestType: 'expense',
+          entityTitle: `Expense: $${expense.amount}`,
+          approvalLevel: approver.level,
+          submitterName,
+          approvalType: rule.approval_type
+        });
+
+        logInfo('Approval request email sent', {
+          approverUserId: approver.user_id,
+          approverEmail: approverUser.email,
+          approvalRequestId: approvalRequest._id
+        });
+      }
+    } catch (emailError) {
+      logError('Failed to send approval request emails', {
+        error: emailError.message,
+        approvalRequestId: approvalRequest._id
+      });
+      // Don't throw - approval request was created successfully, email failure shouldn't block it
+    }
 
     return approvalRequest;
   }
@@ -630,6 +667,43 @@ export class ApprovalWorkflowService {
       approversCount: approvers.length
     });
 
+    // Send email notifications to approvers
+    try {
+      const userRepo = new UserRepository(tenantDb);
+      const submitter = await userRepo.findById(submittingUserId);
+      const submitterName = submitter ? `${submitter.first_name} ${submitter.last_name}` : 'A user';
+
+      for (const step of approvalRequest.approval_steps) {
+        if (!step.approver_user_id) continue; // Skip if no user assigned yet
+        
+        const approverUser = await userRepo.findById(step.approver_user_id);
+        if (!approverUser?.email) continue; // Skip if no email
+
+        const approverName = `${approverUser.first_name} ${approverUser.last_name}`;
+        
+        await emailService.sendApprovalRequestEmail({
+          to: approverUser.email,
+          recipientName: approverName,
+          approvalRequestId: approvalRequest._id.toString(),
+          requestType: 'risk',
+          entityTitle: `Risk: ${risk.title}`,
+          approvalLevel: step.level,
+          submitterName,
+          approvalType: rule.approval_type
+        });
+
+        logInfo('Risk approval request email sent', {
+          approverUserId: step.approver_user_id,
+          approvalRequestId: approvalRequest._id
+        });
+      }
+    } catch (emailError) {
+      logError('Failed to send risk approval emails', {
+        error: emailError.message,
+        approvalRequestId: approvalRequest._id
+      });
+    }
+
     return approvalRequest;
   }
 
@@ -637,7 +711,7 @@ export class ApprovalWorkflowService {
    * Create approval request for a policy (action_type: policy)
    * Policies follow the normal approval matrix workflow only (no department head pre-approval).
    */
-  async createPolicyApprovalRequest(policyId, submittedBy) {
+  async createPolicyApprovalRequest(policyId, submittedBy, changeControlNote = null) {
     const tenantDb = await this.getTenantDb();
     this._ensureTenantModels(tenantDb);
     const orgObjectId = await this._getOrgObjectId();
@@ -701,7 +775,8 @@ export class ApprovalWorkflowService {
       approval_type: rule.approval_type,
       status: 'pending',
       approval_steps: approvalSteps,
-      submitted_by: submittedBy
+      submitted_by: submittedBy,
+      change_control: changeControlNote?.trim?.() ? changeControlNote.trim() : null
     });
 
     await policyRepo.update(policyId, {
@@ -715,6 +790,43 @@ export class ApprovalWorkflowService {
       approvalRequestId: approvalRequest._id,
       approversCount: approvers.length
     });
+
+    // Send email notifications to approvers
+    try {
+      const userRepo = new UserRepository(tenantDb);
+      const submitter = await userRepo.findById(submittedBy);
+      const submitterName = submitter ? `${submitter.first_name} ${submitter.last_name}` : 'A user';
+
+      for (const step of approvalRequest.approval_steps) {
+        if (!step.approver_user_id) continue; // Skip if no user assigned yet
+        
+        const approverUser = await userRepo.findById(step.approver_user_id);
+        if (!approverUser?.email) continue; // Skip if no email
+
+        const approverName = `${approverUser.first_name} ${approverUser.last_name}`;
+        
+        await emailService.sendApprovalRequestEmail({
+          to: approverUser.email,
+          recipientName: approverName,
+          approvalRequestId: approvalRequest._id.toString(),
+          requestType: 'policy',
+          entityTitle: `Policy: ${policy.title}`,
+          approvalLevel: step.level,
+          submitterName,
+          approvalType: rule.approval_type
+        });
+
+        logInfo('Policy approval request email sent', {
+          approverUserId: step.approver_user_id,
+          approvalRequestId: approvalRequest._id
+        });
+      }
+    } catch (emailError) {
+      logError('Failed to send policy approval emails', {
+        error: emailError.message,
+        approvalRequestId: approvalRequest._id
+      });
+    }
 
     return approvalRequest;
   }
@@ -1093,6 +1205,51 @@ export class ApprovalWorkflowService {
         await policyRepo.update(request.entity_id, { status: 'draft' });
       }
 
+      // Send rejection notification email to submitter
+      try {
+        const userRepo = new UserRepository(tenantDb);
+        const decidingUser = await userRepo.findById(userId);
+        const deciderName = decidingUser ? `${decidingUser.first_name} ${decidingUser.last_name}` : 'An approver';
+        
+        const submitter = await userRepo.findById(request.submitted_by);
+        if (submitter?.email) {
+          const typeLabel = {
+            expense: 'Expense',
+            risk: 'Risk',
+            policy: 'Policy',
+            purchase: 'Purchase',
+            grant: 'Grant',
+            funding: 'Funding Agreement'
+          }[request.entity_type] || request.entity_type;
+
+          const entityTitle = request.entity_type === 'expense' 
+            ? `$${(await expenseRepo.findById(request.entity_id))?.amount || 'N/A'}`
+            : (await (request.entity_type === 'risk' ? riskRepo.findById(request.entity_id) : null))?.title || 'N/A';
+
+          await emailService.sendApprovalDecisionEmail({
+            to: submitter.email,
+            recipientName: `${submitter.first_name} ${submitter.last_name}`,
+            approvalRequestId: approvalRequestId.toString(),
+            requestType: request.entity_type,
+            entityTitle: `${typeLabel}: ${entityTitle}`,
+            decision: 'rejected',
+            decidedByName: deciderName,
+            comments,
+            remainingSteps: undefined
+          });
+
+          logInfo('Rejection notification email sent', {
+            submitterId: request.submitted_by,
+            approvalRequestId
+          });
+        }
+      } catch (emailError) {
+        logError('Failed to send rejection notification email', {
+          error: emailError.message,
+          approvalRequestId
+        });
+      }
+
       return updatedRequest;
     }
 
@@ -1319,6 +1476,68 @@ export class ApprovalWorkflowService {
 
       if (notifications.length > 0) {
         await notificationRepo.createMany(notifications);
+      }
+
+      // Send approval email to submitter
+      try {
+        const userRepo = new UserRepository(tenantDb);
+        const submitter = await userRepo.findById(submittedById);
+        if (submitter?.email) {
+          const typeLabel = {
+            expense: 'Expense',
+            risk: 'Risk',
+            policy: 'Policy',
+            purchase: 'Purchase',
+            grant: 'Grant',
+            funding: 'Funding Agreement',
+            donation: 'Donation',
+            contract: 'Contract',
+            complaint: 'Complaint'
+          }[request.entity_type] || request.entity_type;
+
+          let entityTitle = 'N/A';
+          if (request.entity_type === 'expense') {
+            const exp = await expenseRepo.findById(request.entity_id);
+            entityTitle = `$${exp?.amount || 'N/A'}`;
+          } else if (request.entity_type === 'policy') {
+            const policyRepo = new PolicyRepository(tenantDb);
+            const policy = await policyRepo.findById(request.entity_id);
+            entityTitle = policy?.title || 'Policy';
+          } else if (request.entity_type === 'risk') {
+            const risk = await riskRepo.findById(request.entity_id);
+            entityTitle = risk?.title || 'Risk';
+          }
+
+          const lastApproverId = (finalRequest?.approval_steps || allSteps || []).length > 0 
+            ? (finalRequest?.approval_steps || allSteps || [])[(finalRequest?.approval_steps || allSteps || []).length - 1].approver_user_id
+            : null;
+          const lastApprover = lastApproverId ? await userRepo.findById(lastApproverId) : null;
+          const lastApproverName = lastApprover 
+            ? `${lastApprover.first_name} ${lastApprover.last_name}`
+            : 'An approver';
+
+          await emailService.sendApprovalDecisionEmail({
+            to: submitter.email,
+            recipientName: `${submitter.first_name} ${submitter.last_name}`,
+            approvalRequestId: approvalRequestId.toString(),
+            requestType: request.entity_type,
+            entityTitle: `${typeLabel}: ${entityTitle}`,
+            decision: 'approved',
+            decidedByName: lastApproverName,
+            comments: 'Your request has been fully approved by all required approvers.',
+            remainingSteps: 0
+          });
+
+          logInfo('Approval notification email sent', {
+            submitterId,
+            approvalRequestId
+          });
+        }
+      } catch (emailError) {
+        logError('Failed to send approval notification email', {
+          error: emailError.message,
+          approvalRequestId
+        });
       }
     }
 
@@ -1602,6 +1821,51 @@ export class ApprovalWorkflowService {
         read: false,
         created_at: new Date()
       });
+
+      // Send escalation email to the user being asked for opinion
+      try {
+        const userRepo = new UserRepository(tenantDb);
+        const escalatedUser = await userRepo.findById(escalateToUserId);
+        const escalatingUser = await userRepo.findById(escalatedByUserId);
+        
+        if (escalatedUser?.email && escalatingUser) {
+          const escalatedByName = `${escalatingUser.first_name} ${escalatingUser.last_name}`;
+          const escalatedToName = `${escalatedUser.first_name} ${escalatedUser.last_name}`;
+
+          const typeLabel = {
+            expense: 'Expense',
+            risk: 'Risk',
+            policy: 'Policy',
+            purchase: 'Purchase',
+            grant: 'Grant',
+            funding: 'Funding Agreement',
+            donation: 'Donation',
+            contract: 'Contract',
+            complaint: 'Complaint'
+          }[request.entity_type] || request.entity_type;
+
+          await emailService.sendEscalationRequestEmail({
+            to: escalatedUser.email,
+            recipientName: escalatedToName,
+            approvalRequestId: approvalRequestId.toString(),
+            requestType: request.entity_type,
+            entityTitle: `${typeLabel}: Unknown`, // We don't have entity info easily, keeping generic
+            escalatedByName,
+            requestComments: comments
+          });
+
+          logInfo('Escalation request email sent', {
+            escalationId: escalation._id,
+            escalatedToUserId,
+            approvalRequestId
+          });
+        }
+      } catch (emailError) {
+        logError('Failed to send escalation request email', {
+          error: emailError.message,
+          approvalRequestId
+        });
+      }
     } catch (err) {
       logError('Failed to create escalation notification', { error: err });
     }
@@ -1906,7 +2170,8 @@ export class ApprovalWorkflowService {
         status: 'pending',
         approval_steps: newSteps,
         current_rejection_review_id: null,
-        completed_at: null
+        completed_at: null,
+        change_control: changeControlNote?.trim?.() ? changeControlNote.trim() : null
       }
     };
     if (changeControlNote && updatedPreviousAttempts.length > 0) {
@@ -2131,6 +2396,51 @@ export class ApprovalWorkflowService {
       projectId,
       approvalRequestId: approvalRequest._id,
       approversCount: approvers.length
+    });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Create approval request for a project delivery extra-expense change
+   * (workflow category: project_delivery_changes, request_type: project_delivery_changes)
+   */
+  async createProjectDeliveryChangesApprovalRequest(projectId, overBudgetAmount, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const Project = tenantDb.model('ProjectRegister');
+    const project = await Project.findById(projectId);
+    if (!project) {
+      throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+    }
+
+    // Use the over-budget amount for threshold matching against project_delivery_changes rules
+    const amount = Number(overBudgetAmount || 0);
+    const { matrix, rule } = await this.findMatchingRule('project_delivery_changes', amount, orgObjectId);
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'project_delivery_changes',
+      entity_id: projectId,
+      entity_type: 'project',
+      amount,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
     });
 
     return approvalRequest;

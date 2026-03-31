@@ -790,6 +790,60 @@ export const adminRejectComplaint = asyncHandler(async (req, res) => {
   res.json({ success: true, data: updated });
 });
 
+// Mark Complaint as Invalid/Non-Substantial
+export const markComplaintInvalid = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { complaintId } = req.params;
+  const userId = req.user?.userId;
+  const userRole = req.user?.role;
+  const { reason } = req.body;
+
+  const tenantDb = await getTenantConnection(orgId);
+  const complaintRepo = new ComplaintRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+  if (!reason || typeof reason !== 'string' || reason.trim() === '') {
+    throw new AppError('Reason is required to mark a complaint as invalid', 400, 'MISSING_REASON');
+  }
+
+  const ownerId = await getOrgOwnerUserId(tenantDb);
+  const isOrgOwner = ownerId && String(ownerId) === String(userId);
+
+  // Only admins and charity admins can mark as invalid
+  const ok = userRole === 'admin' || isOrgOwner || await userCanCharityAdminEdit(tenantDb, org._id, userId);
+  if (!ok) throw new AppError('You do not have permission to perform this action', 403, 'FORBIDDEN');
+
+  const complaint = await complaintRepo.findById(complaintId);
+  if (!complaint) throw new AppError('Complaint not found', 404, 'NOT_FOUND');
+
+  // Only allow marking as invalid at admin_triage stage
+  if ((complaint.workflow_stage || 'admin_triage') !== 'admin_triage') {
+    throw new AppError('Complaint can only be marked as invalid at the initial triage stage', 400, 'INVALID_STAGE');
+  }
+
+  const updated = await complaintRepo.updateWithOps(complaintId, {
+    $set: {
+      is_invalid: true,
+      invalid_reason: reason.trim(),
+      invalid_marked_at: new Date(),
+      workflow_stage: 'resolved',
+      status: 'invalid',
+    },
+    $push: {
+      trail: {
+        at: new Date(),
+        actor_user_id: userId || null,
+        action: 'marked_as_invalid',
+        details: { reason: reason.trim() },
+      },
+    },
+  });
+
+  res.json({ success: true, data: updated });
+});
+
 // Dept Head Approval/Rejection
 export const deptHeadApproveComplaint = asyncHandler(async (req, res) => {
   const orgId = req.orgId;

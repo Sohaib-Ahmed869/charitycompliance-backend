@@ -22,7 +22,10 @@ import crypto from 'crypto';
 
 const parsePublicToken = (token, req) => {
   // Expected format: "<orgKey>.<token>"
-  const [prefix, rest] = String(token || '').split('.', 2);
+  const raw = String(token || '').trim();
+  const dotIdx = raw.indexOf('.');
+  const prefix = dotIdx >= 0 ? raw.slice(0, dotIdx) : '';
+  const rest = dotIdx >= 0 ? raw.slice(dotIdx + 1) : '';
   const orgKey = prefix || req?.headers?.['x-org-id'] || null;
   if (!orgKey || !rest) return null;
   return { orgKey, token: rest };
@@ -301,6 +304,243 @@ export const submitDeliveryChangePartnerResponse = asyncHandler(async (req, res)
     // Ignore notification errors for partner submission
   }
 
+  res.json({ success: true, data: updated });
+});
+
+const normalizeDataUrlFiles = (files) => {
+  const arr = Array.isArray(files) ? files : [];
+  return arr
+    .map((f) => ({
+      file_name: String(f?.file_name || f?.fileName || f?.name || '').trim(),
+      data_url: String(f?.data_url || f?.dataUrl || f?.data || '').trim()
+    }))
+    .filter((f) => f.file_name || f.data_url);
+};
+
+export const submitProgressReportPartnerResponse = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+
+  const parsed = parsePublicToken(token, req);
+  if (!parsed) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_TOKEN', message: 'Invalid or missing token' }
+    });
+  }
+
+  const tenantDb = await getTenantConnection(parsed.orgKey);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+  const project = await projectRepo.ProjectRegister.findOne({
+    'metadata.partner_progress_reports': { $elemMatch: { token: parsed.token } }
+  }).lean();
+
+  if (!project) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Progress report token not found' }
+    });
+  }
+
+  const reports = Array.isArray(project?.metadata?.partner_progress_reports)
+    ? project.metadata.partner_progress_reports
+    : [];
+  const idx = reports.findIndex((r) => String(r?.token || '') === String(parsed.token));
+  if (idx < 0) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Progress report token not found' }
+    });
+  }
+
+  const report = reports[idx] || {};
+  if (report?.partner_submission?.submitted_at) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'ALREADY_SUBMITTED', message: 'This progress report has already been submitted' }
+    });
+  }
+
+  const notes = String(req.body?.notes || '').trim();
+  const attachments = normalizeDataUrlFiles(req.body?.attachments);
+
+  const nextReports = [...reports];
+  nextReports[idx] = {
+    ...report,
+    status: 'partner_submitted',
+    partner_submission: {
+      submitted_at: new Date(),
+      notes: notes || '',
+      attachments
+    }
+  };
+
+  const updated = await projectRepo.update(project._id, {
+    metadata: {
+      ...(project.metadata || {}),
+      partner_progress_reports: nextReports
+    }
+  });
+
+  res.json({ success: true, data: updated });
+});
+
+const resolvePartnerEmailFromAgreement = async (tenantDb, agreement, reqOrgId) => {
+  let partnerEmail =
+    agreement?.metadata?.partner_email ||
+    agreement?.metadata?.partnerEmail ||
+    agreement?.metadata?.contact_email ||
+    agreement?.partner_email ||
+    '';
+
+  const partnerNameRaw =
+    agreement?.partner_name ||
+    agreement?.metadata?.partner_name ||
+    agreement?.metadata?.partnerName ||
+    '';
+
+  if (!partnerEmail && partnerNameRaw) {
+    try {
+      const partnerVettingSchema = (await import('../db/schemas/platform/partnerVettingSchema.js')).default;
+      const PartnerVetting = tenantDb.models.PartnerVetting || tenantDb.model('PartnerVetting', partnerVettingSchema);
+      const escRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const name = String(partnerNameRaw || '').trim();
+      const rx = new RegExp(`^${escRegex(name)}$`, 'i');
+      const partner = await PartnerVetting.findOne({
+        status: 'approved',
+        $or: [
+          { organization_name: rx },
+          { trading_name: rx },
+          { 'metadata.organization_name': rx },
+          { 'metadata.trading_name': rx }
+        ]
+      }).sort({ updatedAt: -1, createdAt: -1 }).lean();
+      if (partner?.contact?.email) partnerEmail = String(partner.contact.email).trim();
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  if (!partnerEmail || !String(partnerEmail).includes('@')) {
+    throw new AppError(
+      'Partner primary contact email is required in Partner Vetting before requesting progress reports',
+      400,
+      'PARTNER_PRIMARY_CONTACT_EMAIL_REQUIRED'
+    );
+  }
+
+  return partnerEmail;
+};
+
+export const initiatePartnerProgressReport = asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const reportType = String(req.body?.report_type || 'interim').toLowerCase() === 'final' ? 'final' : 'interim';
+
+  const tenantDb = await getTenantConnection(req.orgId);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+  const project = await projectRepo.findById(projectId);
+  if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+
+  const FundingAgreement = tenantDb.model('FundingAgreement');
+  const agreement = project.agreement_id ? await FundingAgreement.findById(project.agreement_id).lean() : null;
+  const partnerEmail = await resolvePartnerEmailFromAgreement(tenantDb, agreement, req.orgId);
+
+  const reportToken = crypto.randomBytes(24).toString('hex');
+  const id = crypto.randomBytes(10).toString('hex');
+
+  const reports = Array.isArray(project?.metadata?.partner_progress_reports)
+    ? [...project.metadata.partner_progress_reports]
+    : [];
+  reports.unshift({
+    id,
+    token: reportToken,
+    report_type: reportType,
+    status: 'requested',
+    requested_at: new Date(),
+    requested_by: req.user?.userId || req.userId || null
+  });
+
+  const updated = await projectRepo.update(projectId, {
+    metadata: {
+      ...(project.metadata || {}),
+      partner_progress_reports: reports
+    }
+  });
+
+  const formLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/public/projects/progress-reports/${req.orgId}.${reportToken}`;
+  try {
+    await emailService.sendProjectProgressReportExternalFormEmail({
+      to: partnerEmail,
+      recipientName: agreement?.partner_name || 'Partner',
+      projectName: project.project_name || 'Project',
+      reportType,
+      formLink
+    });
+  } catch (_) {
+    // non-fatal: the request is still created even if email fails
+  }
+
+  res.json({ success: true, data: updated });
+});
+
+export const vetPartnerProgressReport = asyncHandler(async (req, res) => {
+  const { projectId, reportId } = req.params;
+  const vetted = !!req.body?.vetted;
+  const vettingNotes = String(req.body?.vetting_notes || '').trim();
+
+  const tenantDb = await getTenantConnection(req.orgId);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+  const project = await projectRepo.findById(projectId);
+  if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+
+  const reports = Array.isArray(project?.metadata?.partner_progress_reports)
+    ? [...project.metadata.partner_progress_reports]
+    : [];
+  const idx = reports.findIndex((r) => String(r?.id || r?._id || '') === String(reportId));
+  if (idx < 0) throw new AppError('Progress report not found', 404, 'PROGRESS_REPORT_NOT_FOUND');
+
+  reports[idx] = {
+    ...(reports[idx] || {}),
+    vetting: {
+      vetted,
+      vetting_notes: vettingNotes,
+      vetted_at: new Date(),
+      vetted_by: req.user?.userId || req.userId || null
+    }
+  };
+
+  const updated = await projectRepo.update(projectId, {
+    metadata: {
+      ...(project.metadata || {}),
+      partner_progress_reports: reports
+    }
+  });
+
+  res.json({ success: true, data: updated });
+});
+
+export const setPhysicalMonitoring = asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const tenantDb = await getTenantConnection(req.orgId);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+  const project = await projectRepo.findById(projectId);
+  if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+
+  const current = project.metadata || {};
+  const next = {
+    ...(current || {}),
+    physical_monitoring: {
+      conducted: !!req.body?.conducted,
+      conducted_by_name: String(req.body?.conducted_by_name || '').trim(),
+      conducted_by_role: String(req.body?.conducted_by_role || '').trim(),
+      signoff_name: String(req.body?.signoff_name || '').trim(),
+      signoff_title: String(req.body?.signoff_title || '').trim(),
+      signature_data_url: String(req.body?.signature_data_url || '').trim(),
+      updated_at: new Date(),
+      updated_by: req.user?.userId || req.userId || null
+    }
+  };
+
+  const updated = await projectRepo.update(projectId, { metadata: next });
   res.json({ success: true, data: updated });
 });
 

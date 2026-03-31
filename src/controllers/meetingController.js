@@ -92,6 +92,7 @@ export const getMeetingById = asyncHandler(async (req, res) => {
 
 export const updateMeeting = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
+  const userId = req.user.userId;
   const { meetingId } = req.params;
   const updateData = req.body;
 
@@ -105,9 +106,21 @@ export const updateMeeting = asyncHandler(async (req, res) => {
     });
   }
 
-  // Handle status update
+  // Handle status update with completion audit
   if (updateData.status) {
-    const updated = await meetingService.updateMeetingStatus(meetingId, updateData.status);
+    let statusUpdateData = { status: updateData.status };
+    
+    // If completing meeting, add completion audit with signature
+    if (updateData.status === 'completed') {
+      statusUpdateData.completion_audit = {
+        completed_by: userId,
+        completed_at: new Date(),
+        completion_signature: updateData.completion_signature || null,
+        completion_checklist_snapshot: updateData.completion_checklist_snapshot || []
+      };
+    }
+    
+    const updated = await meetingService.updateMeetingStatus(meetingId, statusUpdateData);
     return res.json({
       success: true,
       data: updated

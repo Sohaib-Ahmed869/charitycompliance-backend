@@ -17,7 +17,22 @@ export class DashboardService {
     return await getTenantConnection(this.orgId);
   }
 
-  async getAggregatedStats() {
+  /**
+   * Check if user has permission to view a module
+   * @param {Array} userPermissions - User's permissions array
+   * @param {string} moduleId - Module ID (e.g., 'complaints')
+   * @returns {boolean} - Whether user has view permission
+   */
+  hasModulePermission(userPermissions, moduleId) {
+    if (!Array.isArray(userPermissions)) return false;
+    // Admin access or wildcard permission
+    if (userPermissions.includes('*:*') || userPermissions.includes('admin')) return true;
+    // Specific module permission
+    return userPermissions.includes(`module:${moduleId}:view`) || 
+           userPermissions.includes(`module:${moduleId}:manage`);
+  }
+
+  async getAggregatedStats(userId = null, userPermissions = []) {
     const tenantDb = await this.getTenantDb();
 
     const riskRepo = new RiskRepository(tenantDb);
@@ -32,19 +47,23 @@ export class DashboardService {
     const org = await orgRepo.findOne();
     const orgId = org?._id || this.orgId;
 
+    // Check if user has permission to view complaints
+    const hasComplaintAccess = this.hasModulePermission(userPermissions, 'complaints');
+    const complaintUserId = hasComplaintAccess ? userId : null;
+
     const [risks, assets, tickets, legalDocs, complaints, policies, enhancedRisks, approvalTurnaround] = await Promise.allSettled([
       riskRepo.getCountsByOrg(this.orgId),
       assetRepo.getAssetStats(this.orgId),
       ticketRepo.getStats(this.orgId),
       legalDocRepo.getStats(this.orgId),
-      complaintRepo.getStats(orgId, null),
+      hasComplaintAccess ? complaintRepo.getStats(orgId, complaintUserId) : Promise.resolve({}),
       policyRepo.getCounts(this.orgId),
       this._getEnhancedRiskStats(tenantDb),
       this._getApprovalTurnaround(approvalRepo),
     ]);
 
-    const rawComplaints = complaints.status === 'fulfilled' ? complaints.value : {};
-    const normalizedComplaints = {
+    const rawComplaints = (complaints.status === 'fulfilled' && hasComplaintAccess) ? complaints.value : {};
+    const normalizedComplaints = hasComplaintAccess ? {
       total: rawComplaints?.total?.[0]?.count || 0,
       byStatus: Array.isArray(rawComplaints?.byStatus)
         ? rawComplaints.byStatus.reduce((acc, c) => { if (c._id) acc[c._id] = c.count; return acc; }, {})
@@ -56,6 +75,12 @@ export class DashboardService {
         ? rawComplaints.byPriority.reduce((acc, c) => { if (c._id) acc[c._id] = c.count; return acc; }, {})
         : {},
       avgResolutionTime: rawComplaints?.avgResolutionTime?.[0]?.avgDays || 0,
+    } : {
+      total: 0,
+      byStatus: {},
+      byCategory: {},
+      byPriority: {},
+      avgResolutionTime: 0,
     };
 
     return {

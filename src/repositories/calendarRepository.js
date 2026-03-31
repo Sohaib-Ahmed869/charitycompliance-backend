@@ -63,7 +63,7 @@ export class CalendarRepository {
    * Upsert a system-generated reminder event.
    * Uses (user_id, source_id, date, title) as a natural key.
    */
-  async upsertSystemReminderEvent({ user_id, source_id, date, title, description, type = 'compliance' }) {
+  async upsertSystemReminderEvent({ user_id, source_id, date, title, description, type = 'compliance', source = 'compliance' }) {
     const d = date instanceof Date ? date : new Date(date);
     return await this.CalendarEvent.findOneAndUpdate(
       { user_id, source_id, date: d, title },
@@ -76,7 +76,7 @@ export class CalendarRepository {
           description: description || '',
           type,
           is_custom: true,
-          source: 'compliance',
+          source,
           created_at: new Date(),
           updated_at: new Date()
         },

@@ -177,6 +177,20 @@ const approvalMatrixSchema = new mongoose.Schema({
     ref: 'User',
     default: null,
     index: true
+  },
+
+  // ── Audit metadata (who changed workflows) ───────────────────────────────
+  created_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+    index: true
+  },
+  updated_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+    index: true
   }
 }, {
   timestamps: true,

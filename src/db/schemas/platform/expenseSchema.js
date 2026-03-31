@@ -13,7 +13,7 @@ const paymentEntrySchema = new mongoose.Schema({
   },
   payment_method: {
     type: String,
-    enum: ['Bank Transfer', 'Cash', 'Check', 'Credit Card', 'Debit Card', 'Online Payment', 'Other']
+    trim: true
   },
   payment_proof: {
     type: String // S3 key
@@ -82,6 +82,14 @@ const expenseSchema = new mongoose.Schema({
     type: Date
   },
   vendor_name: {
+    type: String,
+    trim: true
+  },
+  supplier_name: {
+    type: String,
+    trim: true
+  },
+  supplier_information: {
     type: String,
     trim: true
   },
@@ -171,7 +179,7 @@ const expenseSchema = new mongoose.Schema({
   },
   payment_method: {
     type: String,
-    enum: ['Bank Transfer', 'Cash', 'Check', 'Credit Card', 'Debit Card', 'Online Payment', 'Other']
+    trim: true
   },
   payment_proof: {
     type: String // File path/URL
