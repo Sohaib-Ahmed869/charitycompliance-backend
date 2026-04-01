@@ -97,6 +97,7 @@ const approvalRequestSchema = new mongoose.Schema({
       'donation_agreement',
       'donation_milestone',
       'social_media_campaign',
+      'social_media_campaign_compliance',
       'contract',
       'leave',
       'hr',

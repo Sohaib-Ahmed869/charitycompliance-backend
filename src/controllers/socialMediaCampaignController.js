@@ -43,3 +43,27 @@ export const updateSocialMediaCampaign = asyncHandler(async (req, res) => {
   res.json({ success: true, data: updated });
 });
 
+export const publishSocialMediaCampaign = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user?.userId || req.userId;
+  const id = req.params.campaignId;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign ID' } });
+  }
+  const service = new SocialMediaCampaignService(orgId);
+  const updated = await service.publishCampaign(id, req.body, userId);
+  res.json({ success: true, data: updated });
+});
+
+export const resubmitSocialMediaCompliance = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user?.userId || req.userId;
+  const id = req.params.campaignId;
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ success: false, error: { code: 'VALIDATION_ERROR', message: 'Invalid campaign ID' } });
+  }
+  const service = new SocialMediaCampaignService(orgId);
+  const updated = await service.resubmitPostCompliance(id, userId);
+  res.json({ success: true, data: updated });
+});
+

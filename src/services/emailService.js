@@ -352,6 +352,69 @@ class EmailService {
   }
 
   /**
+   * Auditor invite: read-only access; temporary password + org ID for first sign-in.
+   * @param {Object} params
+   * @param {string} params.to
+   * @param {string} params.recipientName
+   * @param {string} params.organizationName
+   * @param {string} params.orgId - Organisation ID for login
+   * @param {string} params.tempPassword - One-time password (store only bcrypt server-side)
+   * @param {string} [params.inviterName]
+   */
+  async sendAuditorInviteEmail({ to, recipientName, organizationName, orgId, tempPassword, inviterName }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const loginLink = `${baseUrl}/login`;
+
+    const escapeHtml = (s) =>
+      String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+
+    const safeOrgId = escapeHtml(orgId);
+    const safeEmail = escapeHtml(to);
+    const safeTempPw = escapeHtml(tempPassword);
+    const safeName = escapeHtml(recipientName || 'there');
+    const safeOrgName = escapeHtml(organizationName);
+    const inviterPhrase = inviterName
+      ? `<strong>${escapeHtml(inviterName)}</strong> has granted you`
+      : 'You have been granted';
+
+    const subject = `Auditor access to ${organizationName}`;
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${safeName},</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">${inviterPhrase} <strong>read-only auditor access</strong> to <strong>${safeOrgName}</strong> in ${APP_NAME}. You can browse the organisation but cannot change data or use in-app notifications.</p>
+      <p style="margin: 0 0 8px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Sign in with the details below (use <strong>Sign in</strong> when you are ready):</p>
+      <table cellpadding="0" cellspacing="0" border="0" align="center" style="margin: 12px auto 16px; max-width: 420px; border: 1px solid #E5E7EB; border-radius: 10px; background: #F8FAFC;">
+        <tr><td style="padding: 14px 18px; text-align: left;">
+          <p style="margin: 0 0 6px 0; font-size: 11px; color: #64748B; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Email</p>
+          <p style="margin: 0 0 12px 0; font-size: 13px; font-family: ui-monospace, monospace; color: #0F172A; word-break: break-all;">${safeEmail}</p>
+          <p style="margin: 0 0 6px 0; font-size: 11px; color: #64748B; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Temporary password</p>
+          <p style="margin: 0 0 12px 0; font-size: 13px; font-family: ui-monospace, monospace; color: #0F172A; letter-spacing: 0.06em;">${safeTempPw}</p>
+          <p style="margin: 0 0 6px 0; font-size: 11px; color: #64748B; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Organisation ID</p>
+          <p style="margin: 0; font-size: 13px; font-family: ui-monospace, monospace; color: #132E5E; font-weight: 600; word-break: break-all;">${safeOrgId}</p>
+        </td></tr>
+      </table>
+    `;
+
+    const html = buildEmailTemplate({
+      heading: 'Your auditor access',
+      bodyHtml,
+      buttonText: 'Sign in',
+      buttonLink: loginLink,
+      infoBoxLines: [
+        'Change this password after first login if your organisation requires it (Forgot password / account settings).',
+        'Keep your organisation ID safe — you need it every time you log in.',
+        "If you didn't expect this email, you can ignore it."
+      ]
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
    * Send password reset email
    * @param {Object} params - Reset parameters
    * @param {string} params.to - Recipient email

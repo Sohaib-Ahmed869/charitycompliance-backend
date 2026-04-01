@@ -29,7 +29,7 @@ const startServer = async () => {
       emailService.initialize().catch(() => {});
       // Start scheduled reminders (registration/license expiries)
       startRegistrationLicenseReminderScheduler();
-      // Start scheduled meeting reminders (1-hour before, checks every 10 mins)
+      // Meeting reminders (~1h / ~15m before start, with catch-up if ticks were missed). Tick: MEETING_REMINDER_TICK_MS (default 3m). SMTP required for email.
       startMeetingReminderScheduler();
     });
 

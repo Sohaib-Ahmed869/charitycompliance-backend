@@ -21,6 +21,7 @@ const approvalRuleSchema = new mongoose.Schema({
       'donation_agreement',
       'donation_milestone',
       'social_media_campaign',
+      'social_media_campaign_compliance',
       'contract',
       'leave',
       'hr',
@@ -112,6 +113,7 @@ const approvalMatrixSchema = new mongoose.Schema({
       'donation_agreement_workflow',
       'donation_milestone_workflow',
       'social_media_campaign_workflow',
+      'social_media_campaign_compliance_workflow',
       'emergency',
       'other'
     ],
@@ -218,6 +220,7 @@ const getCategoryDisplayName = (category) => {
     donation_agreement_workflow: 'Donation Funding Agreements',
     donation_milestone_workflow: 'Donation Milestones',
     social_media_campaign_workflow: 'Social Media Campaigns',
+    social_media_campaign_compliance_workflow: 'Marketing post-publication compliance',
     hr_approval: 'HR Approval',
     emergency: 'Emergency Response'
   };
