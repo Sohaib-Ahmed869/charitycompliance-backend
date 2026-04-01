@@ -91,6 +91,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
   let documentEvents = [];
   let governingReviewEvents = [];
   let legalReviewEvents = [];
+  let legalExpiryEvents = [];
   let meetingEvents = [];
 
   try {
@@ -230,6 +231,23 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
     } catch (error) {
       logError('Error retrieving legal document review events', { orgId, error: error.message, stack: error.stack });
     }
+
+    try {
+      const legalExpiries = await calendarRepo.findUpcomingLegalDocumentExpiries(orgId, dateOptions);
+      legalExpiryEvents = legalExpiries.map((d) => formatCalendarEvent(
+        {
+          ...d,
+          title: `${d.document_name} - Expires`,
+          date: d.expiry_date,
+          description: d.category || 'legal document'
+        },
+        'legal_document',
+        d._id?.toString()
+      ));
+      logInfo('Legal document expiry events retrieved', { orgId, count: legalExpiryEvents.length });
+    } catch (error) {
+      logError('Error retrieving legal document expiry events', { orgId, error: error.message, stack: error.stack });
+    }
   }
   } // if (orgObjectId)
 
@@ -279,6 +297,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
     ...documentEvents,
     ...governingReviewEvents,
     ...legalReviewEvents,
+    ...legalExpiryEvents,
     ...meetingEvents
   ];
 
