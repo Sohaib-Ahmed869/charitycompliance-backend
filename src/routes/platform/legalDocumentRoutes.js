@@ -25,6 +25,7 @@ router.post(
       .withMessage('Invalid category type'),
     body('category_other_text').optional({ values: 'falsy' }).trim(),
     body('effective_date').optional({ values: 'falsy' }).isISO8601().withMessage('Invalid date format'),
+    body('expiry_date').optional({ values: 'falsy' }).isISO8601().withMessage('Invalid date format'),
     body('review_date').optional({ values: 'falsy' }).isISO8601().withMessage('Invalid date format'),
     body('owner_id').optional({ values: 'falsy' }).isMongoId().withMessage('Invalid owner ID')
   ],
@@ -61,6 +62,7 @@ router.put(
     body('category_other_text').optional({ values: 'falsy' }).trim(),
     body('status').optional({ values: 'falsy' }).isIn(['active', 'expired', 'archived']),
     body('effective_date').optional({ values: 'falsy' }).isISO8601(),
+    body('expiry_date').optional({ values: 'falsy' }).isISO8601(),
     body('review_date').optional({ values: 'falsy' }).isISO8601(),
     body('owner_id').optional({ values: 'falsy' }).isMongoId()
   ],

@@ -59,6 +59,9 @@ const legalDocumentSchema = new mongoose.Schema({
   effective_date: {
     type: Date
   },
+  expiry_date: {
+    type: Date
+  },
   review_date: {
     type: Date
   },

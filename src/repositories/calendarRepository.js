@@ -375,6 +375,31 @@ export class CalendarRepository {
   }
 
   /**
+   * Find legal document expiry dates.
+   */
+  async findUpcomingLegalDocumentExpiries(orgId, options = {}) {
+    const query = {
+      org_id: orgId,
+      status: { $in: ['active'] },
+      expiry_date: { $exists: true, $ne: null }
+    };
+
+    if (options.start_date || options.end_date) {
+      const dateQuery = {};
+      if (options.start_date) dateQuery.$gte = new Date(options.start_date);
+      if (options.end_date) dateQuery.$lte = new Date(options.end_date);
+      if (Object.keys(dateQuery).length > 0) {
+        query.expiry_date = { $exists: true, $ne: null, ...dateQuery };
+      }
+    }
+
+    return await this.LegalDocument.find(query)
+      .select('_id document_name category expiry_date')
+      .sort({ expiry_date: 1 })
+      .lean();
+  }
+
+  /**
    * Find funding agreements with upcoming end dates (approved or pending)
    */
   async findUpcomingFundingAgreementEnds(orgId, options = {}) {

@@ -109,7 +109,7 @@ export class LegalDocumentRepository {
             {
               $match: {
                 status: 'active',
-                effective_date: { $lte: thirtyDaysFromNow, $gte: now }
+                expiry_date: { $lte: thirtyDaysFromNow, $gte: now }
               }
             },
             { $count: 'count' }
