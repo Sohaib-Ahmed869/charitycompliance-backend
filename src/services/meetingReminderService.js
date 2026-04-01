@@ -23,6 +23,8 @@ const MIN_MS = 60 * 1000;
 
 /** Load candidate meetings starting within this many minutes (must cover 1h band + slack) */
 const LOOKAHEAD_MINUTES = 115;
+/** Catch-up window after restart (send "soon" reminder if meeting just started). */
+const CATCHUP_GRACE_MINUTES = Number(process.env.MEETING_REMINDER_CATCHUP_GRACE_MINUTES) || 20;
 
 /**
  * 15m phase: meeting starts in (0, 36) minutes — catch-up if earlier ticks missed.
@@ -161,7 +163,7 @@ async function sendMeetingReminderForMeeting({
             })
           })
           .catch((err) => {
-            logError('Meeting reminder email failed', { orgId, to: u.email, phase, error: err?.message });
+            logError('Meeting reminder email failed', err, { orgId, to: u.email, phase });
           })
       );
     }
@@ -191,12 +193,7 @@ async function sendMeetingReminderForMeeting({
           })
         })
         .catch((err) => {
-          logError('Meeting reminder email failed (external)', {
-            orgId,
-            to: ext.email,
-            phase,
-            error: err?.message,
-          });
+          logError('Meeting reminder email failed (external)', err, { orgId, to: ext.email, phase });
         })
     );
   }
@@ -220,21 +217,25 @@ async function processTenantMeetingReminders({
   now,
 }) {
   const horizon = new Date(now.getTime() + LOOKAHEAD_MINUTES * MIN_MS);
+  const lookback = new Date(now.getTime() - CATCHUP_GRACE_MINUTES * MIN_MS);
 
   const rawMeetings = await Meeting.find({
-    date: { $gt: now, $lte: horizon },
+    date: { $gte: lookback, $lte: horizon },
     status: { $nin: ['cancelled', 'completed'] },
   })
     .select('_id title date attendees external_attendees reminder_sent status')
     .lean();
 
   let notificationsCreated = 0;
+  let eligible15m = 0;
+  let eligible1h = 0;
 
   /** 15m first: "starting soon" for anything within 35 minutes */
   for (const m of rawMeetings) {
     const mu = minutesUntilStart(m.date, now);
-    if (mu <= 0 || mu >= PHASE_15M_MAX_MINUTES_BEFORE) continue;
+    if (mu <= -CATCHUP_GRACE_MINUTES || mu >= PHASE_15M_MAX_MINUTES_BEFORE) continue;
     if (sameScheduledInstant(m.reminder_sent?.fifteen_min_for_date, m.date)) continue;
+    eligible15m += 1;
 
     notificationsCreated += await sendMeetingReminderForMeeting({
       Meeting,
@@ -253,6 +254,7 @@ async function processTenantMeetingReminders({
     const mu = minutesUntilStart(m.date, now);
     if (mu < PHASE_1H_MIN_MINUTES_BEFORE || mu > PHASE_1H_MAX_MINUTES_BEFORE) continue;
     if (sameScheduledInstant(m.reminder_sent?.one_hour_for_date, m.date)) continue;
+    eligible1h += 1;
 
     notificationsCreated += await sendMeetingReminderForMeeting({
       Meeting,
@@ -265,6 +267,20 @@ async function processTenantMeetingReminders({
       orgId,
     });
   }
+
+  logInfo('Meeting reminder tick (tenant)', {
+    orgId,
+    now: now.toISOString(),
+    lookback: lookback.toISOString(),
+    horizon: horizon.toISOString(),
+    scanned: rawMeetings.length,
+    eligible15m,
+    eligible1h,
+    notificationsCreated,
+    catchupGraceMinutes: CATCHUP_GRACE_MINUTES,
+    lookaheadMinutes: LOOKAHEAD_MINUTES,
+    smtpConfigured: emailService.isConfigured(),
+  });
 
   return { notificationsCreated, scanned: rawMeetings.length };
 }
@@ -308,7 +324,7 @@ export async function runMeetingRemindersOnce() {
       reminderCount += notificationsCreated;
       meetingsScanned += scanned;
     } catch (err) {
-      logError('Meeting reminder run failed for tenant', { orgId, error: err?.message });
+      logError('Meeting reminder run failed for tenant', err, { orgId });
     }
   }
 
@@ -333,7 +349,7 @@ export function startMeetingReminderScheduler() {
     try {
       await runMeetingRemindersOnce();
     } catch (err) {
-      logError('Meeting reminder scheduler tick failed', { error: err?.message });
+      logError('Meeting reminder scheduler tick failed', err);
     }
   };
 
