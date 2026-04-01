@@ -1468,10 +1468,28 @@ export class BcpService {
         emailService.sendEmail({
           to: fromUser.email,
           subject: `Position Transferred – ${positionTitle} [${transferCode}]`,
-          html: `<p>Hi ${fromName},</p>
-<p>Your responsibilities for <strong>${positionTitle}</strong> have been transferred to <strong>${toName}</strong> effective ${transfer.effective_date ? new Date(transfer.effective_date).toLocaleDateString() : 'immediately'}.</p>
-<p>Your access to associated workflows and approvals for this position has been revoked.</p>
-<p>Transfer Reference: <strong>${transferCode}</strong></p>`
+          html: emailService.buildBrandedHtml({
+            heading: 'Position transferred',
+            bodyHtml: `
+              <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                Hi ${fromName},
+              </p>
+              <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                Your responsibilities for <strong>${positionTitle}</strong> have been transferred to <strong>${toName}</strong>
+                effective ${transfer.effective_date ? new Date(transfer.effective_date).toLocaleDateString('en-AU') : 'immediately'}.
+              </p>
+              <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                Your access to associated workflows and approvals for this position has been revoked.
+              </p>
+              <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:12px;margin:14px auto 0;max-width:420px;text-align:left;">
+                <p style="margin:0;font-size:11px;color:#64748B;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">Transfer reference</p>
+                <p style="margin:6px 0 0;font-size:13px;font-family:ui-monospace, monospace;color:#132E5E;font-weight:700;word-break:break-all;">${transferCode}</p>
+              </div>
+            `,
+            buttonText: 'Open BCP',
+            buttonLink: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/bcp`,
+            infoBoxLines: ["If you didn't expect this email, please contact your administrator."]
+          })
         })
       );
     }
@@ -1481,10 +1499,28 @@ export class BcpService {
         emailService.sendEmail({
           to: toUser.email,
           subject: `New Role Assigned – ${positionTitle} [${transferCode}]`,
-          html: `<p>Hi ${toName},</p>
-<p>You have been assigned the <strong>${positionTitle}</strong> role, previously held by <strong>${fromName}</strong>, effective ${transfer.effective_date ? new Date(transfer.effective_date).toLocaleDateString() : 'immediately'}.</p>
-<p>Please complete any assigned trainings and policy acknowledgements.</p>
-<p>Transfer Reference: <strong>${transferCode}</strong></p>`
+          html: emailService.buildBrandedHtml({
+            heading: 'New role assigned',
+            bodyHtml: `
+              <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                Hi ${toName},
+              </p>
+              <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                You have been assigned the <strong>${positionTitle}</strong> role, previously held by <strong>${fromName}</strong>,
+                effective ${transfer.effective_date ? new Date(transfer.effective_date).toLocaleDateString('en-AU') : 'immediately'}.
+              </p>
+              <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                Please complete any assigned trainings and policy acknowledgements.
+              </p>
+              <div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:10px;padding:12px;margin:14px auto 0;max-width:420px;text-align:left;">
+                <p style="margin:0;font-size:11px;color:#64748B;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">Transfer reference</p>
+                <p style="margin:6px 0 0;font-size:13px;font-family:ui-monospace, monospace;color:#132E5E;font-weight:700;word-break:break-all;">${transferCode}</p>
+              </div>
+            `,
+            buttonText: 'Open BCP',
+            buttonLink: `${process.env.FRONTEND_URL || 'http://localhost:5173'}/bcp`,
+            infoBoxLines: ['This email is for your records.']
+          })
         })
       );
     }

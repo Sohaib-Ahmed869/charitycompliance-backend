@@ -145,7 +145,20 @@ async function sendMeetingReminderForMeeting({
             to: u.email,
             subject: `Reminder: ${title} in about ${minutesUntil} minutes`,
             text: `${title} starts in about ${minutesUntil} minutes. Organisation calendar (${displayTz}): ${wall}.`,
-            html: `<p>${escapeHtml(title)} starts in about <strong>${minutesUntil}</strong> minutes.</p><p>Organisation calendar: ${escapeHtml(wall)}</p>`,
+            html: emailService.buildBrandedHtml({
+              heading: 'Meeting reminder',
+              bodyHtml: `
+                <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                  <strong>${escapeHtml(title)}</strong> starts in about <strong>${minutesUntil}</strong> minutes.
+                </p>
+                <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                  Organisation calendar (${escapeHtml(displayTz)}): ${escapeHtml(wall)}
+                </p>
+              `,
+              buttonText: 'View meeting',
+              buttonLink: link,
+              infoBoxLines: ['If you cannot access the meeting link, please contact your administrator.']
+            })
           })
           .catch((err) => {
             logError('Meeting reminder email failed', { orgId, to: u.email, phase, error: err?.message });
@@ -162,7 +175,20 @@ async function sendMeetingReminderForMeeting({
           to: ext.email,
           subject: `Reminder: ${title} in about ${minutesUntil} minutes`,
           text: `${title} starts in about ${minutesUntil} minutes. Organisation calendar: ${wall}.`,
-          html: `<p>${escapeHtml(title)} starts in about <strong>${minutesUntil}</strong> minutes.</p><p>${escapeHtml(wall)}</p>`,
+          html: emailService.buildBrandedHtml({
+            heading: 'Meeting reminder',
+            bodyHtml: `
+              <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                <strong>${escapeHtml(title)}</strong> starts in about <strong>${minutesUntil}</strong> minutes.
+              </p>
+              <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                Organisation calendar: ${escapeHtml(wall)}
+              </p>
+            `,
+            buttonText: 'View meeting',
+            buttonLink: link,
+            infoBoxLines: ['This is an automated reminder.']
+          })
         })
         .catch((err) => {
           logError('Meeting reminder email failed (external)', {
