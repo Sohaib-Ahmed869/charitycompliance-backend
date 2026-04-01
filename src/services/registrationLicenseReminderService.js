@@ -36,6 +36,13 @@ const formatDate = (d) => {
   }
 };
 
+const toTitleCase = (v) =>
+  String(v || '')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+
 /**
  * Resolve recipient user IDs based on configured positions/modules.
  * Strategy:
@@ -146,7 +153,8 @@ export async function runRegistrationLicenseRemindersOnce() {
 
         const label = daysUntil === 0 ? 'today' : `in ${daysUntil} day${daysUntil === 1 ? '' : 's'}`;
         const title = `${doc.title || doc.document_type || 'Registration/License'} expires ${label}`;
-        const msg = `${doc.document_type || 'Registration/License'}${doc.registration_number ? ` (${doc.registration_number})` : ''} expires on ${formatDate(doc.expiry_date)}.`;
+        const docType = toTitleCase(doc.document_type || 'Registration/License');
+        const msg = `${docType}${doc.registration_number ? ` (${doc.registration_number})` : ''} expires on ${formatDate(doc.expiry_date)}.`;
         const link = `/charity-administration/registrations-licenses`;
 
         // Create a reminder event dated today (so it shows as a reminder before expiry)
@@ -191,7 +199,17 @@ export async function runRegistrationLicenseRemindersOnce() {
                 to: u.email,
                 subject: title,
                 text: msg,
-                html: ''
+                html: emailService.buildBrandedHtml({
+                  heading: 'Expiry reminder',
+                  bodyHtml: `
+                    <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                      ${msg}
+                    </p>
+                  `,
+                  buttonText: 'View register',
+                  buttonLink: `${process.env.FRONTEND_URL || 'http://localhost:5173'}${link}`,
+                  infoBoxLines: ['Please renew or update the record before it expires.']
+                })
               })
               .catch(() => {});
             logInfo('Reminder email sent (registration/license)', {
@@ -219,7 +237,8 @@ export async function runRegistrationLicenseRemindersOnce() {
 
         const label = daysUntil === 0 ? 'today' : `in ${daysUntil} day${daysUntil === 1 ? '' : 's'}`;
         const title = `${doc.title || doc.document_type || 'Governing document'} review due ${label}`;
-        const msg = `${doc.document_type || 'Governing document'} should be reviewed by ${formatDate(doc.review_date)}.`;
+        const docType = toTitleCase(doc.document_type || 'Governing document');
+        const msg = `${docType} should be reviewed by ${formatDate(doc.review_date)}.`;
         const link = '/governance/governing-documents';
 
         const eventDate = new Date(today);
@@ -261,7 +280,17 @@ export async function runRegistrationLicenseRemindersOnce() {
                 to: u.email,
                 subject: title,
                 text: msg,
-                html: ''
+                html: emailService.buildBrandedHtml({
+                  heading: 'Review reminder',
+                  bodyHtml: `
+                    <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+                      ${msg}
+                    </p>
+                  `,
+                  buttonText: 'View documents',
+                  buttonLink: `${process.env.FRONTEND_URL || 'http://localhost:5173'}${link}`,
+                  infoBoxLines: ['This is an automated compliance reminder.']
+                })
               })
               .catch(() => {});
             logInfo('Reminder email sent (governing document review)', {

@@ -9,7 +9,6 @@ import nodemailer from 'nodemailer';
 import { logError, logInfo } from '../utils/logger.js';
 
 const APP_NAME = process.env.APP_NAME || 'Stewardex';
-const LOGO_URL = process.env.logo || process.env.LOGO_URL || '';
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@stewardex.com';
 
 const GRADIENT = 'linear-gradient(103.82deg, #132E5E 6.74%, #9A78EC 76.18%)';
@@ -28,9 +27,12 @@ const CONTAINER_GRADIENT = 'linear-gradient(180deg, #FFFFFF 0%, #FDFCFE 50%, #FA
  * @param {string} [options.rsvpButtonsHtml] - Optional RSVP Accept/Decline buttons HTML
  */
 function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, buttonLink, infoBoxLines, rsvpButtonsHtml }) {
-  const logoHtml = LOGO_URL
-    ? `<img src="${LOGO_URL}" alt="${APP_NAME}" style="max-width: 160px; height: auto;" />`
-    : `<span style="font-size: 32px; font-weight: 600; letter-spacing: 1px; color: #5B6B9D;">${APP_NAME.toLowerCase()}</span>`;
+  // Emails always use the Stewardex wordmark (matches login page) rather than tenant/org logos.
+  const logoHtml = `
+    <span style="font-size: 40px; line-height: 1; font-weight: 700; letter-spacing: -1px; color: #111827;">
+      Stewardex
+    </span>
+  `;
 
   const lockIcon = '🔒';
 
@@ -158,6 +160,14 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
 </body>
 </html>
 `;
+}
+
+function toTitleCase(v) {
+  return String(v || '')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 class EmailService {
@@ -301,6 +311,23 @@ class EmailService {
       logError('Failed to send email', error, { to, subject });
       throw error;
     }
+  }
+
+  /**
+   * Build a branded Stewardex email HTML wrapper around custom body content.
+   * Use this when other services need to send a one-off email but still
+   * want consistent branding + no snake_case labels.
+   */
+  buildBrandedHtml({ heading, bodyHtml, buttonText, buttonLink, infoBoxLines = [], headingHighlight, rsvpButtonsHtml } = {}) {
+    return buildEmailTemplate({
+      heading: heading || APP_NAME,
+      headingHighlight,
+      bodyHtml: bodyHtml || '',
+      buttonText: buttonText || 'Open Stewardex',
+      buttonLink: buttonLink || (process.env.FRONTEND_URL || 'http://localhost:5173'),
+      infoBoxLines,
+      rsvpButtonsHtml
+    });
   }
 
   /**
@@ -886,7 +913,7 @@ class EmailService {
       donation: 'Donation',
       contract: 'Contract',
       complaint: 'Complaint'
-    }[requestType] || requestType.charAt(0).toUpperCase() + requestType.slice(1);
+    }[requestType] || toTitleCase(requestType);
 
     const subject = `Action Required: ${typeLabel} approval - ${entityTitle}`;
 
@@ -946,7 +973,7 @@ class EmailService {
       donation: 'Donation',
       contract: 'Contract',
       complaint: 'Complaint'
-    }[requestType] || requestType.charAt(0).toUpperCase() + requestType.slice(1);
+    }[requestType] || toTitleCase(requestType);
 
     const isApproved = decision === 'approved';
     const subject = `${typeLabel} ${isApproved ? 'Approved' : 'Rejected'}: ${entityTitle}`;
@@ -1016,7 +1043,7 @@ class EmailService {
       donation: 'Donation',
       contract: 'Contract',
       complaint: 'Complaint'
-    }[requestType] || requestType.charAt(0).toUpperCase() + requestType.slice(1);
+    }[requestType] || toTitleCase(requestType);
 
     const subject = `Opinion Requested: ${typeLabel} review - ${entityTitle}`;
 
