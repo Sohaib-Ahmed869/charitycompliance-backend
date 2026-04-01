@@ -419,6 +419,14 @@ export class MeetingService {
 
     if (status === 'completed') {
       updateData.completed_at = new Date();
+      const snapshot = statusOrData.completion_audit?.completion_checklist_snapshot;
+      if (Array.isArray(snapshot) && snapshot.length > 0) {
+        updateData['board_meeting_info.compliance_checklist'] = snapshot.map((entry) => ({
+          item: entry.item,
+          completed: !!entry.completed,
+          checked_at: entry.checked_at ? new Date(entry.checked_at) : new Date()
+        }));
+      }
     } else if (status === 'cancelled') {
       updateData.cancelled_at = new Date();
     }

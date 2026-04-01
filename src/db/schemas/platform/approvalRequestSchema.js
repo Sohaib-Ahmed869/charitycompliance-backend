@@ -188,6 +188,13 @@ const approvalRequestSchema = new mongoose.Schema({
     type: String,
     default: null
   },
+  /**
+   * Optional extra context from the submitter (e.g. policy upload "Notes" alongside change control).
+   */
+  submitter_notes: {
+    type: String,
+    default: null
+  },
   /** For risk_treatment requests: index of the treatment in risk.treatments array */
   treatment_index: {
     type: Number,

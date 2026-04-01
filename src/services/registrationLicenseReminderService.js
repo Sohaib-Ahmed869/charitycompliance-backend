@@ -11,10 +11,13 @@ import { OrganizationRepository } from '../repositories/organizationRepository.j
 import { CalendarRepository } from '../repositories/calendarRepository.js';
 import { NotificationRepository } from '../repositories/notificationRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
+import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import emailService from './emailService.js';
 import { logError, logInfo } from '../utils/logger.js';
 
-const DEFAULT_DAYS_BEFORE = [60, 30, 14, 7, 1];
+const DEFAULT_DAYS_BEFORE = [60, 30, 14, 7, 3, 1];
+const ESCALATION_HOD_DAYS_OVERDUE = 1;
+const ESCALATION_BOARD_DAYS_AFTER_HOD = 7;
 
 const startOfDay = (d) => {
   const x = new Date(d);
@@ -100,6 +103,20 @@ async function getLeadTimes(orgSettings = {}) {
   return (days && days.length ? Array.from(new Set(days)).sort((a, b) => b - a) : DEFAULT_DAYS_BEFORE);
 }
 
+async function resolveBoardUserIds(tenantDb, orgObjectId) {
+  const bmRepo = new BoardMemberRepository(tenantDb);
+  const boardMembers = await bmRepo.findByOrgId(orgObjectId, false, false);
+  return (Array.isArray(boardMembers) ? boardMembers : [])
+    .filter((bm) => bm?.is_board_member === true && bm?.has_system_access !== false && bm?.user_id)
+    .map((bm) => String(bm.user_id));
+}
+
+async function resolveHodUserIdForDepartment(tenantDb, orgObjectId, departmentId) {
+  const bmRepo = new BoardMemberRepository(tenantDb);
+  const hod = await bmRepo.findDepartmentHeadByDepartmentId(orgObjectId, departmentId);
+  return hod?.user_id ? String(hod.user_id) : null;
+}
+
 export async function runRegistrationLicenseRemindersOnce() {
   const routerDb = getRouterConnection();
   const tenants = await routerDb.collection('tenants').find({ status: 'active' }).project({ orgId: 1 }).toArray();
@@ -129,6 +146,7 @@ export async function runRegistrationLicenseRemindersOnce() {
       const userRepo = new UserRepository(tenantDb);
       const calendarRepo = new CalendarRepository(tenantDb);
       const notificationRepo = new NotificationRepository(tenantDb);
+      const boardUserIds = await resolveBoardUserIds(tenantDb, orgObjectId).catch(() => []);
 
       // Find docs expiring within max lead time
       const maxDays = Math.max(...daysBeforeList, 0);
@@ -144,7 +162,7 @@ export async function runRegistrationLicenseRemindersOnce() {
         category: 'registration_license',
         status: { $in: ['submitted', 'approved'] },
         expiry_date: { $exists: true, $ne: null, $gte: today, $lte: end }
-      }).select('_id title document_type registration_number expiry_date').lean();
+      }).select('_id title document_type registration_number expiry_date uploaded_by').lean();
 
       for (const doc of docs) {
         const expiry = startOfDay(doc.expiry_date);
@@ -217,6 +235,124 @@ export async function runRegistrationLicenseRemindersOnce() {
               userId: String(uid),
               documentId: String(doc._id)
             });
+          }
+        }
+      }
+
+      // ── Escalations for overdue registrations/licenses (HOD after 1 day, Board after 7 more days) ──
+      // We treat "action not taken" as: item is past due and still present in active statuses.
+      // We only look back enough days to cover the escalation windows.
+      const overdueLookbackDays = ESCALATION_HOD_DAYS_OVERDUE + ESCALATION_BOARD_DAYS_AFTER_HOD + 1; // e.g. 9
+      const overdueStart = new Date(today);
+      overdueStart.setDate(overdueStart.getDate() - overdueLookbackDays);
+      const overdueLicenses = await Document.find({
+        org_id: orgObjectId,
+        category: 'registration_license',
+        status: { $in: ['submitted', 'approved'] },
+        expiry_date: { $exists: true, $ne: null, $gte: overdueStart, $lt: today }
+      }).select('_id title document_type registration_number expiry_date uploaded_by').lean();
+
+      for (const doc of overdueLicenses) {
+        const due = startOfDay(doc.expiry_date);
+        const daysUntil = Math.round((due - today) / 86400000); // negative when overdue
+        const daysOverdue = -daysUntil;
+        const docType = toTitleCase(doc.document_type || 'Registration/License');
+        const baseTitle = doc.title || doc.document_type || 'Registration/License';
+        const link = `/charity-administration/registrations-licenses`;
+
+        // Notify responsible person (uploader) at 7d & 3d before expiry as well (in addition to general recipients).
+        if ([7, 3].includes(Math.max(daysUntil, 0))) {
+          const responsibleUid = doc.uploaded_by ? String(doc.uploaded_by) : null;
+          if (responsibleUid) {
+            const already = await notificationRepo.existsToday({
+              user_id: responsibleUid,
+              type: 'compliance_due_reminder',
+              related_entity_id: doc._id,
+              message_contains: '[stage:responsible]'
+            });
+            if (!already) {
+              const label = `in ${daysUntil} day${daysUntil === 1 ? '' : 's'}`;
+              const msg = `${docType}${doc.registration_number ? ` (${doc.registration_number})` : ''} expires on ${formatDate(doc.expiry_date)}.`;
+              await notificationRepo.create({
+                user_id: responsibleUid,
+                type: 'compliance_due_reminder',
+                title: `${baseTitle} due ${label}`,
+                message: `${msg} [stage:responsible]`,
+                link,
+                related_entity_id: doc._id,
+                related_entity_type: 'document',
+                created_at: new Date()
+              });
+              reminderCount += 1;
+            }
+          }
+        }
+
+        // Escalate to HOD after 1 day overdue.
+        if (daysOverdue === ESCALATION_HOD_DAYS_OVERDUE) {
+          // No department mapping for licenses; use org owner (already in recipients) as HOD fallback.
+          const hodUid = recipients[0] || null;
+          if (hodUid) {
+            const already = await notificationRepo.existsToday({
+              user_id: hodUid,
+              type: 'compliance_overdue_hod',
+              related_entity_id: doc._id,
+              message_contains: '[stage:hod]'
+            });
+            if (!already) {
+              const msg = `${docType}${doc.registration_number ? ` (${doc.registration_number})` : ''} expired on ${formatDate(doc.expiry_date)} and has not been updated.`;
+              await notificationRepo.create({
+                user_id: hodUid,
+                type: 'compliance_overdue_hod',
+                title: `Overdue: ${baseTitle}`,
+                message: `${msg} [stage:hod]`,
+                link,
+                related_entity_id: doc._id,
+                related_entity_type: 'document',
+                created_at: new Date()
+              });
+              reminderCount += 1;
+              const u = await userRepo.findById(hodUid).catch(() => null);
+              if (u?.email) {
+                emailService.sendEmail({
+                  to: u.email,
+                  subject: `Overdue action required: ${baseTitle}`,
+                  text: msg,
+                  html: emailService.buildBrandedHtml({
+                    heading: 'Overdue compliance item',
+                    bodyHtml: `<p style="margin:0;font-size:12px;line-height:18px;color:#333333;text-align:center;max-width:500px;">${msg}</p>`,
+                    buttonText: 'View register',
+                    buttonLink: `${process.env.FRONTEND_URL || 'http://localhost:5173'}${link}`,
+                    infoBoxLines: ['Escalated because no action was taken after the due date.']
+                  })
+                }).catch(() => {});
+              }
+            }
+          }
+        }
+
+        // Escalate to Board 7 days after HOD escalation (i.e. 8 days overdue by default).
+        if (daysOverdue === (ESCALATION_HOD_DAYS_OVERDUE + ESCALATION_BOARD_DAYS_AFTER_HOD)) {
+          for (const boardUid of boardUserIds) {
+            const already = await notificationRepo.existsToday({
+              user_id: boardUid,
+              type: 'compliance_overdue_board',
+              related_entity_id: doc._id,
+              message_contains: '[stage:board]'
+            });
+            if (already) continue;
+            const msg = `${docType}${doc.registration_number ? ` (${doc.registration_number})` : ''} expired on ${formatDate(doc.expiry_date)} and remains unaddressed after escalation.`;
+            await notificationRepo.create({
+              user_id: boardUid,
+              type: 'compliance_overdue_board',
+              title: `Board escalation: ${baseTitle}`,
+              message: `${msg} [stage:board]`,
+              link,
+              related_entity_id: doc._id,
+              related_entity_type: 'document',
+              created_at: new Date()
+            });
+            reminderCount += 1;
           }
         }
       }
@@ -450,6 +586,122 @@ export async function runRegistrationLicenseRemindersOnce() {
                 checkKind: c.kind
               });
             }
+          }
+        }
+      }
+
+      // ── Privacy policy review reminders (7d, 3d, overdue escalation) ─────────
+      const policySchema = (await import('../db/schemas/platform/policySchema.js')).default;
+      tenantDb.models.Policy || tenantDb.model('Policy', policySchema);
+      const Policy = tenantDb.model('Policy');
+
+      const policyEnd = new Date(today);
+      policyEnd.setDate(policyEnd.getDate() + Math.max(maxDays, 7));
+      const policyOverdueStart = new Date(today);
+      policyOverdueStart.setDate(policyOverdueStart.getDate() - (ESCALATION_HOD_DAYS_OVERDUE + ESCALATION_BOARD_DAYS_AFTER_HOD + 1));
+
+      const privacyPolicies = await Policy.find({
+        org_id: orgObjectId,
+        category: { $in: ['privacy_policy', 'privacy'] },
+        status: { $in: ['active', 'under_review'] },
+        next_review_date: { $exists: true, $ne: null, $lte: policyEnd, $gte: policyOverdueStart }
+      })
+        .select('_id title category next_review_date department_id policy_owner_id status reviewed_at')
+        .lean();
+
+      for (const p of privacyPolicies) {
+        const due = startOfDay(p.next_review_date);
+        const daysUntil = Math.round((due - today) / 86400000);
+        const daysOverdue = daysUntil < 0 ? -daysUntil : 0;
+        const link = '/policies';
+        const title = p.title || 'Privacy policy';
+
+        // Responsible person: policy owner (board member user) if available, else org recipients.
+        let responsibleUid = null;
+        if (p.policy_owner_id) {
+          const bmSchema = (await import('../db/schemas/platform/boardMemberSchema.js')).default;
+          tenantDb.models.BoardMember || tenantDb.model('BoardMember', bmSchema);
+          const bm = await tenantDb.model('BoardMember').findById(p.policy_owner_id).select('user_id').lean();
+          responsibleUid = bm?.user_id ? String(bm.user_id) : null;
+        }
+        const responsibleTargets = responsibleUid ? [responsibleUid] : recipients;
+
+        if ([7, 3].includes(daysUntil)) {
+          const label = `in ${daysUntil} day${daysUntil === 1 ? '' : 's'}`;
+          const msg = `${toTitleCase(p.category)} should be reviewed by ${formatDate(p.next_review_date)}.`;
+          for (const uid of responsibleTargets) {
+            const already = await notificationRepo.existsToday({
+              user_id: uid,
+              type: 'policy_review_due',
+              related_entity_id: p._id,
+              message_contains: '[stage:responsible]'
+            });
+            if (already) continue;
+            await notificationRepo.create({
+              user_id: uid,
+              type: 'policy_review_due',
+              title: `${title} review due ${label}`,
+              message: `${msg} [stage:responsible]`,
+              link,
+              related_entity_id: p._id,
+              related_entity_type: 'policy',
+              created_at: new Date()
+            });
+            reminderCount += 1;
+          }
+        }
+
+        // Overdue escalation logic (only if not reviewed yet)
+        const isActionTaken = !!p.reviewed_at || p.status === 'under_review';
+        if (isActionTaken) continue;
+
+        if (daysOverdue === ESCALATION_HOD_DAYS_OVERDUE) {
+          const hodUid = await resolveHodUserIdForDepartment(tenantDb, orgObjectId, p.department_id).catch(() => null);
+          if (hodUid) {
+            const msg = `${title} review is overdue (due ${formatDate(p.next_review_date)}). No action has been recorded.`;
+            const already = await notificationRepo.existsToday({
+              user_id: hodUid,
+              type: 'compliance_overdue_hod',
+              related_entity_id: p._id,
+              message_contains: '[stage:hod]'
+            });
+            if (!already) {
+              await notificationRepo.create({
+                user_id: hodUid,
+                type: 'compliance_overdue_hod',
+                title: `Overdue: ${title}`,
+                message: `${msg} [stage:hod]`,
+                link,
+                related_entity_id: p._id,
+                related_entity_type: 'policy',
+                created_at: new Date()
+              });
+              reminderCount += 1;
+            }
+          }
+        }
+
+        if (daysOverdue === (ESCALATION_HOD_DAYS_OVERDUE + ESCALATION_BOARD_DAYS_AFTER_HOD)) {
+          const msg = `${title} review is still overdue (due ${formatDate(p.next_review_date)}), and remains unaddressed after escalation.`;
+          for (const boardUid of boardUserIds) {
+            const already = await notificationRepo.existsToday({
+              user_id: boardUid,
+              type: 'compliance_overdue_board',
+              related_entity_id: p._id,
+              message_contains: '[stage:board]'
+            });
+            if (already) continue;
+            await notificationRepo.create({
+              user_id: boardUid,
+              type: 'compliance_overdue_board',
+              title: `Board escalation: ${title}`,
+              message: `${msg} [stage:board]`,
+              link,
+              related_entity_id: p._id,
+              related_entity_type: 'policy',
+              created_at: new Date()
+            });
+            reminderCount += 1;
           }
         }
       }

@@ -217,6 +217,7 @@ export const submitDonorRefundPublicForm = asyncHandler(async (req, res) => {
       donation_amount: Number(req.body?.donation_amount || 0),
       payment_method: String(req.body?.payment_method || '').trim(),
       reason: String(req.body?.reason || '').trim(),
+      notes: String(req.body?.notes || '').trim(),
       evidence: normalizedEvidence,
     },
   });

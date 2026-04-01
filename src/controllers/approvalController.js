@@ -449,6 +449,48 @@ export const getApprovalRequestById = asyncHandler(async (req, res) => {
     }
   }
 
+  // Policy: show optional document-upload notes on the approval (fallback from policy_document_logs).
+  if (doc.entity_type === 'policy' && !String(doc.submitter_notes || '').trim()) {
+    try {
+      const { PolicyRepository } = await import('../repositories/policyRepository.js');
+      const policyRepo = new PolicyRepository(tenantDb);
+      const policy = await policyRepo.findById(doc.entity_id);
+      const version = policy?.version;
+      if (version) {
+        const log = await policyRepo.findDocumentLogWithNotesForVersion(doc.entity_id, version);
+        const noteText = log?.notes && String(log.notes).trim() ? String(log.notes).trim() : '';
+        if (noteText) {
+          doc.submitter_notes = noteText;
+        }
+      }
+    } catch (_) {
+      // non-blocking
+    }
+  }
+
+  // Donor refund: surface staff + donor context on the approval (fallback for records created before notes were stored).
+  if (doc.entity_type === 'donor_refund' && !String(doc.submitter_notes || '').trim()) {
+    try {
+      const { DonorRefundRepository } = await import('../repositories/donorRefundRepository.js');
+      const refundRepo = new DonorRefundRepository(tenantDb);
+      const refund = await refundRepo.findById(doc.entity_id);
+      if (refund) {
+        const parts = [];
+        const admin = String(refund.admin_notes || '').trim();
+        if (admin) parts.push(`Staff notes\n${admin}`);
+        const donorReason = String(refund.donor_submission?.reason || '').trim();
+        if (donorReason) parts.push(`Donor reason / request\n${donorReason}`);
+        const donorNotes = String(refund.donor_submission?.notes || '').trim();
+        if (donorNotes) parts.push(`Donor notes\n${donorNotes}`);
+        if (parts.length) {
+          doc.submitter_notes = parts.join('\n\n');
+        }
+      }
+    } catch (_) {
+      // non-blocking
+    }
+  }
+
   // Ensure acknowledgement_files from raw Mongo doc are present (bypass any Mongoose quirks)
   try {
     const raw = await approvalRequestRepo.ApprovalRequest.collection.findOne(

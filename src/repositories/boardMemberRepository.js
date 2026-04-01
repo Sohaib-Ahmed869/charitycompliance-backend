@@ -8,6 +8,7 @@ import mongoose from 'mongoose';
 import boardMemberSchema from '../db/schemas/platform/boardMemberSchema.js';
 import positionSchema from '../db/schemas/platform/positionSchema.js';
 import departmentSchema from '../db/schemas/platform/departmentSchema.js';
+import { UserRepository } from './userRepository.js';
 
 export class BoardMemberRepository {
   constructor(tenantDb) {
@@ -16,6 +17,7 @@ export class BoardMemberRepository {
     tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
     this.BoardMember = tenantDb.models.BoardMember ||
       tenantDb.model('BoardMember', boardMemberSchema);
+    this._userRepo = new UserRepository(tenantDb);
   }
 
   async findByOrgId(orgId, includeInactive = false, populatePosition = false) {
@@ -39,12 +41,29 @@ export class BoardMemberRepository {
       .populate({ path: 'position_id', populate: { path: 'department_id' } });
   }
 
-  async findByEmail(email, orgId) {
-    return await this.BoardMember.findOne({ 
-      email, 
+  /**
+   * Find an active board member in this org with the same email (case-insensitive).
+   * Uses email_hash (same algorithm as User) so encrypted emails are matchable.
+   * @param {string} excludeBoardMemberId - When updating, exclude this record from the search
+   */
+  async findActiveByEmailInOrg(email, orgId, excludeBoardMemberId = null) {
+    const normalized = String(email || '').toLowerCase().trim();
+    if (!normalized) return null;
+    const hash = this._userRepo.createEmailHash(normalized);
+    const query = {
       org_id: orgId,
-      is_active: true 
-    });
+      email_hash: hash,
+      is_active: true
+    };
+    if (excludeBoardMemberId) {
+      query._id = { $ne: new mongoose.Types.ObjectId(String(excludeBoardMemberId)) };
+    }
+    return await this.BoardMember.findOne(query);
+  }
+
+  /** @deprecated Use findActiveByEmailInOrg — plaintext email query does not work with encryption */
+  async findByEmail(email, orgId) {
+    return await this.findActiveByEmailInOrg(email, orgId);
   }
 
   async create(data) {
@@ -53,6 +72,15 @@ export class BoardMemberRepository {
   }
 
   async update(id, data) {
+    if (data && Object.prototype.hasOwnProperty.call(data, 'email')) {
+      const doc = await this.BoardMember.findById(id);
+      if (!doc) return null;
+      for (const key of Object.keys(data)) {
+        doc.set(key, data[key]);
+      }
+      await doc.save();
+      return await this.BoardMember.findById(id);
+    }
     return await this.BoardMember.findByIdAndUpdate(
       id,
       { $set: data },
