@@ -18,6 +18,7 @@ import { BoardMemberRepository } from '../repositories/boardMemberRepository.js'
 import { UserRepository } from '../repositories/userRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { DonorRepository } from '../repositories/donorRepository.js';
+import { SocialMediaCampaignRepository } from '../repositories/socialMediaCampaignRepository.js';
 import { ProjectRegisterService } from './projectRegisterService.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
@@ -385,6 +386,46 @@ export class ApprovalWorkflowService {
     const approvalRequest = await approvalRequestRepo.create({
       org_id: orgObjectId,
       request_type: 'social_media_campaign',
+      entity_id: campaignId,
+      entity_type: 'social_media_campaign',
+      amount: amount || 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Post-publication compliance: verify correct account, platform, and logged URL.
+   */
+  async createSocialMediaCampaignComplianceRequest(campaignId, submittedBy, amount) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const { matrix, rule } = await this.findMatchingRule(
+      'social_media_campaign_compliance',
+      amount || 0,
+      orgObjectId
+    );
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'social_media_campaign_compliance',
       entity_id: campaignId,
       entity_type: 'social_media_campaign',
       amount: amount || 0,
@@ -1019,6 +1060,7 @@ export class ApprovalWorkflowService {
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
     const expenseRepo = new ExpenseRepository(tenantDb);
     const riskRepo = new RiskRepository(tenantDb);
+    const socialMediaCampaignRepo = new SocialMediaCampaignRepository(tenantDb);
 
     // Get approval request
     const request = await approvalRequestRepo.findById(approvalRequestId);
@@ -1203,6 +1245,26 @@ export class ApprovalWorkflowService {
       } else if (request.entity_type === 'policy') {
         const policyRepo = new PolicyRepository(tenantDb);
         await policyRepo.update(request.entity_id, { status: 'draft' });
+      } else if (
+        request.entity_type === 'social_media_campaign' &&
+        request.request_type === 'social_media_campaign'
+      ) {
+        await socialMediaCampaignRepo.update(request.entity_id, { status: 'rejected' });
+      } else if (
+        request.entity_type === 'social_media_campaign' &&
+        request.request_type === 'social_media_campaign_compliance'
+      ) {
+        const camp = await socialMediaCampaignRepo.findById(request.entity_id);
+        const meta = {
+          ...(camp?.metadata || {}),
+          compliance_rejection_reason: comments || '',
+          compliance_rejected_at: new Date().toISOString()
+        };
+        await socialMediaCampaignRepo.update(request.entity_id, {
+          status: 'published',
+          compliance_approval_request_id: null,
+          metadata: meta
+        });
       }
 
       // Send rejection notification email to submitter
@@ -1275,6 +1337,26 @@ export class ApprovalWorkflowService {
         } else if (request.entity_type === 'policy') {
           const policyRepo = new PolicyRepository(tenantDb);
           await policyRepo.update(request.entity_id, { status: 'draft' });
+        } else if (
+          request.entity_type === 'social_media_campaign' &&
+          request.request_type === 'social_media_campaign'
+        ) {
+          await socialMediaCampaignRepo.update(request.entity_id, { status: 'rejected' });
+        } else if (
+          request.entity_type === 'social_media_campaign' &&
+          request.request_type === 'social_media_campaign_compliance'
+        ) {
+          const camp = await socialMediaCampaignRepo.findById(request.entity_id);
+          const meta = {
+            ...(camp?.metadata || {}),
+            compliance_rejection_reason: 'Rejected by one or more approvers',
+            compliance_rejected_at: new Date().toISOString()
+          };
+          await socialMediaCampaignRepo.update(request.entity_id, {
+            status: 'published',
+            compliance_approval_request_id: null,
+            metadata: meta
+          });
         }
         return updatedRequest;
       }
@@ -1469,6 +1551,32 @@ export class ApprovalWorkflowService {
             error: transferErr.message
           });
         }
+      } else if (
+        request.entity_type === 'social_media_campaign' &&
+        request.request_type === 'social_media_campaign'
+      ) {
+        await socialMediaCampaignRepo.update(request.entity_id, { status: 'approved' });
+        logInfo('Social media campaign pre-publication approved', {
+          approvalRequestId,
+          entityId: request.entity_id
+        });
+      } else if (
+        request.entity_type === 'social_media_campaign' &&
+        request.request_type === 'social_media_campaign_compliance'
+      ) {
+        const camp = await socialMediaCampaignRepo.findById(request.entity_id);
+        const meta = {
+          ...(camp?.metadata || {}),
+          compliance_verified_at: new Date().toISOString()
+        };
+        await socialMediaCampaignRepo.update(request.entity_id, {
+          status: 'compliance_verified',
+          metadata: meta
+        });
+        logInfo('Social media campaign post-publication compliance verified', {
+          approvalRequestId,
+          entityId: request.entity_id
+        });
       }
 
       logInfo('All approvals completed', { approvalRequestId, entityId: request.entity_id, entityType: request.entity_type });
@@ -1490,6 +1598,8 @@ export class ApprovalWorkflowService {
         hr: 'HR',
         emergency: 'Emergency Authority Transfer',
         complaint_resolution: 'Complaint Resolution Workflow',
+        social_media_campaign: 'Marketing Campaign (pre-publication)',
+        social_media_campaign_compliance: 'Marketing Campaign (post-publication compliance)',
         other: 'Approval Request'
       };
       const workflowTitle = typeLabels[request.request_type] || request.request_type || 'Approval Request';

@@ -69,6 +69,11 @@ const createUserSchema = () => {
         type: Boolean,
         default: false
       },
+      // External auditor: read-only app access (see authService / auditorAccess)
+      is_auditor: {
+        type: Boolean,
+        default: false
+      },
       // S3 key for profile/avatar (used when org owner has no BoardMember record)
       profile_picture_key: {
         type: String,

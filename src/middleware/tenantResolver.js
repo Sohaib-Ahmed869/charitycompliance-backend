@@ -79,6 +79,10 @@ export const authAndResolveTenant = [
     const { authenticate } = await import('./auth.js');
     return authenticate(req, res, next);
   },
+  async (req, res, next) => {
+    const { auditorWriteGuard } = await import('./auditorWriteGuard.js');
+    return auditorWriteGuard(req, res, next);
+  },
   resolveTenant
 ];
 

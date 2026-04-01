@@ -4,7 +4,14 @@ import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { validate } from '../../middleware/validation.js';
 import { uploadSocialCampaignImages, handleUploadError } from '../../middleware/upload.js';
 import { uploadSocialCampaignImages as uploadImagesController } from '../../controllers/socialMediaUploadController.js';
-import { createSocialMediaCampaign, listSocialMediaCampaigns, getSocialMediaCampaignById, updateSocialMediaCampaign } from '../../controllers/socialMediaCampaignController.js';
+import {
+  createSocialMediaCampaign,
+  listSocialMediaCampaigns,
+  getSocialMediaCampaignById,
+  updateSocialMediaCampaign,
+  publishSocialMediaCampaign,
+  resubmitSocialMediaCompliance
+} from '../../controllers/socialMediaCampaignController.js';
 
 const router = express.Router();
 router.use(authAndResolveTenant);
@@ -12,7 +19,16 @@ router.use(authAndResolveTenant);
 router.get(
   '/',
   [
-    query('status').optional().isIn(['draft', 'pending', 'approved', 'rejected', 'lodged']),
+    query('status').optional().isIn([
+      'draft',
+      'pending',
+      'approved',
+      'rejected',
+      'lodged',
+      'published',
+      'compliance_pending',
+      'compliance_verified'
+    ]),
     query('platform').optional().trim(),
     query('search').optional().trim()
   ],
@@ -68,10 +84,32 @@ router.put(
     body('ad_spend_estimate').optional().isNumeric(),
     body('currency').optional().trim(),
     body('images').optional().isArray(),
-    body('notes').optional().trim()
+    body('notes').optional().trim(),
+    body('metadata').optional().isObject()
   ],
   validate,
   updateSocialMediaCampaign
+);
+
+router.post(
+  '/:campaignId/publish',
+  [
+    param('campaignId').isMongoId().withMessage('Invalid campaign ID'),
+    body('registered_social_account').trim().notEmpty().withMessage('Registered social account is required'),
+    body('post_url').optional().trim(),
+    body('post_urls').optional().isArray(),
+    body('post_urls.*.platform').optional().isIn(['facebook', 'instagram', 'linkedin', 'x', 'tiktok', 'youtube', 'flyers', 'other']),
+    body('post_urls.*.url').optional().trim()
+  ],
+  validate,
+  publishSocialMediaCampaign
+);
+
+router.post(
+  '/:campaignId/resubmit-compliance',
+  [param('campaignId').isMongoId().withMessage('Invalid campaign ID')],
+  validate,
+  resubmitSocialMediaCompliance
 );
 
 router.post(

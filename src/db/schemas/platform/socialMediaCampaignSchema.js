@@ -77,15 +77,40 @@ const socialMediaCampaignSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  /**
+   * pending: awaiting pre-publication approval (content/creative)
+   * approved: pre-approved; user must publish with live URL + registered account, then post-compliance workflow runs
+   * compliance_pending: live URL logged; awaiting post-publication compliance verification
+   * compliance_verified: post-compliance approved
+   * published: live URL logged (e.g. after compliance rejection resubmit path); performance metrics may be edited
+   * rejected / draft / lodged: legacy or edge cases
+   */
   status: {
     type: String,
-    enum: ['draft', 'pending', 'approved', 'rejected', 'lodged'],
+    enum: ['draft', 'pending', 'approved', 'rejected', 'lodged', 'published', 'compliance_pending', 'compliance_verified'],
     default: 'draft',
     index: true
   },
+  /** Pre-publication (content) approval */
   approval_request_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ApprovalRequest'
+  },
+  /** Post-publication compliance verification */
+  compliance_approval_request_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'ApprovalRequest',
+    default: null
+  },
+  /** Confirmed registered org account/handle the post was published under */
+  registered_social_account: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  published_at: {
+    type: Date,
+    default: null
   },
   metadata: {
     type: mongoose.Schema.Types.Mixed

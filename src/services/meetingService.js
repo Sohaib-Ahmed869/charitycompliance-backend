@@ -94,13 +94,18 @@ export class MeetingService {
       rsvp_token: crypto.randomBytes(32).toString('hex')
     }));
 
+    const startDate = new Date(meetingData.date);
+    if (Number.isNaN(startDate.getTime())) {
+      throw new AppError('Invalid meeting date', 400, 'INVALID_DATE');
+    }
+
     const meeting = await meetingRepo.create({
       org_id: this.orgId,
       created_by: createdBy,
       meeting_type: meetingData.meeting_type,
       title: meetingData.title,
       agenda: meetingData.agenda,
-      date: meetingData.date,
+      date: startDate,
       duration_minutes: meetingData.duration_minutes || 60,
       location: meetingData.location,
       meeting_link: meetingData.meeting_link,

@@ -243,7 +243,13 @@ const meetingSchema = new mongoose.Schema({
     default: Date.now
   },
   cancelled_at: Date,
-  completed_at: Date
+  completed_at: Date,
+
+  /** Tracks which reminder phase already ran for a given scheduled start (compared to `date`); rescheduling clears mismatch automatically */
+  reminder_sent: {
+    one_hour_for_date: { type: Date, default: null },
+    fifteen_min_for_date: { type: Date, default: null }
+  }
 }, {
   timestamps: true,
   collection: 'meetings'
