@@ -568,6 +568,39 @@ export const getApprovalRequestById = asyncHandler(async (req, res) => {
     }
   }
 
+  // Enrich approval step approvers with board member flag so UI can highlight board members in-progress
+  try {
+    const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (org && Array.isArray(doc.approval_steps) && doc.approval_steps.length > 0) {
+      const stepUserIds = (doc.approval_steps || [])
+        .map((s) => s?.approver_user_id?._id || s?.approver_user_id)
+        .filter(Boolean);
+      const uniqueIds = Array.from(new Set(stepUserIds.map((id) => String(id))));
+      if (uniqueIds.length > 0) {
+        const bmRepo = new BoardMemberRepository(tenantDb);
+        const boardMembers = await bmRepo.BoardMember.find({
+          org_id: org._id,
+          is_active: true,
+          is_board_member: true,
+          user_id: { $in: uniqueIds }
+        })
+          .select({ user_id: 1 })
+          .lean();
+        const boardUserSet = new Set((boardMembers || []).map((bm) => String(bm.user_id)));
+        doc.approval_steps = (doc.approval_steps || []).map((s) => {
+          const uid = s?.approver_user_id?._id || s?.approver_user_id;
+          const isBoard = uid ? boardUserSet.has(String(uid)) : false;
+          return { ...s, is_board_member: isBoard };
+        });
+      }
+    }
+  } catch (_) {
+    // Non-blocking: keep approval details usable even if board member enrichment fails.
+  }
+
   res.json({
     success: true,
     data: doc

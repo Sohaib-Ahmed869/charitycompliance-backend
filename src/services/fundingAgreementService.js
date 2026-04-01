@@ -10,6 +10,8 @@ import { FundingAgreementRepository } from '../repositories/fundingAgreementRepo
 import { AppError } from '../middleware/errorHandler.js';
 import { ApprovalWorkflowService } from './approvalWorkflowService.js';
 import { logInfo } from '../utils/logger.js';
+import emailService from './emailService.js';
+import crypto from 'crypto';
 
 export class FundingAgreementService {
   constructor(orgId) {
@@ -39,6 +41,7 @@ export class FundingAgreementService {
       org_id: orgId,
       agreement_title: data.agreement_title,
       partner_name: data.partner_name || '',
+      partner_email: data.partner_email || '',
       agreement_type: data.agreement_type || '',
       currency: data.currency || 'AUD',
       total_amount: Number(data.total_amount || 0),
@@ -109,5 +112,62 @@ export class FundingAgreementService {
       throw new AppError('Funding agreement not found', 404, 'AGREEMENT_NOT_FOUND');
     }
     return agreement;
+  }
+
+  async signAgreementInternallyAndEmailPartner(agreementId, user, { signature_data, notes, partner_email }) {
+    const tenantDb = await this.getTenantDb();
+    const repo = new FundingAgreementRepository(tenantDb);
+    const agreement = await repo.findById(agreementId);
+    if (!agreement) throw new AppError('Funding agreement not found', 404, 'AGREEMENT_NOT_FOUND');
+
+    if (String(agreement.status) !== 'approved') {
+      throw new AppError('Only approved funding agreements can be signed', 400, 'AGREEMENT_NOT_APPROVED');
+    }
+
+    if (agreement?.internal_signature?.signed_at) {
+      throw new AppError('Funding agreement is already signed internally', 409, 'AGREEMENT_ALREADY_SIGNED_INTERNAL');
+    }
+
+    const resolvedPartnerEmail = String(partner_email || agreement.partner_email || '').trim().toLowerCase();
+    if (!resolvedPartnerEmail) {
+      throw new AppError('Partner email is required to request partner signature', 400, 'PARTNER_EMAIL_REQUIRED');
+    }
+
+    // Generate (or refresh) partner signing token
+    const tokenTtlMs = 1000 * 60 * 60 * 24 * 14; // 14 days
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + tokenTtlMs);
+
+    const signerName =
+      String(user?.first_name || user?.firstName || '').trim() ||
+      String(user?.name || '').trim() ||
+      'Internal user';
+
+    const updated = await repo.update(agreementId, {
+      partner_email: resolvedPartnerEmail,
+      internal_signature: {
+        signed_at: new Date(),
+        signed_by_user_id: user?._id || user?.userId || null,
+        signer_name: signerName,
+        signature_data: signature_data,
+        notes: String(notes || '').trim()
+      },
+      partner_sign_token: token,
+      partner_sign_token_expires_at: expiresAt
+    });
+
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const publicToken = `${this.orgId}.${token}`;
+    const signLink = `${baseUrl}/public/funding-agreements/sign/${publicToken}`;
+
+    await emailService.sendFundingAgreementPartnerSignatureRequestEmail({
+      to: resolvedPartnerEmail,
+      partnerName: updated?.partner_name || '',
+      agreementTitle: updated?.agreement_title || 'Funding agreement',
+      signLink,
+      expiryDate: expiresAt
+    });
+
+    return updated;
   }
 }

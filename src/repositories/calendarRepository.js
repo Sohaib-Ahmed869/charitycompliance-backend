@@ -78,8 +78,9 @@ export class CalendarRepository {
           is_custom: true,
           source,
           created_at: new Date(),
-          updated_at: new Date()
         },
+        // Never set the same field in both $set and $setOnInsert (Mongo conflict).
+        // updated_at should always reflect "last upsert touch", whether insert or update.
         $set: { updated_at: new Date() }
       },
       { upsert: true, new: true }

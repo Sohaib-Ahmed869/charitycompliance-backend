@@ -625,8 +625,14 @@ export class ExpenseService {
     if (budget > 0 && remaining !== 0) return;
 
     const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const materialsFiles = Array.isArray(project?.metadata?.delivery_materials?.files)
+      ? project.metadata.delivery_materials.files
+      : [];
+    const hasDeliveryMaterials =
+      !!project?.metadata?.delivery_materials_ready || materialsFiles.length > 0;
+
     // If docs not uploaded yet, notify the user to upload acquittal packs.
-    if (!project.metadata?.delivery_materials_ready) {
+    if (!hasDeliveryMaterials) {
       try {
         const notificationRepo = new NotificationRepository(tenantDb);
         const alreadyNotifiedAt = project.metadata?.delivery_docs_notified_at;

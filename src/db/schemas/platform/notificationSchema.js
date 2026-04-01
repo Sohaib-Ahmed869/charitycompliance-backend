@@ -33,6 +33,10 @@ const notificationSchema = new mongoose.Schema({
       'expense_payment_completed',
       // Complaints
       'complaint_assigned',
+      'complaint_workflow_assigned',
+      'complaint_board_signoff_selected',
+      'complaint_board_signoff_required',
+      'complaint_escalated',
       // Registration & Licenses
       'registration_license_expiry_reminder',
       // Grants & Donors

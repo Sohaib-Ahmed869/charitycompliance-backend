@@ -186,11 +186,12 @@ export function generateApprovalFlowchart(approvalRequest) {
  * Generate SVG flowchart showing step progression
  */
 function generateFlowchartSVG(approvalRequest, steps, previousAttempts) {
-  const cardWidth = 120;
-  const cardHeight = 70;
-  const cardSpacing = 16;
-  const totalWidth = Math.max(900, (steps.length + 1) * cardWidth + (steps.length) * cardSpacing + 80);
-  const totalHeight = 150;
+  // Print-friendly sizing (readable when exported or printed B/W)
+  const cardWidth = 168;
+  const cardHeight = 92;
+  const cardSpacing = 20;
+  const totalWidth = Math.max(1050, (steps.length + 1) * cardWidth + (steps.length) * cardSpacing + 80);
+  const totalHeight = 190;
 
   let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${totalHeight}" viewBox="0 0 ${totalWidth} ${totalHeight}" preserveAspectRatio="xMinYMid meet" style="display: block; margin: 0 auto;">`;
   svg += `<rect width="${totalWidth}" height="${totalHeight}" fill="#ffffff" rx="8" />`;
@@ -303,61 +304,75 @@ function generateFlowchartSVG(approvalRequest, steps, previousAttempts) {
  * Draw a single approval step card
  */
 function drawApprovalCard({ x, y, width, height, status, title, subtitle, date, position, hasReAttempt }) {
-  let bgColor = '#f3f4f6';
-  let borderColor = '#e5e7eb';
-  let textColor = '#6b7280';
+  // Default: high-contrast, print-friendly
+  let bgColor = '#ffffff';
+  let borderColor = '#111827';
+  let textColor = '#111827';
+  let iconBg = '#111827';
+  let iconFg = '#ffffff';
+  let accentFill = '#f8fafc';
 
   if (status === 'approved') {
-    bgColor = '#d1fae5';
-    borderColor = COLORS.approved;
-    textColor = '#047857';
+    bgColor = '#ffffff';
+    borderColor = '#065f46'; // dark green (still readable in B/W)
+    textColor = '#064e3b';
+    iconBg = '#065f46';
   } else if (status === 'rejected') {
-    bgColor = '#fee2e2';
-    borderColor = COLORS.rejected;
-    textColor = '#991b1b';
+    bgColor = '#ffffff';
+    borderColor = '#7f1d1d'; // dark red
+    textColor = '#7f1d1d';
+    iconBg = '#7f1d1d';
   } else if (status === 'current') {
-    bgColor = `${COLORS.navy}10`;
-    borderColor = COLORS.navy;
-    textColor = COLORS.navy;
+    bgColor = '#ffffff';
+    borderColor = '#1d4ed8'; // strong blue
+    textColor = '#1e3a8a';
+    iconBg = '#1d4ed8';
+    accentFill = '#eff6ff';
   } else if (status === 'submitted') {
-    bgColor = COLORS.navy;
-    borderColor = COLORS.navy;
-    textColor = '#ffffff';
+    // Avoid solid dark fills (disappear in B/W): use light fill + strong border
+    bgColor = '#ffffff';
+    borderColor = '#0f172a';
+    textColor = '#0f172a';
+    iconBg = '#0f172a';
+    iconFg = '#ffffff';
+    accentFill = '#f1f5f9';
   }
 
   // If re-attempt, use amber border
   if (hasReAttempt && status !== 'submitted') {
-    borderColor = '#f59e0b';
+    borderColor = '#92400e'; // darker amber for B/W contrast
   }
 
   let svg = `
     <g>
       <!-- Card background and border -->
-      <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="4" fill="${bgColor}" stroke="${borderColor}" stroke-width="1.5"/>
+      <rect x="${x}" y="${y}" width="${width}" height="${height}" rx="6" fill="${bgColor}" stroke="${borderColor}" stroke-width="2"/>
+      <!-- Top accent strip (helps in B/W) -->
+      <rect x="${x}" y="${y}" width="${width}" height="18" rx="6" fill="${accentFill}" stroke="none"/>
       
       <!-- Status icon -->
-      <g transform="translate(${x + 5}, ${y + 5})">
+      <g transform="translate(${x + 8}, ${y + 5})">
   `;
 
   if (status === 'approved') {
     svg += `
-      <circle cx="4.5" cy="4.5" r="4.5" fill="${borderColor}"/>
-      <path d="M 1.5 4.5 L 3 6 L 7 2" stroke="#ffffff" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="6" cy="6" r="6" fill="${iconBg}"/>
+      <path d="M 2.2 6.0 L 4.6 8.2 L 9.8 2.8" stroke="${iconFg}" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
     `;
   } else if (status === 'rejected') {
     svg += `
-      <circle cx="4.5" cy="4.5" r="4.5" fill="${borderColor}"/>
-      <path d="M 0.5 0.5 L 8.5 8.5 M 8.5 0.5 L 0.5 8.5" stroke="#ffffff" stroke-width="1" stroke-linecap="round"/>
+      <circle cx="6" cy="6" r="6" fill="${iconBg}"/>
+      <path d="M 2.4 2.4 L 9.6 9.6 M 9.6 2.4 L 2.4 9.6" stroke="${iconFg}" stroke-width="1.6" stroke-linecap="round"/>
     `;
   } else if (status === 'current') {
     svg += `
-      <circle cx="4.5" cy="4.5" r="4.5" fill="${borderColor}"/>
-      <circle cx="4.5" cy="4.5" r="2" fill="#ffffff"/>
+      <circle cx="6" cy="6" r="6" fill="${iconBg}"/>
+      <circle cx="6" cy="6" r="2.5" fill="${iconFg}"/>
     `;
   } else if (status === 'submitted') {
     svg += `
-      <circle cx="4.5" cy="4.5" r="4.5" fill="#ffffff" opacity="0.25"/>
-      <path d="M 1.5 4.5 L 3 6 L 7 2" stroke="#ffffff" stroke-width="1" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="6" cy="6" r="6" fill="${iconBg}"/>
+      <path d="M 2.2 6.0 L 4.6 8.2 L 9.8 2.8" stroke="${iconFg}" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
     `;
   }
 
@@ -365,24 +380,31 @@ function drawApprovalCard({ x, y, width, height, status, title, subtitle, date, 
       </g>
       
       <!-- Title -->
-      <text x="${x + 20}" y="${y + 13}" font-size="9" font-weight="bold" fill="${textColor}" font-family="Poppins, sans-serif" text-anchor="start">
+      <text x="${x + 26}" y="${y + 14}" font-size="11" font-weight="800" fill="${textColor}" font-family="Poppins, sans-serif" text-anchor="start">
         ${escapeHtml(title)}
       </text>
       
       <!-- Subtitle (Name) -->
-      <text x="${x + 5}" y="${y + 25}" font-size="7" fill="${textColor}" font-family="Poppins, sans-serif" text-anchor="start">
-        ${escapeHtml(truncate(subtitle, 12))}
+      <text x="${x + 10}" y="${y + 40}" font-size="9" font-weight="700" fill="${textColor}" font-family="Poppins, sans-serif" text-anchor="start">
+        ${escapeHtml(truncate(subtitle, 22))}
       </text>
+
+      <!-- Position (optional) -->
+      ${position ? `
+      <text x="${x + 10}" y="${y + 54}" font-size="8" fill="${textColor}" opacity="0.85" font-family="Poppins, sans-serif" text-anchor="start">
+        ${escapeHtml(truncate(position, 26))}
+      </text>
+      ` : ''}
       
       <!-- Date -->
-      <text x="${x + 5}" y="${y + height - 4}" font-size="6.5" fill="${textColor}" opacity="0.6" font-family="Poppins, sans-serif" text-anchor="start">
+      <text x="${x + 10}" y="${y + height - 10}" font-size="8" fill="${textColor}" opacity="0.75" font-family="Poppins, sans-serif" text-anchor="start">
         ${escapeHtml(date)}
       </text>
       
       <!-- RE-ATTEMPT Badge -->
       ${hasReAttempt ? `
-      <rect x="${x + width - 33}" y="${y + 2}" width="30" height="14" rx="2" fill="#f59e0b" opacity="0.2" stroke="#f59e0b" stroke-width="0.5"/>
-      <text x="${x + width - 17}" y="${y + 11}" font-size="6" font-weight="bold" fill="#b45309" font-family="Poppins, sans-serif" text-anchor="middle">
+      <rect x="${x + width - 62}" y="${y + 2}" width="56" height="14" rx="7" fill="#ffffff" stroke="#92400e" stroke-width="1.2"/>
+      <text x="${x + width - 34}" y="${y + 12}" font-size="7" font-weight="800" fill="#92400e" font-family="Poppins, sans-serif" text-anchor="middle">
         RE-ATTEMPT
       </text>
       ` : ''}

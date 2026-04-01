@@ -646,7 +646,8 @@ export const submitProjectDeliveryMaterials = asyncHandler(async (req, res) => {
 
   const userId = req.user?.userId || req.userId;
   const files = Array.isArray(req.body?.files) ? req.body.files : [];
-  if (!project.metadata?.delivery_materials_ready && files.length === 0) {
+  const alreadyReady = !!project.metadata?.delivery_materials_ready;
+  if (!alreadyReady && files.length === 0) {
     throw new AppError('At least one acquittal document is required', 400, 'AQUITTAL_DOC_REQUIRED');
   }
 
@@ -659,6 +660,14 @@ export const submitProjectDeliveryMaterials = asyncHandler(async (req, res) => {
       type: String(f?.type || f?.file_type || '').trim()
     }))
     .filter((f) => f.name && f.url);
+
+  if (!alreadyReady && normalizedFiles.length === 0) {
+    throw new AppError(
+      'At least one acquittal document must include a valid URL. Please re-upload the acquittal pack.',
+      400,
+      'AQUITTAL_DOC_REQUIRED'
+    );
+  }
 
   const existingFiles = Array.isArray(project?.metadata?.delivery_materials?.files)
     ? project.metadata.delivery_materials.files
@@ -674,7 +683,7 @@ export const submitProjectDeliveryMaterials = asyncHandler(async (req, res) => {
 
   const newMetadata = {
     ...(project.metadata || {}),
-    delivery_materials_ready: true,
+    delivery_materials_ready: alreadyReady || mergedFiles.length > 0,
     delivery_materials_submitted_at: new Date(),
     // Store the S3 upload references here (URLs + keys).
     delivery_materials: {
@@ -859,7 +868,13 @@ export const completeProject = asyncHandler(async (req, res) => {
     );
   }
 
-  if (!project.metadata?.delivery_materials_ready) {
+  const materialsFiles = Array.isArray(project?.metadata?.delivery_materials?.files)
+    ? project.metadata.delivery_materials.files
+    : [];
+  const hasDeliveryMaterials =
+    !!project?.metadata?.delivery_materials_ready || materialsFiles.length > 0;
+
+  if (!hasDeliveryMaterials) {
     throw new AppError(
       'Upload acquittal documents before completing the project',
       400,

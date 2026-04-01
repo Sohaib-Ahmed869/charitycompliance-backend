@@ -12,10 +12,70 @@ import {
   listDonors,
   getDonorById,
   updateDonor,
-  uploadDonorKycDocuments
+  uploadDonorKycDocuments,
+  initiateDonorRefund,
+  listDonorRefunds,
+  submitDonorRefundPublicForm,
+  getDonorRefundPaymentAckContext,
+  submitDonorRefundPaymentAck,
+  startDonorRefundProcessing,
+  recordDonorRefundPaymentSent,
+  completeDonorRefundProcessing,
+  initiateDonorRefundWorkflow
 } from '../../controllers/donorController.js';
 
 const router = express.Router();
+
+// Public donor refund endpoints (token-based, no auth)
+router.post(
+  '/refunds/public/:token/submit',
+  [
+    param('token').notEmpty().withMessage('Token is required'),
+    body('donation_date').optional().isString(),
+    body('donation_amount').optional().isNumeric(),
+    body('payment_method').optional().isString(),
+    body('reason').optional().isString(),
+    body('evidence').optional().isArray(),
+  ],
+  validate,
+  submitDonorRefundPublicForm
+);
+
+// Helpful guard: if someone opens the submit URL in browser (GET),
+// do not run auth middleware; explain correct method instead.
+router.get(
+  '/refunds/public/:token/submit',
+  [param('token').notEmpty().withMessage('Token is required')],
+  validate,
+  (req, res) => {
+    res.status(405).json({
+      success: false,
+      error: {
+        code: 'METHOD_NOT_ALLOWED',
+        message: 'This endpoint only accepts POST submissions from the public refund form.'
+      }
+    });
+  }
+);
+
+router.get(
+  '/refunds/public/payment-ack/:token',
+  [param('token').notEmpty().withMessage('Token is required')],
+  validate,
+  getDonorRefundPaymentAckContext
+);
+
+router.post(
+  '/refunds/public/payment-ack/:token/submit',
+  [
+    param('token').notEmpty().withMessage('Token is required'),
+    body('signer_name').trim().notEmpty().withMessage('Signer name is required'),
+    body('confirm_received').isBoolean().withMessage('confirm_received must be boolean'),
+    body('notes').optional().isString(),
+  ],
+  validate,
+  submitDonorRefundPaymentAck
+);
 
 router.use(authAndResolveTenant);
 
@@ -40,6 +100,55 @@ router.get(
   listDonors
 );
 
+// Upload donor KYC documents
+router.post(
+  '/:donorId/kyc/upload',
+  [param('donorId').isMongoId().withMessage('Invalid donor ID')],
+  validate,
+  uploadDonorKycFiles,
+  handleUploadError,
+  uploadDonorKycDocuments
+);
+
+// Donor refunds (internal)
+router.get('/refunds', listDonorRefunds);
+
+router.post(
+  '/:donorId/refunds/initiate',
+  [param('donorId').isMongoId().withMessage('Invalid donor ID')],
+  validate,
+  initiateDonorRefund
+);
+
+router.post(
+  '/refunds/:refundId/workflow/initiate',
+  [param('refundId').isMongoId().withMessage('Invalid refund ID')],
+  validate,
+  initiateDonorRefundWorkflow
+);
+
+router.post(
+  '/refunds/:refundId/process/start',
+  [param('refundId').isMongoId().withMessage('Invalid refund ID')],
+  validate,
+  startDonorRefundProcessing
+);
+
+router.post(
+  '/refunds/:refundId/process/payment-sent',
+  [param('refundId').isMongoId().withMessage('Invalid refund ID')],
+  validate,
+  recordDonorRefundPaymentSent
+);
+
+router.post(
+  '/refunds/:refundId/process/complete',
+  [param('refundId').isMongoId().withMessage('Invalid refund ID')],
+  validate,
+  completeDonorRefundProcessing
+);
+
+// Donor detail routes must come AFTER "/refunds" routes
 router.get(
   '/:donorId',
   [param('donorId').isMongoId().withMessage('Invalid donor ID')],
@@ -52,16 +161,6 @@ router.put(
   [param('donorId').isMongoId().withMessage('Invalid donor ID')],
   validate,
   updateDonor
-);
-
-// Upload donor KYC documents
-router.post(
-  '/:donorId/kyc/upload',
-  [param('donorId').isMongoId().withMessage('Invalid donor ID')],
-  validate,
-  uploadDonorKycFiles,
-  handleUploadError,
-  uploadDonorKycDocuments
 );
 
 export default router;

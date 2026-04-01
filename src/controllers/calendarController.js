@@ -48,7 +48,10 @@ const formatCalendarEvent = (event, type, sourceId = null) => {
     description: event.description || `${type} event`,
     is_custom: false,
     source: type,
-    source_id: event._id || sourceId
+    source_id: event._id || sourceId,
+    // Preserve categorisation so frontend can deep-link to the correct register page.
+    category: event.category || null,
+    document_type: event.document_type || null
   };
 };
 
@@ -183,7 +186,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
           date: d.expiry_date,
           description: d.document_type || d.category
         },
-        'governance_structure',
+        'document',
         d._id?.toString()
       ));
       logInfo('Document expiry events retrieved', { orgId, count: documentEvents.length });
@@ -201,7 +204,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
           date: d.review_date || d.effective_date || d.date_adopted,
           description: d.document_type || d.category
         },
-        'governance_structure',
+        'document',
         d._id?.toString()
       ));
       logInfo('Governing document review events retrieved', { orgId, count: governingReviewEvents.length });

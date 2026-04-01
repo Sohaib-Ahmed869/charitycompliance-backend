@@ -19,6 +19,7 @@ import { getFileUrl, uploadToS3 } from '../services/s3Service.js';
 import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
+import { ensureEmailNotInOtherTenants } from '../utils/ensureEmailNotInOtherTenants.js';
 
 export const getBoardMembers = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -142,17 +143,19 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
   }
 
+  // Stop cross-organisation collisions: one email must not exist in another tenant.
+  if (boardMemberData.email) {
+    await ensureEmailNotInOtherTenants(boardMemberData.email, orgId);
+  }
+
   // Generate invitation token if invite is requested
   let invitationData = {};
   if (invite && system_access !== false) {
     const invitationToken = crypto.randomBytes(32).toString('hex');
-    const expiresAt = new Date();
-    expiresAt.setDate(expiresAt.getDate() + 7); // Expires in 7 days
 
     invitationData = {
       invitation_token: invitationToken,
       invitation_status: 'pending',
-      invitation_expires_at: expiresAt,
       has_system_access: system_access !== false
     };
   }

@@ -11,6 +11,29 @@ import { uploadPolicySingle, handlePolicyUploadError } from '../../middleware/up
 
 const router = express.Router();
 
+// Public partner COI (token-based, no auth)
+router.get(
+  '/public/coi/:token/context',
+  [param('token').notEmpty().withMessage('Token is required')],
+  validate,
+  partnerVettingController.getPublicPartnerCoiContext
+);
+
+router.post(
+  '/public/coi/:token/submit',
+  [
+    param('token').notEmpty().withMessage('Token is required'),
+    body('external_submitter.name').trim().notEmpty().withMessage('Submitter name is required'),
+    body('external_submitter.email').optional().isEmail().withMessage('Valid email is required if provided'),
+    body('external_submitter.phone').optional().trim(),
+    body('coi_reason').trim().notEmpty().withMessage('Conflict of interest description is required'),
+    body('conflict_person_name').trim().notEmpty().withMessage('Person in conflict name is required'),
+    body('conflict_person_details').trim().notEmpty().withMessage('Person in conflict details are required'),
+  ],
+  validate,
+  partnerVettingController.submitPublicPartnerCoi
+);
+
 router.use(authAndResolveTenant);
 
 router.get('/counts', partnerVettingController.getPartnerCounts);
@@ -118,6 +141,13 @@ router.delete(
   [param('partnerId').isMongoId().withMessage('Invalid partner ID')],
   validate,
   partnerVettingController.deletePartner
+);
+
+router.post(
+  '/:partnerId/start-coi',
+  [param('partnerId').isMongoId().withMessage('Invalid partner ID')],
+  validate,
+  partnerVettingController.startPartnerCoi
 );
 
 export default router;

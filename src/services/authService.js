@@ -653,12 +653,6 @@ export class AuthService {
           const boardMember = await boardMemberRepo.findByInvitationToken(token);
 
           if (boardMember) {
-            // Check if token is expired
-            if (boardMember.invitation_expires_at && new Date() > boardMember.invitation_expires_at) {
-              await boardMemberRepo.updateInvitationStatus(boardMember._id, 'expired');
-              throw new AppError('Invitation has expired', 410, 'INVITATION_EXPIRED');
-            }
-
             // Check if already accepted
             if (boardMember.invitation_status === 'accepted') {
               throw new AppError('Invitation has already been accepted', 409, 'INVITATION_ALREADY_ACCEPTED');
