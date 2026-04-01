@@ -22,6 +22,12 @@ const fundingAgreementSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  partner_email: {
+    type: String,
+    trim: true,
+    lowercase: true,
+    default: ''
+  },
   agreement_type: {
     type: String,
     trim: true
@@ -58,6 +64,28 @@ const fundingAgreementSchema = new mongoose.Schema({
   reporting_requirements: {
     type: String,
     default: ''
+  },
+  internal_signature: {
+    signed_at: { type: Date, default: null },
+    signed_by_user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    signer_name: { type: String, default: '' },
+    signature_data: { type: String, default: '' }, // data URL from DigitalSignature
+    notes: { type: String, default: '' }
+  },
+  partner_signature: {
+    signed_at: { type: Date, default: null },
+    signer_name: { type: String, default: '' },
+    signer_email: { type: String, default: '' },
+    signature_data: { type: String, default: '' } // data URL from DigitalSignature
+  },
+  partner_sign_token: {
+    type: String,
+    default: null,
+    index: true
+  },
+  partner_sign_token_expires_at: {
+    type: Date,
+    default: null
   },
   metadata: {
     type: mongoose.Schema.Types.Mixed

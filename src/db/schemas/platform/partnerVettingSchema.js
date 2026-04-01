@@ -89,6 +89,12 @@ const partnerVettingSchema = new mongoose.Schema({
   documents: [
     {
       name: { type: String, trim: true },
+      doc_type: {
+        type: String,
+        enum: ['standard', 'other'],
+        default: 'standard'
+      },
+      other_name: { type: String, trim: true },
       status: {
         type: String,
         enum: ['pending', 'completed'],

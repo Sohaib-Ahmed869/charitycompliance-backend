@@ -345,7 +345,7 @@ class EmailService {
       bodyHtml,
       buttonText: 'Accept Invitation',
       buttonLink: inviteLink,
-      infoBoxLines: ["If you didn't expect this invitation, you can ignore this email.", "This link expires in 7 days."]
+      infoBoxLines: ["If you didn't expect this invitation, you can ignore this email."]
     });
 
     return this.sendEmail({ to, subject, html });
@@ -496,6 +496,100 @@ class EmailService {
       buttonText: 'Go to Dashboard',
       buttonLink: dashboardLink,
       infoBoxLines: ["You can now access your dashboard and start managing compliance for your organisation."]
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
+   * Request partner signature on an approved funding agreement
+   * @param {Object} params
+   * @param {string} params.to - Partner email
+   * @param {string} params.partnerName - Partner/organization name
+   * @param {string} params.agreementTitle - Agreement title
+   * @param {string} params.signLink - Public signing link
+   * @param {Date} params.expiryDate - Link expiry date
+   */
+  async sendFundingAgreementPartnerSignatureRequestEmail({ to, partnerName, agreementTitle, signLink, expiryDate }) {
+    const subject = `Signature requested: ${agreementTitle || 'Funding agreement'}`;
+    const exp = expiryDate ? new Date(expiryDate).toLocaleDateString('en-AU', { year: 'numeric', month: 'short', day: 'numeric' }) : null;
+    const escapeHtml = (s) =>
+      String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+        Hi${partnerName ? ` ${partnerName}` : ''},
+      </p>
+      <p style="margin: 0 0 14px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+        A funding agreement has been approved and is ready for your signature.
+      </p>
+      <div style="background: #F8F9FA; border-radius: 8px; padding: 14px; margin: 14px 0; text-align: left;">
+        <p style="margin: 0; font-size: 13px; font-weight: 700; color: #132E5E;">${escapeHtml(agreementTitle || 'Funding agreement')}</p>
+        ${exp ? `<p style="margin: 8px 0 0 0; font-size: 11px; color: #6B7280;">This link expires on ${exp}.</p>` : ''}
+      </div>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+        Click the button below to review and sign.
+      </p>
+    `;
+
+    const html = buildEmailTemplate({
+      heading: 'Funding agreement signature request',
+      bodyHtml,
+      buttonText: 'Review & sign',
+      buttonLink: signLink,
+      infoBoxLines: [
+        'If you were not expecting this email, you can ignore it.',
+        'For security, do not share this link with anyone.'
+      ]
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
+   * Send partner COI declaration link
+   * @param {Object} params
+   * @param {string} params.to
+   * @param {string} params.partnerName
+   * @param {string} params.contactName
+   * @param {string} params.link
+   * @param {Date} params.expiryDate
+   */
+  async sendPartnerCoiRequestEmail({ to, partnerName, contactName, link, expiryDate }) {
+    const escapeHtml = (s) =>
+      String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+
+    const exp = expiryDate ? new Date(expiryDate).toLocaleDateString('en-AU', { year: 'numeric', month: 'short', day: 'numeric' }) : null;
+    const subject = `Conflict of Interest (COI) declaration requested`;
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+        Hi${contactName ? ` ${escapeHtml(contactName)}` : ''},
+      </p>
+      <p style="margin: 0 0 14px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+        Please complete a Conflict of Interest (COI) declaration for <strong>${escapeHtml(partnerName || 'your organisation')}</strong>.
+      </p>
+      ${exp ? `<p style="margin: 0 0 14px 0; font-size: 11px; line-height: 16px; color: #6B7280; text-align: center;">This link expires on ${exp}.</p>` : ''}
+    `;
+
+    const html = buildEmailTemplate({
+      heading: 'COI declaration requested',
+      bodyHtml,
+      buttonText: 'Open COI form',
+      buttonLink: link,
+      infoBoxLines: [
+        'If you were not expecting this email, you can ignore it.',
+        'For security, do not share this link with anyone.'
+      ]
     });
 
     return this.sendEmail({ to, subject, html });
@@ -660,6 +754,36 @@ class EmailService {
 
     const html = buildEmailTemplate({
       heading: 'Resubmission Required',
+      bodyHtml,
+      buttonText: 'Review & Resubmit',
+      buttonLink: viewLink,
+      infoBoxLines: ['You can view all feedback in the approval trail.', 'Edit the policy document if needed, then resubmit.']
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
+   * Send policy returned-for-resubmission email (when an approver requests changes).
+   * @param {Object} params
+   * @param {string} params.to - Recipient email
+   * @param {string} params.recipientName - Recipient's name
+   * @param {string} params.policyTitle - Policy title
+   * @param {string} params.approvalRequestId - Approval request ID for link
+   */
+  async sendPolicyReturnedForResubmissionEmail({ to, recipientName, policyTitle, approvalRequestId }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const viewLink = `${baseUrl}/approvals/${approvalRequestId}`;
+
+    const subject = `Returned for resubmission: ${policyTitle}`;
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
+      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Your policy <strong>${policyTitle}</strong> was returned for resubmission. Please review the approver comments, make any needed changes, and resubmit for approval.</p>
+    `;
+
+    const html = buildEmailTemplate({
+      heading: 'Returned for Resubmission',
       bodyHtml,
       buttonText: 'Review & Resubmit',
       buttonLink: viewLink,
@@ -941,6 +1065,62 @@ class EmailService {
       ]
     });
 
+    return this.sendEmail({ to, subject, html });
+  }
+
+  async sendDonorRefundExternalFormEmail({ to, recipientName, donorName, formLink }) {
+    const safe = (s) =>
+      String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    const subject = `Refund request: ${donorName || 'Donation'}`;
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${safe(recipientName || 'there')},</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+        A refund has been requested. Please provide the donation details and proof of payment so we can process it.
+      </p>
+    `;
+    const html = buildEmailTemplate({
+      heading: 'Refund details required',
+      bodyHtml,
+      buttonText: 'Provide refund details',
+      buttonLink: formLink,
+      infoBoxLines: [
+        'Please submit accurate information and attach any supporting evidence.',
+        'If you did not expect this email, contact the organisation.'
+      ]
+    });
+    return this.sendEmail({ to, subject, html });
+  }
+
+  async sendDonorRefundPaymentAckEmail({ to, recipientName, donorName, ackLink }) {
+    const safe = (s) =>
+      String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    const subject = `Refund payment sent: ${donorName || 'Donation'}`;
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${safe(recipientName || 'there')},</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
+        We have sent the refund payment. Please confirm you have received it by clicking the button below.
+      </p>
+    `;
+    const html = buildEmailTemplate({
+      heading: 'Confirm refund received',
+      bodyHtml,
+      buttonText: 'Confirm receipt',
+      buttonLink: ackLink,
+      infoBoxLines: [
+        'Please review the payment proof before confirming.',
+        'If you cannot access the link, contact the organisation.'
+      ]
+    });
     return this.sendEmail({ to, subject, html });
   }
 

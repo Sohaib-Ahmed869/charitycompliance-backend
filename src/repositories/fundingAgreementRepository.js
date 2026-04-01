@@ -35,6 +35,12 @@ export class FundingAgreementRepository {
     return await this.FundingAgreement.findById(id);
   }
 
+  async findByPartnerSignToken(token) {
+    const t = String(token || '').trim();
+    if (!t) return null;
+    return await this.FundingAgreement.findOne({ partner_sign_token: t });
+  }
+
   async create(data) {
     const agreement = new this.FundingAgreement(data);
     return await agreement.save();

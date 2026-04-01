@@ -15,6 +15,7 @@ import emailService from '../services/emailService.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
+import { ensureEmailNotInOtherTenants } from '../utils/ensureEmailNotInOtherTenants.js';
 
 const SALT_ROUNDS = 12;
 
@@ -131,6 +132,9 @@ export const inviteAuditor = asyncHandler(async (req, res) => {
 
   const { email, firstName, lastName } = req.body;
   const normalizedEmail = String(email).toLowerCase().trim();
+
+  // Stop cross-organisation collisions: auditor accounts must not re-use an email from another tenant.
+  await ensureEmailNotInOtherTenants(normalizedEmail, orgId);
 
   const org = await orgRepo.findOne();
   if (!org) {

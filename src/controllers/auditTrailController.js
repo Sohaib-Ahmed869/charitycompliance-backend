@@ -767,11 +767,11 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
       timestamp: person.createdAt,
       actor,
       action: 'Responsible person added',
-      module: 'responsible_people',
-      request_type: 'responsible_people',
+      module: 'board_member',
+      request_type: 'board_member',
       request_id: person._id?.toString(),
       details: { person_name: personName, person_email: personEmail, position: personPosition, status: person.status || null },
-      source: 'responsible_people'
+      source: 'board_member'
     }));
     const removed = person.status === 'removed' || person.status === 'resigned' || person.is_active === false;
     if (removed && person.updatedAt) {
@@ -780,11 +780,11 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
         timestamp: person.updatedAt,
         actor,
         action: 'Responsible person removed',
-        module: 'responsible_people',
-        request_type: 'responsible_people',
+        module: 'board_member',
+        request_type: 'board_member',
         request_id: person._id?.toString(),
         details: { person_name: personName, person_email: personEmail, position: personPosition, status: person.status || null },
-        source: 'responsible_people'
+        source: 'board_member'
       }));
     }
   });

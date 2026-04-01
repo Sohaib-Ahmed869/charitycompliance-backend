@@ -6,6 +6,7 @@
  */
 
 import { getTenantConnection } from '../db/connectionManager.js';
+import mongoose from 'mongoose';
 import { ApprovalMatrixRepository } from '../repositories/approvalMatrixRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
 import { NotificationRepository } from '../repositories/notificationRepository.js';
@@ -18,6 +19,7 @@ import { BoardMemberRepository } from '../repositories/boardMemberRepository.js'
 import { UserRepository } from '../repositories/userRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { DonorRepository } from '../repositories/donorRepository.js';
+import { DonorRefundRepository } from '../repositories/donorRefundRepository.js';
 import { SocialMediaCampaignRepository } from '../repositories/socialMediaCampaignRepository.js';
 import { ProjectRegisterService } from './projectRegisterService.js';
 import { AppError } from '../middleware/errorHandler.js';
@@ -261,6 +263,89 @@ export class ApprovalWorkflowService {
         approvalRequestId: approvalRequest._id
       });
       // Don't throw - approval request was created successfully, email failure shouldn't block it
+    }
+
+    return approvalRequest;
+  }
+
+  /**
+   * Create approval request for a donor refund (internal approval before processing).
+   */
+  async createDonorRefundApprovalRequest(refundId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const refundRepo = new DonorRefundRepository(tenantDb);
+
+    const refund = await refundRepo.findById(refundId);
+    if (!refund) throw new AppError('Refund record not found', 404, 'REFUND_NOT_FOUND');
+
+    const st = String(refund.status || '');
+    if (st !== 'donor_form_submitted') {
+      throw new AppError('Refund is not ready for internal approval', 400, 'INVALID_STATUS');
+    }
+
+    if (refund.internal_approval_request_id) {
+      throw new AppError('Refund approval workflow already started', 409, 'WORKFLOW_ALREADY_STARTED');
+    }
+
+    const amount = Number(refund?.donor_submission?.donation_amount || 0);
+    const { matrix, rule } = await this.findMatchingRule('donor_refund', amount, orgObjectId);
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    const approvalSteps = approvers.map(approver => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'donor_refund',
+      entity_id: refundId,
+      entity_type: 'donor_refund',
+      amount,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    await refundRepo.updateById(refundId, {
+      internal_approval_request_id: approvalRequest._id
+    });
+
+    // Notify approvers by email
+    try {
+      const userRepo = new UserRepository(tenantDb);
+      const submitter = submittedBy ? await userRepo.findById(submittedBy) : null;
+      const submitterName = submitter ? `${submitter.first_name} ${submitter.last_name}` : 'A user';
+
+      const donorName = refund?.donor_id?.name || 'Donor';
+      const entityTitle = `Donor refund: ${donorName} ($${amount || 0})`;
+
+      for (const approver of approvers) {
+        if (!approver.user_id) continue;
+        const approverUser = await userRepo.findById(approver.user_id);
+        if (!approverUser?.email) continue;
+
+        await emailService.sendApprovalRequestEmail({
+          to: approverUser.email,
+          recipientName: `${approverUser.first_name} ${approverUser.last_name}`,
+          approvalRequestId: approvalRequest._id.toString(),
+          requestType: 'donor_refund',
+          entityTitle,
+          approvalLevel: approver.level,
+          submitterName,
+          approvalType: rule.approval_type
+        });
+      }
+    } catch (emailErr) {
+      logError('Failed to send donor refund approval emails', { approvalRequestId: approvalRequest?._id, error: emailErr?.message });
     }
 
     return approvalRequest;
@@ -1225,6 +1310,75 @@ export class ApprovalWorkflowService {
     });
 
     if (decision === 'rejected') {
+      // Policies: a decline should return the item for resubmission (no "uphold/override" stage).
+      // This keeps the request visible to the submitter for edits + resubmission, and updates the
+      // policy record so it appears under "Resubmission Required" in Policies & Procedures.
+      if (request.entity_type === 'policy' && request.request_type === 'policy') {
+        const steps = updatedRequest.approval_steps || [];
+        const stepsSnapshot = steps.map((s) => (s.toObject ? s.toObject() : { ...s }));
+        const attemptNum = (updatedRequest.previous_attempts?.length || 0) + 1;
+
+        await approvalRequestRepo.updateWithOps(approvalRequestId, {
+          $set: {
+            status: 'returned_for_resubmission',
+            current_rejection_review_id: null,
+            completed_at: null
+          },
+          $push: {
+            previous_attempts: {
+              attempt_number: attemptNum,
+              steps_snapshot: stepsSnapshot,
+              saved_at: new Date(),
+              reason: 'policy_returned_for_resubmission'
+            }
+          }
+        });
+
+        try {
+          const policyRepo = new PolicyRepository(tenantDb);
+          await policyRepo.update(request.entity_id, { status: 'resubmission_required' });
+        } catch (e) {
+          logError('Failed to set policy status to resubmission_required', { error: e?.message });
+        }
+
+        // Notify submitter (and optionally email) that resubmission is required
+        try {
+          const notificationRepo = new NotificationRepository(tenantDb);
+          const submittedById = request.submitted_by?._id || request.submitted_by;
+          await notificationRepo.create({
+            user_id: submittedById,
+            type: 'returned_for_resubmission',
+            title: 'Returned for resubmission',
+            message: 'A workflow approver requested changes. Please update the policy and resubmit for approval.',
+            link: `/approvals/${approvalRequestId}`,
+            related_entity_id: approvalRequestId,
+            related_entity_type: 'approval_request',
+            created_at: new Date()
+          });
+
+          // Email submitter with a policy-specific template (non-blocking)
+          const userRepo = new UserRepository(tenantDb);
+          const submitter = await userRepo.findById(submittedById);
+          const policyRepo = new PolicyRepository(tenantDb);
+          const policy = await policyRepo.findById(request.entity_id);
+          const submitterEmail = submitter?.email;
+          const submitterName = [submitter?.first_name, submitter?.last_name].filter(Boolean).join(' ') || 'there';
+          const policyTitle = policy?.title || 'Policy';
+          if (submitterEmail) {
+            await emailService.sendPolicyReturnedForResubmissionEmail({
+              to: submitterEmail,
+              recipientName: submitterName,
+              policyTitle,
+              approvalRequestId
+            });
+          }
+        } catch (err) {
+          logError('Failed to notify/email submitter for policy resubmission', { error: err?.message });
+        }
+
+        return await approvalRequestRepo.findById(approvalRequestId);
+      }
+
       await approvalRequestRepo.updateStatus(approvalRequestId, 'rejected');
 
       if (request.entity_type === 'expense') {
@@ -1265,6 +1419,15 @@ export class ApprovalWorkflowService {
           compliance_approval_request_id: null,
           metadata: meta
         });
+      } else if (request.entity_type === 'donor_refund' && request.request_type === 'donor_refund') {
+        try {
+          const donorRefundRepo = new DonorRefundRepository(tenantDb);
+          await donorRefundRepo.updateById(request.entity_id, {
+            status: 'internal_rejected'
+          });
+        } catch (e) {
+          logError('Failed to mark donor refund internal_rejected', { approvalRequestId, error: e?.message });
+        }
       }
 
       // Send rejection notification email to submitter
@@ -1281,7 +1444,8 @@ export class ApprovalWorkflowService {
             policy: 'Policy',
             purchase: 'Purchase',
             grant: 'Grant',
-            funding: 'Funding Agreement'
+            funding: 'Funding Agreement',
+            donor_refund: 'Donor Refund'
           }[request.entity_type] || request.entity_type;
 
           const entityTitle = request.entity_type === 'expense' 
@@ -1326,6 +1490,35 @@ export class ApprovalWorkflowService {
       allApproved = allSteps.every(s => s.status === 'approved' || s.status === 'rejected');
       // But if any is rejected, the whole thing is rejected
       if (allSteps.some(s => s.status === 'rejected')) {
+        // Policies: any reject returns for resubmission (no terminal "rejected" state).
+        if (request.entity_type === 'policy' && request.request_type === 'policy') {
+          const stepsSnapshot = (allSteps || []).map((s) => (s.toObject ? s.toObject() : { ...s }));
+          const attemptNum = (updatedRequest.previous_attempts?.length || 0) + 1;
+
+          await approvalRequestRepo.updateWithOps(approvalRequestId, {
+            $set: {
+              status: 'returned_for_resubmission',
+              current_rejection_review_id: null,
+              completed_at: null
+            },
+            $push: {
+              previous_attempts: {
+                attempt_number: attemptNum,
+                steps_snapshot: stepsSnapshot,
+                saved_at: new Date(),
+                reason: 'policy_returned_for_resubmission'
+              }
+            }
+          });
+          try {
+            const policyRepo = new PolicyRepository(tenantDb);
+            await policyRepo.update(request.entity_id, { status: 'resubmission_required' });
+          } catch (e) {
+            logError('Failed to set policy status to resubmission_required (parallel reject)', { error: e?.message });
+          }
+          return await approvalRequestRepo.findById(approvalRequestId);
+        }
+
         await approvalRequestRepo.updateStatus(approvalRequestId, 'rejected');
         if (request.entity_type === 'expense') {
           await expenseRepo.updateStatus(request.entity_id, 'rejected', {
@@ -1357,6 +1550,15 @@ export class ApprovalWorkflowService {
             compliance_approval_request_id: null,
             metadata: meta
           });
+        } else if (request.entity_type === 'donor_refund' && request.request_type === 'donor_refund') {
+          try {
+            const donorRefundRepo = new DonorRefundRepository(tenantDb);
+            await donorRefundRepo.updateById(request.entity_id, {
+              status: 'internal_rejected'
+            });
+          } catch (e) {
+            logError('Failed to mark donor refund internal_rejected (parallel)', { approvalRequestId, error: e?.message });
+          }
         }
         return updatedRequest;
       }
@@ -1412,6 +1614,22 @@ export class ApprovalWorkflowService {
       } catch (err) {
         // Do not fail approval completion if close-out fails; log and continue.
         logError('Failed to close project after refund approval', { approvalRequestId, error: err?.message });
+      }
+
+      // If this approval corresponds to a donor refund internal approval, mark it approved.
+      try {
+        const donorRefundRepo = new DonorRefundRepository(tenantDb);
+        const donorRefund = await donorRefundRepo.DonorRefund
+          .findOne({ internal_approval_request_id: approvalRequestId, donor_id: { $exists: true, $ne: null } })
+          .lean();
+        if (donorRefund) {
+          await donorRefundRepo.updateById(donorRefund._id, {
+            status: 'internal_approved',
+            internal_approved_at: new Date()
+          });
+        }
+      } catch (err) {
+        logError('Failed to mark donor refund internal_approved', { approvalRequestId, error: err?.message });
       }
 
       if (request.entity_type === 'expense') {
@@ -1600,6 +1818,7 @@ export class ApprovalWorkflowService {
         complaint_resolution: 'Complaint Resolution Workflow',
         social_media_campaign: 'Marketing Campaign (pre-publication)',
         social_media_campaign_compliance: 'Marketing Campaign (post-publication compliance)',
+        donor_refund: 'Donor Refund',
         other: 'Approval Request'
       };
       const workflowTitle = typeLabels[request.request_type] || request.request_type || 'Approval Request';
@@ -2723,8 +2942,34 @@ export class ApprovalWorkflowService {
       );
     }
 
+    const toObjectId = (val) => {
+      if (!val) return null;
+      // Already an ObjectId
+      if (val instanceof mongoose.Types.ObjectId) return val;
+      // Populated doc or { _id }
+      const maybeId = val?._id || val?.id;
+      if (maybeId) {
+        try { return new mongoose.Types.ObjectId(String(maybeId)); } catch { /* fallthrough */ }
+      }
+      // String
+      const str = String(val);
+      // Exact 24-hex
+      if (/^[a-fA-F0-9]{24}$/.test(str)) {
+        try { return new mongoose.Types.ObjectId(str); } catch { return null; }
+      }
+      // Try to extract a 24-hex from a stringified object / log output
+      const m = str.match(/[a-fA-F0-9]{24}/);
+      if (m?.[0]) {
+        try { return new mongoose.Types.ObjectId(m[0]); } catch { return null; }
+      }
+      return null;
+    };
+
     const approvers = await this.resolveApprovers(rule, orgObjectId);
-    const approverUserIds = approvers.map(a => String(a.user_id)).filter(Boolean);
+    const approverUserIds = approvers
+      .map((a) => toObjectId(a?.user_id))
+      .filter(Boolean)
+      .map((oid) => oid.toString());
 
     if (approverUserIds.length === 0) {
       throw new AppError(
@@ -2742,9 +2987,8 @@ export class ApprovalWorkflowService {
     if (metadata?.is_major) {
       const activeBoardCount = await boardMemberRepo.countByOrgId(orgObjectId);
       if (activeBoardCount > 0) {
-        const boardUserId = complaint.board_signoff_user_id
-          ? String(complaint.board_signoff_user_id)
-          : '';
+        const boardOid = toObjectId(complaint.board_signoff_user_id);
+        const boardUserId = boardOid ? boardOid.toString() : '';
         if (!boardUserId) {
           throw new AppError(
             'Select a board member for sign-off before proceeding.',
@@ -2764,7 +3008,7 @@ export class ApprovalWorkflowService {
 
     const approvalSteps = finalApprovers.map((userId, index) => ({
       level: index + 1,
-      approver_user_id: userId,
+      approver_user_id: toObjectId(userId),
       status: 'pending',
     }));
 
