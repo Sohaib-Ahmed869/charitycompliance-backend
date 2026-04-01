@@ -76,6 +76,11 @@ const donorRefundSchema = new mongoose.Schema(
         type: String,
         default: ''
       },
+      notes: {
+        type: String,
+        default: '',
+        trim: true
+      },
       evidence: [
         {
           file_name: { type: String, default: '' },

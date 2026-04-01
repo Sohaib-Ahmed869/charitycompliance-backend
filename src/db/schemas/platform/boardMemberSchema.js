@@ -90,6 +90,12 @@ const boardMemberSchema = new mongoose.Schema({
     encrypted: true,
     searchable: true
   },
+  /** Blind index for email (HMAC with master key); used for duplicate checks within org */
+  email_hash: {
+    type: String,
+    index: true,
+    sparse: true
+  },
   phone: {
     type: String,
     encrypted: true

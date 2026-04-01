@@ -272,7 +272,9 @@ export class AuthService {
           firstName: userObj.first_name || firstName,
           lastName: userObj.last_name || lastName,
           role: 'admin',
-          permissions: ['*:*']
+          permissions: ['*:*'],
+          is_org_owner: true,
+          is_auditor: false
         },
         token,
         orgId: normalizedOrgId
@@ -448,6 +450,7 @@ export class AuthService {
             permissions: auditorPerms,
             is_board_member: false,
             is_auditor: true,
+            is_org_owner: false,
             position: 'Auditor',
             positions: [{ id: null, title: 'Auditor' }]
           },
@@ -499,7 +502,9 @@ export class AuthService {
             email: userObj.email,
             roles: baseRoles,
             permissions: basePermissions,
-            mfa_enabled: userObj.mfa_enabled
+            mfa_enabled: userObj.mfa_enabled,
+            is_org_owner: !!userObj.is_org_owner,
+            is_auditor: !!userObj.is_auditor
           };
 
           return {
@@ -571,7 +576,8 @@ export class AuthService {
         role: baseRoles[0] || 'board_member',
         permissions: basePermissions,
         is_board_member: false,
-        is_auditor: false
+        is_auditor: false,
+        is_org_owner: !!userObj.is_org_owner
       };
 
       const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
@@ -750,7 +756,9 @@ export class AuthService {
           lastName: boardMember.family_name,
           role: 'board_member',
           permissions,
-          is_board_member: await userHoldsBoardLevelPosition(tenantDb, existingUser._id, boardMember.org_id)
+          is_board_member: await userHoldsBoardLevelPosition(tenantDb, existingUser._id, boardMember.org_id),
+          is_org_owner: !!existingUser.is_org_owner,
+          is_auditor: !!existingUser.is_auditor
         };
         user.position = boardMember.custom_position_title || boardMember.position || null;
         if (boardMember.profile_picture_key) {
@@ -816,7 +824,9 @@ export class AuthService {
         lastName: boardMember.family_name,
         role: 'board_member',
         permissions,
-        is_board_member: await holdsBoardLevel(tenantDb, newUser._id, boardMember.org_id)
+        is_board_member: await holdsBoardLevel(tenantDb, newUser._id, boardMember.org_id),
+        is_org_owner: false,
+        is_auditor: false
       };
       user.position = boardMember.custom_position_title || boardMember.position || null;
       if (boardMember.profile_picture_key) {
@@ -1059,6 +1069,7 @@ export class AuthService {
         permissions: auditorPerms,
         is_board_member: false,
         is_auditor: true,
+        is_org_owner: false,
         position: 'Auditor',
         positions: [{ id: null, title: 'Auditor' }]
       };
@@ -1102,7 +1113,8 @@ export class AuthService {
       role: baseRoles[0] || 'board_member',
       permissions: basePermissions,
       is_board_member: false,
-      is_auditor: false
+      is_auditor: false,
+      is_org_owner: !!userObj.is_org_owner
     };
 
     const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');

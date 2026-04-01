@@ -92,6 +92,18 @@ export class PolicyRepository {
       .lean();
   }
 
+  /** Latest document log row for a policy version that has non-empty notes (for approval UI fallback). */
+  async findDocumentLogWithNotesForVersion(policyId, version) {
+    if (!policyId || !version) return null;
+    return this.PolicyDocumentLog.findOne({
+      policy_id: policyId,
+      version,
+      notes: { $exists: true, $nin: [null, ''] }
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+  }
+
   async getCounts(orgId) {
     const [total, draft, active, underReview, expired, resubmissionRequired] = await Promise.all([
       this.Policy.countDocuments({ org_id: orgId }),

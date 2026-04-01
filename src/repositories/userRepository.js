@@ -115,6 +115,15 @@ export class UserRepository {
     return this.User.findById(userId);
   }
 
+  async findManyByIds(userIds = []) {
+    const ids = Array.isArray(userIds) ? userIds.filter(Boolean) : [];
+    if (ids.length === 0) return [];
+    return this.User.find({ _id: { $in: ids } })
+      .select('first_name last_name email status profile_picture_key')
+      .lean()
+      .exec();
+  }
+
   async findOrgOwner() {
     return this.User.findOne({ is_org_owner: true }).select('email first_name last_name');
   }

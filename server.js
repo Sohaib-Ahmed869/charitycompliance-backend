@@ -12,6 +12,8 @@ import emailService from './src/services/emailService.js';
 import { logError, logInfo, logWarn } from './src/utils/logger.js';
 import { startRegistrationLicenseReminderScheduler } from './src/services/registrationLicenseReminderService.js';
 import { startMeetingReminderScheduler } from './src/services/meetingReminderService.js';
+import { runRegistrationLicenseRemindersOnce } from './src/services/registrationLicenseReminderService.js';
+import { runMeetingRemindersOnce } from './src/services/meetingReminderService.js';
 
 dotenv.config();
 
@@ -31,6 +33,16 @@ const startServer = async () => {
       startRegistrationLicenseReminderScheduler();
       // Meeting reminders (~1h / ~15m before start, with catch-up if ticks were missed). Tick: MEETING_REMINDER_TICK_MS (default 3m). SMTP required for email.
       startMeetingReminderScheduler();
+
+      // Optional: run catch-up reminders immediately on boot (useful after downtime).
+      // These are deduped (notifications) and phase-tracked (meetings), so safe on restarts.
+      const runOnBoot = String(process.env.REMINDERS_RUN_ON_BOOT || 'true').toLowerCase() !== 'false';
+      if (runOnBoot) {
+        setTimeout(() => {
+          runMeetingRemindersOnce().catch((err) => logError('Meeting reminders run-on-boot failed', err));
+          runRegistrationLicenseRemindersOnce().catch((err) => logError('Reg/license reminders run-on-boot failed', err));
+        }, Number(process.env.REMINDERS_RUN_ON_BOOT_DELAY_MS) || 8000);
+      }
     });
 
     const gracefulShutdown = async (signal) => {

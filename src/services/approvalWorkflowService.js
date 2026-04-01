@@ -269,6 +269,21 @@ export class ApprovalWorkflowService {
   }
 
   /**
+   * Build workflow notes for donor refund approvals (staff context + donor form).
+   */
+  _donorRefundSubmitterNotes(refund) {
+    if (!refund) return null;
+    const parts = [];
+    const admin = String(refund.admin_notes || '').trim();
+    if (admin) parts.push(`Staff notes\n${admin}`);
+    const donorReason = String(refund.donor_submission?.reason || '').trim();
+    if (donorReason) parts.push(`Donor reason / request\n${donorReason}`);
+    const donorNotes = String(refund.donor_submission?.notes || '').trim();
+    if (donorNotes) parts.push(`Donor notes\n${donorNotes}`);
+    return parts.length ? parts.join('\n\n') : null;
+  }
+
+  /**
    * Create approval request for a donor refund (internal approval before processing).
    */
   async createDonorRefundApprovalRequest(refundId, submittedBy) {
@@ -302,6 +317,8 @@ export class ApprovalWorkflowService {
       status: 'pending'
     }));
 
+    const submitterNotes = this._donorRefundSubmitterNotes(refund);
+
     const approvalRequest = await approvalRequestRepo.create({
       org_id: orgObjectId,
       request_type: 'donor_refund',
@@ -312,7 +329,8 @@ export class ApprovalWorkflowService {
       approval_type: rule.approval_type,
       status: 'pending',
       approval_steps: approvalSteps,
-      submitted_by: submittedBy
+      submitted_by: submittedBy,
+      submitter_notes: submitterNotes || null
     });
 
     await refundRepo.updateById(refundId, {
@@ -837,7 +855,7 @@ export class ApprovalWorkflowService {
    * Create approval request for a policy (action_type: policy)
    * Policies follow the normal approval matrix workflow only (no department head pre-approval).
    */
-  async createPolicyApprovalRequest(policyId, submittedBy, changeControlNote = null) {
+  async createPolicyApprovalRequest(policyId, submittedBy, changeControlNote = null, submitterNotes = null) {
     const tenantDb = await this.getTenantDb();
     this._ensureTenantModels(tenantDb);
     const orgObjectId = await this._getOrgObjectId();
@@ -902,7 +920,8 @@ export class ApprovalWorkflowService {
       status: 'pending',
       approval_steps: approvalSteps,
       submitted_by: submittedBy,
-      change_control: changeControlNote?.trim?.() ? changeControlNote.trim() : null
+      change_control: changeControlNote?.trim?.() ? changeControlNote.trim() : null,
+      submitter_notes: submitterNotes?.trim?.() ? submitterNotes.trim() : null
     });
 
     await policyRepo.update(policyId, {

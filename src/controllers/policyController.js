@@ -605,7 +605,7 @@ export const updatePolicyDocument = asyncHandler(async (req, res) => {
   try {
     if (userId) {
       const workflowService = new ApprovalWorkflowService(orgId);
-      await workflowService.createPolicyApprovalRequest(policy._id, userId, changeControl);
+      await workflowService.createPolicyApprovalRequest(policy._id, userId, changeControl, notes || null);
     }
   } catch (err) {
     const errCode = err?.code;

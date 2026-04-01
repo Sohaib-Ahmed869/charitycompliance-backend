@@ -133,7 +133,12 @@ export const createBoardMember = asyncHandler(async (req, res) => {
   }
 
   const orgId = req.orgId;
-  const { invite, system_access, is_volunteer, password, ...boardMemberData } = req.body;
+  const { invite: inviteRaw, system_access, is_volunteer, password, ...boardMemberData } = req.body;
+  const invite =
+    inviteRaw === true ||
+    inviteRaw === 'true' ||
+    inviteRaw === 1 ||
+    inviteRaw === '1';
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
   const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
@@ -143,14 +148,23 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
   }
 
-  // Stop cross-organisation collisions: one email must not exist in another tenant.
   if (boardMemberData.email) {
-    await ensureEmailNotInOtherTenants(boardMemberData.email, orgId);
+    const normalizedEmail = String(boardMemberData.email).toLowerCase().trim();
+    await ensureEmailNotInOtherTenants(normalizedEmail, orgId);
+    const existingBm = await boardMemberRepo.findActiveByEmailInOrg(normalizedEmail, org._id);
+    if (existingBm) {
+      throw new AppError(
+        'A person with this email already exists in your organisation.',
+        409,
+        'DUPLICATE_EMAIL_IN_ORG'
+      );
+    }
+    boardMemberData.email = normalizedEmail;
   }
 
-  // Generate invitation token if invite is requested
+  // Generate invitation token whenever invite is requested (onboarding + admin flows share the same email + /invitation/:token link)
   let invitationData = {};
-  if (invite && system_access !== false) {
+  if (invite) {
     const invitationToken = crypto.randomBytes(32).toString('hex');
 
     invitationData = {
@@ -167,8 +181,8 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     ...invitationData
   });
 
-  // Send invitation email if requested (for both regular staff and volunteers)
-  if (invite && boardMemberData.email) {
+  // Send invitation email if requested — require a real token so the link is always /invitation/:token (set password)
+  if (invite && boardMemberData.email && invitationData.invitation_token) {
     try {
       const recipientName = `${boardMemberData.given_names} ${boardMemberData.family_name}`;
       const position = boardMemberData.custom_position_title || boardMemberData.position;
@@ -331,6 +345,29 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
   const { boardMemberId } = req.params;
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
+
+  const existing = await boardMemberRepo.findById(boardMemberId);
+  if (!existing) {
+    throw new AppError('Board member not found', 404, 'NOT_FOUND');
+  }
+
+  if (req.body.email !== undefined && req.body.email !== null && String(req.body.email).trim()) {
+    const normalizedEmail = String(req.body.email).toLowerCase().trim();
+    await ensureEmailNotInOtherTenants(normalizedEmail, orgId);
+    const dup = await boardMemberRepo.findActiveByEmailInOrg(
+      normalizedEmail,
+      existing.org_id,
+      boardMemberId
+    );
+    if (dup) {
+      throw new AppError(
+        'A person with this email already exists in your organisation.',
+        409,
+        'DUPLICATE_EMAIL_IN_ORG'
+      );
+    }
+    req.body.email = normalizedEmail;
+  }
 
   const boardMember = await boardMemberRepo.update(boardMemberId, req.body);
   if (!boardMember) {
