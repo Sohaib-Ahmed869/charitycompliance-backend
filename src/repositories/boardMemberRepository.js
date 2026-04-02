@@ -164,6 +164,45 @@ export class BoardMemberRepository {
     );
   }
 
+  async findActiveDepartmentHead(orgId, { departmentId = null, departmentName = null, excludeBoardMemberId = null } = {}) {
+    if (!orgId) return null;
+
+    // Prefer departmentId (canonical), fall back to departmentName (string on BoardMember)
+    if (departmentId) {
+      const Position = this.BoardMember.db.models.Position;
+      const positions = await Position.find({
+        org_id: orgId,
+        department_id: departmentId,
+        is_active: true
+      }).select({ _id: 1 }).lean();
+      const positionIds = positions.map((p) => p._id).filter(Boolean);
+      if (positionIds.length) {
+        const q = {
+          org_id: orgId,
+          is_active: true,
+          is_head_of_department: true,
+          position_id: { $in: positionIds },
+        };
+        if (excludeBoardMemberId) q._id = { $ne: new mongoose.Types.ObjectId(String(excludeBoardMemberId)) };
+        const bm = await this.BoardMember.findOne(q).lean();
+        if (bm) return bm;
+      }
+    }
+
+    const name = String(departmentName || '').trim();
+    if (name) {
+      const q = {
+        org_id: orgId,
+        is_active: true,
+        is_head_of_department: true,
+        department: name
+      };
+      if (excludeBoardMemberId) q._id = { $ne: new mongoose.Types.ObjectId(String(excludeBoardMemberId)) };
+      return await this.BoardMember.findOne(q).lean();
+    }
+    return null;
+  }
+
   /**
    * Ensure only one active head of department exists per department.
    * When assigning a head, clear the flag from other active members in the same department.

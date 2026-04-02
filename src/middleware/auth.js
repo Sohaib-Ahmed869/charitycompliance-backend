@@ -64,7 +64,7 @@ async function computeRuntimePermissionsForUser(userId, orgId) {
 
     // Known sidebar modules - used for defaults when module_permissions is empty
     const MODULE_IDS = [
-      'dashboard', 'approval_workflow', 'audit_trail', 'complaints', 'charity_admin', 'policies', 'human_resources',
+      'dashboard', 'calendar', 'meetings', 'approval_workflow', 'audit_trail', 'complaints', 'charity_admin', 'policies', 'human_resources',
       'financial_mgmt', 'risk_mgmt', 'programs', 'grants_donors', 'reporting', 'systems_legal', 'donation_boxes'
     ];
 
