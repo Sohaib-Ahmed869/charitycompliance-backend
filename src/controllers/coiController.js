@@ -13,10 +13,13 @@ import { ApprovalRequestRepository } from '../repositories/approvalRequestReposi
 
 export const listCoiRequests = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
+  const userId = req.user.userId;
   const { status, source } = req.query;
 
   const tenantDb = await getTenantConnection(orgId);
   const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const { UserRepository } = await import('../repositories/userRepository.js');
+  const { UserPositionRepository } = await import('../repositories/userPositionRepository.js');
   const orgRepo = new OrganizationRepository(tenantDb);
   const org = await orgRepo.findOne();
   if (!org) {
@@ -39,6 +42,45 @@ export const listCoiRequests = asyncHandler(async (req, res) => {
   }
   
   let requests = await coiRepo.findByOrgId(org._id, filters);
+
+  const userRepo = new UserRepository(tenantDb);
+  const user = await userRepo.findById(userId);
+  const isOrgOwner = user?.is_org_owner;
+
+  if (!isOrgOwner) {
+    const userPositionRepo = new UserPositionRepository(tenantDb);
+    const userPositions = await userPositionRepo.findByUserId(userId, true);
+    const posIdSet = new Set(userPositions.map((up) => String(up.position_id?._id || up.position_id)));
+
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const bmRepo = new BoardMemberRepository(tenantDb);
+    const allBms = await bmRepo.findAllActiveByUserId(userId, org._id);
+    if (allBms) {
+      allBms.forEach((bm) => {
+        const pid = bm.position_id?._id?.toString?.() || bm.position_id?.toString?.();
+        if (pid) posIdSet.add(pid);
+      });
+    }
+    const userPositionIds = [...posIdSet];
+
+    requests = requests.filter((request) => {
+      const doc = request.toObject ? request.toObject() : { ...request };
+
+      const submitterId = doc.submitted_by?._id || doc.submitted_by;
+      if (submitterId && String(submitterId) === String(userId)) return true;
+
+      const isDirectApprover = doc.approval_steps?.some((step) =>
+        String(step.approver_user_id?._id || step.approver_user_id) === String(userId)
+      );
+      if (isDirectApprover) return true;
+
+      const isPositionApprover = doc.approval_steps?.some((step) => {
+        const stepPositionId = String(step.approver_position_id?._id || step.approver_position_id);
+        return stepPositionId && userPositionIds.includes(stepPositionId);
+      });
+      return !!isPositionApprover;
+    });
+  }
 
   // Enrich data for display
   requests = requests.map((r) => {

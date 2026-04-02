@@ -37,13 +37,34 @@ router.post(
       .trim()
       .notEmpty()
       .withMessage('Asset type is required'),
-    body('worth')
-      .isFloat({ min: 0 })
-      .withMessage('Asset worth must be a positive number'),
-    body('purchase_date')
-      .notEmpty()
-      .isISO8601()
-      .withMessage('Valid purchase date is required')
+    body('creation_intent')
+      .optional()
+      .isIn(['subscription', 'credentials'])
+      .withMessage('Invalid creation intent'),
+    body('worth').custom((value, { req }) => {
+      const intent = req.body.creation_intent === 'credentials' ? 'credentials' : 'subscription';
+      if (intent === 'credentials') return true;
+      if (value === undefined || value === null || String(value).trim() === '') {
+        throw new Error('Asset worth is required');
+      }
+      const n = parseFloat(value);
+      if (Number.isNaN(n) || n < 0) {
+        throw new Error('Asset worth must be a positive number');
+      }
+      return true;
+    }),
+    body('purchase_date').custom((value, { req }) => {
+      const intent = req.body.creation_intent === 'credentials' ? 'credentials' : 'subscription';
+      if (intent === 'credentials') return true;
+      if (!value || String(value).trim() === '') {
+        throw new Error('Valid purchase date is required');
+      }
+      const d = new Date(value);
+      if (Number.isNaN(d.getTime())) {
+        throw new Error('Valid purchase date is required');
+      }
+      return true;
+    })
   ],
   validate,
   assetController.createAsset

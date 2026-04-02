@@ -34,13 +34,9 @@ export const createAsset = asyncHandler(async (req, res) => {
     });
   }
 
-  if (!req.file) {
-    throw new AppError('Documentation file is required', 400, 'FILE_REQUIRED');
-  }
-
   const orgId = req.orgId;
   const userId = req.user.userId;
-  const assetData = req.body;
+  const assetData = { ...req.body };
 
   // metadata may arrive as JSON string from multipart forms
   if (typeof assetData?.metadata === 'string') {
@@ -51,23 +47,41 @@ export const createAsset = asyncHandler(async (req, res) => {
     }
   }
 
-  const uploadResult = await uploadToS3(
-    req.file.buffer,
-    req.file.originalname,
-    req.file.mimetype,
-    orgId,
-    'assets'
-  );
+  const creationIntent = assetData.creation_intent === 'credentials' ? 'credentials' : 'subscription';
+  delete assetData.creation_intent;
+
+  assetData.metadata = { ...(assetData.metadata || {}), creation_intent: creationIntent };
+
+  if (creationIntent !== 'credentials' && !req.file) {
+    throw new AppError('Documentation file is required', 400, 'FILE_REQUIRED');
+  }
+
+  let uploadResult = null;
+  if (req.file) {
+    uploadResult = await uploadToS3(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      orgId,
+      'assets'
+    );
+  }
 
   const assetService = new AssetService(orgId);
+  const isCredentials = creationIntent === 'credentials';
+  const worthParsed = assetData.worth !== undefined && assetData.worth !== null && String(assetData.worth).trim() !== ''
+    ? parseFloat(assetData.worth)
+    : undefined;
   const asset = await assetService.createAsset({
     ...assetData,
     assigned_to: normalizeAssignedTo(assetData.assigned_to),
-    documentation: uploadResult.key,
-    documentation_file_name: req.file.originalname,
-    purchase_date: new Date(assetData.purchase_date),
+    documentation: uploadResult?.key,
+    documentation_file_name: req.file?.originalname,
+    purchase_date: isCredentials
+      ? (assetData.purchase_date ? new Date(assetData.purchase_date) : new Date())
+      : new Date(assetData.purchase_date),
     maintenance_date: assetData.maintenance_date ? new Date(assetData.maintenance_date) : undefined,
-    worth: assetData.worth ? parseFloat(assetData.worth) : assetData.worth
+    worth: isCredentials ? (Number.isFinite(worthParsed) ? worthParsed : 0) : worthParsed
   }, userId);
 
   const documentationUrl = uploadResult?.url || null;

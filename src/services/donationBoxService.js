@@ -246,6 +246,8 @@ export class DonationBoxService {
       throw new AppError('Office receipt can only be acknowledged when that step is pending.', 400, 'WORKFLOW_STATE');
     }
 
+    const collectorRef = entry.collector_id || entry.collector_acknowledged_by;
+
     // Preferred control: office acknowledgement should be a different person,
     // but do not hard-block small teams.
 
@@ -314,6 +316,8 @@ export class DonationBoxService {
     if (assignedTo && String(assignedTo) !== String(userId)) {
       throw new AppError('Only the assigned user can upload the deposit slip for this entry', 403, 'NOT_ASSIGNED');
     }
+
+    const collectorRef = entry.collector_id || entry.collector_acknowledged_by;
 
     // Preferred control: depositor should be different from collector,
     // but allow same user when no alternate staff is available.
