@@ -181,6 +181,21 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     ...invitationData
   });
 
+  // Enforce single Head of Department per department (by position's department)
+  try {
+    if (boardMemberData.is_head_of_department === true && boardMemberData.position_id) {
+      const { PositionRepository } = await import('../repositories/positionRepository.js');
+      const positionRepo = new PositionRepository(tenantDb);
+      const pos = await positionRepo.findById(boardMemberData.position_id);
+      const deptId = pos?.department_id;
+      if (deptId) {
+        await boardMemberRepo.clearOtherDepartmentHeads(org._id, deptId, boardMember._id);
+      }
+    }
+  } catch (_) {
+    // non-blocking: don't fail creation if enforcement query fails
+  }
+
   // Send invitation email if requested — require a real token so the link is always /invitation/:token (set password)
   if (invite && boardMemberData.email && invitationData.invitation_token) {
     try {
@@ -214,6 +229,18 @@ export const createBoardMember = asyncHandler(async (req, res) => {
           risk: `${frontendUrl}/public/volunteer/risk/${riskDoc.token}`,
           coi: `${frontendUrl}/public/volunteer/coi/${coiDoc.token}`,
         };
+
+        // Persist so the Volunteers page can display/resend later.
+        try {
+          await boardMemberRepo.update(boardMember._id, {
+            volunteer_action_links: {
+              ...volunteerActionLinks,
+              generated_at: new Date(),
+            },
+          });
+        } catch (_) {
+          // non-blocking: invitation can still be sent without persistence
+        }
       }
 
       await emailService.sendBoardMemberInvitation({
@@ -372,6 +399,23 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
   const boardMember = await boardMemberRepo.update(boardMemberId, req.body);
   if (!boardMember) {
     throw new AppError('Board member not found', 404, 'NOT_FOUND');
+  }
+
+  // Enforce single Head of Department per department (by position's department)
+  try {
+    const assigningHead = req.body?.is_head_of_department === true;
+    const nextPositionId = req.body?.position_id ?? existing?.position_id ?? null;
+    if (assigningHead && nextPositionId) {
+      const { PositionRepository } = await import('../repositories/positionRepository.js');
+      const positionRepo = new PositionRepository(tenantDb);
+      const pos = await positionRepo.findById(nextPositionId);
+      const deptId = pos?.department_id;
+      if (deptId) {
+        await boardMemberRepo.clearOtherDepartmentHeads(existing.org_id, deptId, boardMemberId);
+      }
+    }
+  } catch (_) {
+    // non-blocking: don't fail update if enforcement query fails
   }
 
   const obj = boardMember.toObject ? boardMember.toObject() : { ...boardMember };

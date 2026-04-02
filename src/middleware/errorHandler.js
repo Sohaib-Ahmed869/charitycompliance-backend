@@ -96,6 +96,20 @@ export const errorHandler = (err, req, res, next) => {
     error = new AppError('Data decryption failed', 500, 'DECRYPTION_ERROR');
   }
 
+  // Buffer slice/copy range errors (commonly triggered by malformed/large base64 data-URLs)
+  if (
+    err?.message &&
+    typeof err.message === 'string' &&
+    err.message.includes('"offset"') &&
+    err.message.includes('out of range')
+  ) {
+    error = new AppError(
+      'One of the uploaded attachments appears to be too large or corrupted. Please upload a smaller file and try again.',
+      413,
+      'ATTACHMENT_DATA_ERROR'
+    );
+  }
+
   // Body parser (payload too large)
   if (err.type === 'entity.too.large' || err.status === 413) {
     error = new AppError(

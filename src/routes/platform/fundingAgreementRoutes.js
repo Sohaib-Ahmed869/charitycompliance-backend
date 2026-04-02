@@ -47,7 +47,10 @@ router.post(
     body('start_date').optional().isISO8601().toDate(),
     body('end_date').optional().isISO8601().toDate(),
     body('payment_terms').optional().trim(),
-    body('reporting_requirements').optional().trim()
+    body('reporting_requirements').optional().trim(),
+    body('agreement_attachment_data_url').optional().isString(),
+    body('agreement_attachment_file_name').optional().trim(),
+    body('agreement_attachment_mime_type').optional().trim()
   ],
   validate,
   fundingAgreementController.createAgreement

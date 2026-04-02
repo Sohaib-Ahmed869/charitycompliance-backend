@@ -221,7 +221,18 @@ const boardMemberSchema = new mongoose.Schema({
     type: String,
     trim: true,
     default: ''
-  }
+  },
+
+  /**
+   * Volunteer quick-action links (public token links).
+   * Stored so admins can view/resend without regenerating unless needed.
+   */
+  volunteer_action_links: {
+    complaint: { type: String, default: '' },
+    risk: { type: String, default: '' },
+    coi: { type: String, default: '' },
+    generated_at: { type: Date, default: null },
+  },
 }, {
   timestamps: true,
   collection: 'board_members'

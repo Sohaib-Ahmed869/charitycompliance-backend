@@ -378,6 +378,45 @@ class EmailService {
     return this.sendEmail({ to, subject, html });
   }
 
+  async sendVolunteerActionLinksEmail({ to, recipientName, organizationName, volunteerActionLinks }) {
+    const safeOrg = organizationName || 'your organisation';
+    const name = recipientName || 'Volunteer';
+    const links = volunteerActionLinks || {};
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">
+        Hi ${name},
+      </p>
+      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">
+        Here are your volunteer quick action links for <strong>${safeOrg}</strong>.
+      </p>
+      <div style="text-align:left; max-width: 440px; margin: 0 auto; border: 1px solid #E5E7EB; border-radius: 10px; background: #FFFFFF; padding: 14px 16px;">
+        <p style="margin: 0 0 10px 0; font-size: 12px; color: #0F172A; font-weight: 700;">Quick actions</p>
+        ${links.complaint ? `<p style="margin: 0 0 8px 0; font-size: 12px;"><a href="${links.complaint}" style="color: #2563EB; text-decoration: none;">Submit a complaint</a></p>` : ''}
+        ${links.risk ? `<p style="margin: 0 0 8px 0; font-size: 12px;"><a href="${links.risk}" style="color: #2563EB; text-decoration: none;">Submit a risk</a></p>` : ''}
+        ${links.coi ? `<p style="margin: 0; font-size: 12px;"><a href="${links.coi}" style="color: #2563EB; text-decoration: none;">Declare conflict of interest (COI)</a></p>` : ''}
+      </div>
+    `;
+
+    const firstLink = links.complaint || links.risk || links.coi || null;
+    const html = buildEmailTemplate({
+      heading: 'Volunteer Links',
+      headingHighlight: 'Volunteer',
+      bodyHtml,
+      buttonText: 'Open a link',
+      buttonLink: firstLink || 'https://stewardex.com',
+      infoBoxLines: [
+        'These links are unique to you.',
+        'If you did not request these links, you can ignore this email.',
+      ],
+    });
+
+    return this.sendEmail({
+      to,
+      subject: `Your volunteer quick action links`,
+      html,
+    });
+  }
+
   /**
    * Auditor invite: read-only access; temporary password + org ID for first sign-in.
    * @param {Object} params
@@ -560,7 +599,10 @@ class EmailService {
         ${exp ? `<p style="margin: 8px 0 0 0; font-size: 11px; color: #6B7280;">This link expires on ${exp}.</p>` : ''}
       </div>
       <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
-        Click the button below to review and sign.
+        Click the button below to review the agreement PDF and sign.
+      </p>
+      <p style="margin: 0; margin-top: 10px; font-size: 11px; line-height: 16px; color: #6B7280; font-weight: 400; text-align: center; max-width: 500px;">
+        You must scroll through the full PDF before the signature submission button becomes available.
       </p>
     `;
 

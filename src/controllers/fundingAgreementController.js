@@ -148,7 +148,10 @@ export const getPublicAgreementForSigning = asyncHandler(async (req, res) => {
       payment_terms: agreement.payment_terms,
       reporting_requirements: agreement.reporting_requirements,
       internal_signature: agreement.internal_signature,
-      partner_signature: agreement.partner_signature
+      partner_signature: agreement.partner_signature,
+      agreement_attachment_data_url: agreement.agreement_attachment_data_url,
+      agreement_attachment_file_name: agreement.agreement_attachment_file_name,
+      agreement_attachment_mime_type: agreement.agreement_attachment_mime_type
     }
   });
 });

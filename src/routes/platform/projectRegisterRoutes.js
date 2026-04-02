@@ -18,7 +18,10 @@ router.post(
   '/',
   [
     body('project_name').trim().notEmpty().withMessage('Project name is required'),
+    body('project_kind').optional().isIn(['funded', 'internal']),
+    body('internal_budget').optional().isFloat({ min: 0 }),
     body('agreement_title').optional().trim(),
+    body('agreement_id').optional().isMongoId(),
     body('planned_start_date').optional().isISO8601().toDate(),
     body('planned_end_date').optional().isISO8601().toDate(),
     body('status').optional().isIn(['active', 'pending', 'at_risk', 'completed'])

@@ -37,6 +37,10 @@ export class FundingAgreementService {
     const orgId = await this._getOrgObjectId();
     const repo = new FundingAgreementRepository(tenantDb);
 
+    if (!String(data.agreement_attachment_data_url || '').trim()) {
+      throw new AppError('Agreement PDF attachment is required', 400, 'AGREEMENT_ATTACHMENT_REQUIRED');
+    }
+
     const agreement = await repo.create({
       org_id: orgId,
       agreement_title: data.agreement_title,
@@ -51,6 +55,9 @@ export class FundingAgreementService {
       description: data.description || '',
       payment_terms: data.payment_terms || '',
       reporting_requirements: data.reporting_requirements || '',
+      agreement_attachment_data_url: String(data.agreement_attachment_data_url || '').trim(),
+      agreement_attachment_file_name: String(data.agreement_attachment_file_name || '').trim(),
+      agreement_attachment_mime_type: String(data.agreement_attachment_mime_type || 'application/pdf').trim(),
       metadata: data.metadata || {}
     });
 
@@ -122,6 +129,10 @@ export class FundingAgreementService {
 
     if (String(agreement.status) !== 'approved') {
       throw new AppError('Only approved funding agreements can be signed', 400, 'AGREEMENT_NOT_APPROVED');
+    }
+
+    if (!String(agreement.agreement_attachment_data_url || '').trim()) {
+      throw new AppError('Agreement PDF attachment is required before requesting partner signature', 400, 'AGREEMENT_ATTACHMENT_REQUIRED');
     }
 
     if (agreement?.internal_signature?.signed_at) {

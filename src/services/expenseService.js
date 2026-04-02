@@ -74,6 +74,20 @@ export class ExpenseService {
             );
           }
         }
+      } else if (String(project.project_kind || '') === 'internal') {
+        const meta = project.metadata && typeof project.metadata === 'object' ? project.metadata : {};
+        const cap = Number(meta.internal_budget);
+        if (cap > 0) {
+          const usedFunds = await expenseRepo.getProjectUtilization(expenseData.project_id);
+          const availableBalance = cap - usedFunds;
+          if (expenseData.amount > availableBalance) {
+            throw new AppError(
+              `Expense amount ($${expenseData.amount}) exceeds internal project budget remaining ($${availableBalance}). Planned budget: $${cap}, Already used: $${usedFunds}`,
+              400,
+              'INSUFFICIENT_FUNDING'
+            );
+          }
+        }
       }
     }
 
@@ -619,7 +633,12 @@ export class ExpenseService {
     // If you want “under budget” refunds, the workflow starts after docs upload (handled elsewhere).
     const FundingAgreement = tenantDb.model('FundingAgreement');
     const agreement = project.agreement_id ? await FundingAgreement.findById(project.agreement_id) : null;
-    const budget = Number(agreement?.total_amount || 0);
+    const meta = project.metadata && typeof project.metadata === 'object' ? project.metadata : {};
+    const budget = project.agreement_id
+      ? Number(agreement?.total_amount || 0)
+      : String(project.project_kind || '') === 'internal'
+        ? Number(meta.internal_budget || 0)
+        : 0;
     const paidTotal = Number(readiness?.paidAmount || 0);
     const remaining = Math.max(0, budget - paidTotal);
     if (budget > 0 && remaining !== 0) return;

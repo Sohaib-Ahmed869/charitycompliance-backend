@@ -25,6 +25,16 @@ const projectRegisterSchema = new mongoose.Schema({
   agreement_id: {
     type: mongoose.Schema.Types.ObjectId
   },
+  /**
+   * funded = linked to a funding agreement / external partner flows.
+   * internal = org-only project; no partner agreements; monitoring & reports uploaded by staff.
+   */
+  project_kind: {
+    type: String,
+    enum: ['funded', 'internal'],
+    default: 'funded',
+    index: true
+  },
   project_name: {
     type: String,
     required: true,
