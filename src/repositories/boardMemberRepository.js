@@ -163,4 +163,32 @@ export class BoardMemberRepository {
       { new: true }
     );
   }
+
+  /**
+   * Ensure only one active head of department exists per department.
+   * When assigning a head, clear the flag from other active members in the same department.
+   */
+  async clearOtherDepartmentHeads(orgId, departmentId, excludeBoardMemberId) {
+    if (!orgId || !departmentId) return { modifiedCount: 0 };
+    const Position = this.BoardMember.db.models.Position;
+    const positions = await Position.find({
+      org_id: orgId,
+      department_id: departmentId,
+      is_active: true
+    }).select({ _id: 1 }).lean();
+    const positionIds = positions.map((p) => p._id).filter(Boolean);
+    if (positionIds.length === 0) return { modifiedCount: 0 };
+
+    const query = {
+      org_id: orgId,
+      is_active: true,
+      is_head_of_department: true,
+      position_id: { $in: positionIds },
+    };
+    if (excludeBoardMemberId) {
+      query._id = { $ne: new mongoose.Types.ObjectId(String(excludeBoardMemberId)) };
+    }
+    const res = await this.BoardMember.updateMany(query, { $set: { is_head_of_department: false } });
+    return { modifiedCount: res?.modifiedCount ?? 0 };
+  }
 }

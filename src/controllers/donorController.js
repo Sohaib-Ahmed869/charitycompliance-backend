@@ -14,6 +14,7 @@ import { OrganizationRepository } from '../repositories/organizationRepository.j
 import emailService from '../services/emailService.js';
 import { ApprovalWorkflowService } from '../services/approvalWorkflowService.js';
 import crypto from 'crypto';
+import { logWarn } from '../utils/logger.js';
 
 const parsePublicToken = (token, req) => {
   // Expected: "<orgKey>.<token>"
@@ -25,6 +26,92 @@ const parsePublicToken = (token, req) => {
   if (!orgKey || !rest) return null;
   return { orgKey, token: rest };
 };
+
+/** RFC 2397 data URL → binary + mime (for evidence uploads). */
+function parseDataUrlPayload(dataUrl) {
+  const s = String(dataUrl).trim();
+  const m = s.match(/^data:([^,]*?)(;base64)?,(.*)$/s);
+  if (!m) return null;
+  const header = m[1] || '';
+  const isBase64 = m[2] === ';base64';
+  const payload = m[3] ?? '';
+  const mimeType = header.split(';')[0].trim() || 'application/octet-stream';
+  try {
+    const buffer = isBase64
+      ? Buffer.from(String(payload).replace(/\s/g, ''), 'base64')
+      : Buffer.from(decodeURIComponent(payload), 'utf8');
+    if (!buffer.length) return null;
+    return { mimeType, buffer };
+  } catch {
+    return null;
+  }
+}
+
+const MAX_INLINE_ATTACHMENT_BYTES = 2 * 1024 * 1024;
+const MAX_TOTAL_INLINE_ATTACHMENTS = 12 * 1024 * 1024;
+
+/**
+ * Store data-URL attachments in S3 when possible so MongoDB stays under the ~16MB BSON document limit.
+ * Falls back to inline data_url only for small files when S3 is unavailable.
+ */
+async function persistDataUrlAttachments(items, orgId, s3Category) {
+  const { uploadToS3 } = await import('../services/s3Service.js');
+  const out = [];
+  let inlineTotal = 0;
+  for (let i = 0; i < items.length; i++) {
+    const file_name = String(items[i]?.file_name || '').trim();
+    const data_url = String(items[i]?.data_url || '').trim();
+    if (!data_url) {
+      if (file_name) out.push({ file_name, data_url: '', url: '', key: '' });
+      continue;
+    }
+    const parsed = parseDataUrlPayload(data_url);
+    if (!parsed) {
+      throw new AppError(
+        `Attachment "${file_name || `file ${i + 1}`}" is not a valid data URL.`,
+        400,
+        'INVALID_ATTACHMENT'
+      );
+    }
+    try {
+      const uploaded = await uploadToS3(
+        parsed.buffer,
+        file_name || `attachment-${i + 1}`,
+        parsed.mimeType,
+        String(orgId),
+        s3Category
+      );
+      out.push({
+        file_name: file_name || `file-${i + 1}`,
+        url: uploaded.url,
+        key: uploaded.key,
+        data_url: ''
+      });
+    } catch (uploadErr) {
+      logWarn('S3 upload failed; attempting inline donor refund attachment', {
+        category: s3Category,
+        message: uploadErr?.message
+      });
+      if (parsed.buffer.length > MAX_INLINE_ATTACHMENT_BYTES) {
+        throw new AppError(
+          'Files are too large to store without cloud file storage. Please use smaller PDFs or images, or contact the charity.',
+          413,
+          'ATTACHMENT_TOO_LARGE'
+        );
+      }
+      if (inlineTotal + parsed.buffer.length > MAX_TOTAL_INLINE_ATTACHMENTS) {
+        throw new AppError(
+          'Total attachment size is too large. Please submit fewer or smaller files.',
+          413,
+          'ATTACHMENTS_TOO_LARGE'
+        );
+      }
+      inlineTotal += parsed.buffer.length;
+      out.push({ file_name: file_name || `file-${i + 1}`, data_url });
+    }
+  }
+  return out;
+}
 
 export const createDonor = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -202,12 +289,18 @@ export const submitDonorRefundPublicForm = asyncHandler(async (req, res) => {
   }
 
   const evidence = Array.isArray(req.body?.evidence) ? req.body.evidence : [];
-  const normalizedEvidence = evidence
+  const evidenceRaw = evidence
     .map((e) => ({
       file_name: String(e?.file_name || e?.fileName || e?.name || '').trim(),
       data_url: String(e?.data_url || e?.dataUrl || e?.data || '').trim(),
     }))
     .filter((e) => e.file_name || e.data_url);
+
+  const persistedEvidence = await persistDataUrlAttachments(
+    evidenceRaw,
+    record.org_id,
+    'donor-refund-evidence'
+  );
 
   const updated = await repo.updateById(record._id, {
     status: 'donor_form_submitted',
@@ -218,7 +311,7 @@ export const submitDonorRefundPublicForm = asyncHandler(async (req, res) => {
       payment_method: String(req.body?.payment_method || '').trim(),
       reason: String(req.body?.reason || '').trim(),
       notes: String(req.body?.notes || '').trim(),
-      evidence: normalizedEvidence,
+      evidence: persistedEvidence,
     },
   });
 
@@ -275,19 +368,25 @@ export const recordDonorRefundPaymentSent = asyncHandler(async (req, res) => {
   if (st !== 'refund_processing') throw new AppError('Refund is not in processing state', 400, 'INVALID_STATUS');
 
   const paymentProof = Array.isArray(req.body?.payment_proof) ? req.body.payment_proof : [];
-  const normalizedProof = paymentProof
+  const paymentProofRaw = paymentProof
     .map((p) => ({
       file_name: String(p?.file_name || p?.fileName || p?.name || '').trim(),
       data_url: String(p?.data_url || p?.dataUrl || p?.data || '').trim(),
     }))
     .filter((p) => p.file_name || p.data_url);
 
+  const persistedProof = await persistDataUrlAttachments(
+    paymentProofRaw,
+    record.org_id,
+    'donor-refund-payment-proof'
+  );
+
   const ackToken = crypto.randomBytes(24).toString('hex');
   const updated = await repo.updateById(refundId, {
     status: 'awaiting_donor_acknowledgment',
     refund_payment_sent_at: new Date(),
     payment_reference: String(req.body?.payment_reference || '').trim(),
-    payment_proof: normalizedProof,
+    payment_proof: persistedProof,
     payment_notification: {
       message_for_donor: String(req.body?.message_for_donor || '').trim(),
       amount_paid: Number(req.body?.amount_paid || 0),

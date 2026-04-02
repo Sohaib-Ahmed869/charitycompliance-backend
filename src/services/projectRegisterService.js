@@ -41,11 +41,21 @@ export class ProjectRegisterService {
     const orgId = await this._getOrgObjectId();
     const repo = new ProjectRegisterRepository(tenantDb);
 
+    const projectKind = data.project_kind === 'internal' ? 'internal' : 'funded';
+    const metadata = { ...(data.metadata && typeof data.metadata === 'object' ? data.metadata : {}) };
+    if (projectKind === 'internal') {
+      const b = Number(data.internal_budget ?? metadata.internal_budget);
+      if (Number.isFinite(b) && b >= 0) {
+        metadata.internal_budget = b;
+      }
+    }
+
     const project = await repo.create({
       org_id: orgId,
       project_code: data.project_code || createProjectCode(),
-      agreement_title: data.agreement_title || '',
-      agreement_id: data.agreement_id || null,
+      agreement_title: projectKind === 'internal' ? '' : (data.agreement_title || ''),
+      agreement_id: projectKind === 'internal' ? null : (data.agreement_id || null),
+      project_kind: projectKind,
       project_name: data.project_name,
       description: data.description || '',
       planned_start_date: data.planned_start_date || null,
@@ -53,7 +63,7 @@ export class ProjectRegisterService {
       status: data.status || 'pending',
       phase: data.phase || '',
       warning: data.warning || '',
-      metadata: data.metadata || {}
+      metadata
     });
 
     logInfo('Project created', { projectId: project._id });

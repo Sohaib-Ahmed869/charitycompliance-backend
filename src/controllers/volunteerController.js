@@ -10,6 +10,7 @@ import { RiskRepository } from '../repositories/riskRepository.js';
 import { PolicyRepository } from '../repositories/policyRepository.js';
 import { PolicyAcknowledgementRepository } from '../repositories/policyAcknowledgementRepository.js';
 import { getFileStream } from '../services/s3Service.js';
+import emailService from '../services/emailService.js';
 import {
   createVolunteerActionToken,
   resolveVolunteerActionToken,
@@ -463,6 +464,58 @@ export const regenerateVolunteerActionLinks = asyncHandler(async (req, res) => {
       volunteer_action_links: actionLinks,
     },
   });
+});
+
+export const resendVolunteerActionLinks = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Validation failed', details: errors.array() },
+    });
+  }
+
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  const volunteer = await boardMemberRepo.findById(boardMemberId);
+  if (!volunteer) throw new AppError('Volunteer not found', 404, 'NOT_FOUND');
+  if (!volunteer.is_volunteer) throw new AppError('Board member is not marked as volunteer', 400, 'NOT_VOLUNTEER');
+  if (!volunteer.email) throw new AppError('Volunteer email is required to send links', 400, 'VOLUNTEER_EMAIL_REQUIRED');
+
+  let links = volunteer.volunteer_action_links || null;
+  const hasAnyLink =
+    !!String(links?.complaint || '').trim() || !!String(links?.risk || '').trim() || !!String(links?.coi || '').trim();
+
+  if (!hasAnyLink) {
+    // Ensure links exist before sending.
+    const frontendUrl = process.env.FRONTEND_URL || FRONTEND_URL;
+    const [complaintDoc, riskDoc, coiDoc] = await Promise.all([
+      createVolunteerActionToken({ orgId, boardMemberId, actionType: 'complaint', email: volunteer.email }),
+      createVolunteerActionToken({ orgId, boardMemberId, actionType: 'risk', email: volunteer.email }),
+      createVolunteerActionToken({ orgId, boardMemberId, actionType: 'coi', email: volunteer.email }),
+    ]);
+    links = {
+      complaint: `${frontendUrl}/public/volunteer/complaint/${complaintDoc.token}`,
+      risk: `${frontendUrl}/public/volunteer/risk/${riskDoc.token}`,
+      coi: `${frontendUrl}/public/volunteer/coi/${coiDoc.token}`,
+      generated_at: new Date(),
+    };
+    await boardMemberRepo.update(boardMemberId, { volunteer_action_links: links });
+  }
+
+  const recipientName = [volunteer.given_names, volunteer.family_name].filter(Boolean).join(' ').trim() || 'Volunteer';
+  await emailService.sendVolunteerActionLinksEmail({
+    to: volunteer.email,
+    recipientName,
+    organizationName: org?.name || 'Your Organization',
+    volunteerActionLinks: links,
+  });
+
+  res.json({ success: true, data: { volunteer_action_links: links } });
 });
 
 export const getVolunteerSubmissionsStats = asyncHandler(async (req, res) => {

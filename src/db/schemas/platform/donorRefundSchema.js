@@ -84,7 +84,9 @@ const donorRefundSchema = new mongoose.Schema(
       evidence: [
         {
           file_name: { type: String, default: '' },
-          data_url: { type: String, default: '' }
+          data_url: { type: String, default: '' },
+          url: { type: String, default: '' },
+          key: { type: String, default: '' }
         }
       ]
     },
@@ -119,7 +121,9 @@ const donorRefundSchema = new mongoose.Schema(
     payment_proof: [
       {
         file_name: { type: String, default: '' },
-        data_url: { type: String, default: '' }
+        data_url: { type: String, default: '' },
+        url: { type: String, default: '' },
+        key: { type: String, default: '' }
       }
     ],
     payment_notification: {

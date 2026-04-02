@@ -39,7 +39,9 @@ router.post(
   [
     param('token').notEmpty().withMessage('Token is required'),
     body('notes').optional().isString(),
-    body('attachments').optional().isArray(),
+    body('attachments_report').isArray({ min: 1 }).withMessage('Report attachment(s) are required'),
+    body('attachments_media_report').optional().isArray(),
+    body('attachments_media').optional().isArray(),
   ],
   validate,
   projectDeliveryController.submitProgressReportPartnerResponse
@@ -56,6 +58,20 @@ router.post(
   ],
   validate,
   projectDeliveryController.initiatePartnerProgressReport
+);
+
+router.post(
+  '/:projectId/progress-reports/internal-submit',
+  [
+    param('projectId').isMongoId().withMessage('Invalid projectId'),
+    body('report_type').optional().isIn(['interim', 'final']),
+    body('notes').optional().isString(),
+    body('attachments_report').isArray({ min: 1 }).withMessage('Report attachment(s) are required'),
+    body('attachments_media_report').optional().isArray(),
+    body('attachments_media').optional().isArray(),
+  ],
+  validate,
+  projectDeliveryController.submitInternalProgressReport
 );
 
 router.post(

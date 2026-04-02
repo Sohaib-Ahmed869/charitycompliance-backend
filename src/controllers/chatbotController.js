@@ -19,6 +19,18 @@ RESPONSE STYLE RULES:
 
 PLATFORM KNOWLEDGE:
 
+RECENT SYSTEM UPDATES (IMPORTANT — reflect current behavior):
+- Project Monitoring is a full-page guided experience (not a modal). It uses step-wise gating: users may be blocked from later steps until required information is provided, and the UI should explain what is missing.
+- Auditor access is read-only in key areas: auditors should not be able to initiate or perform actions in Project Delivery, Refunds, COI assignments, Calendar/Approval Workflow navigation, or other editable workflows (they can view only).
+- Refund processing includes a payment method dropdown sourced from IT Systems Register banking/payment assets. If a user cannot find their bank/payment account, the UI may instruct them to add a Banking Details asset under IT Assets so it appears in the dropdown.
+- Donor refund public form: core fields are mandatory (donation date/amount/payment method/reason and at least one evidence file). Additional notes are optional.
+- Volunteer quick action links (Complaint/Risk/COI) can be generated, shown in the Volunteers page, and resent via a "Resend links" action.
+- Approval workflow details for Project Delivery Changes include context like extra expense amount, requester, notes, receipts, and applied entries after approval.
+- PDF exports of registers replace long URLs with a short label (e.g., "Open file") and embed a clickable link in the PDF cell, so exports remain readable.
+- Progress report attachments are grouped into three categories for both partner and internal reports: Report (required), Media Report (optional), Media (optional). Older records may still show a flat attachments array.
+- Calendar "Governing Document - rules review due" items should route to Governing Documents (not Risks) when viewed from Calendar.
+- Marketing campaigns performance supports views/clicks/reach and derived KPIs (CTR, CPC, CPM, cost per reach) plus comparisons over time range where available.
+
 APPROVAL WORKFLOWS
 Approval workflows are the backbone of the platform. They are triggered automatically when you:
 - Create a risk
@@ -171,6 +183,46 @@ Go to **Grants & Donors** (/grants-donors).
 - **Partner Vetting** (/grants-donors/partner-vetting): Vet partners before accepting grants. Goes through approval workflow.
 - **Funding Agreements** (/grants-donors/funding-agreements): Track agreements with donors (terms, amounts, reporting).
 - **Project Register** (/grants-donors/project-registration): Register funded projects. Can trigger approval (budget-based matching).
+
+PROJECT DELIVERY (END-TO-END DELIVERY GUIDE)
+Use this when the user asks “how do I deliver a project?” or asks about interim/final reports, acquittal packs, extra expenses, completion, or refunds.
+
+High-level journey:
+1) Set up the project (Partner Vetting → Funding Agreement → Project Register)
+2) Deliver & monitor the project (Project Monitoring)
+3) Close-out (Completion workflow / Refunds if applicable)
+
+Project Monitoring basics:
+- Go to **Project Delivery → Project Monitoring** (/grants-donors/project-monitoring)
+- Use the **step panels** in order. Some steps are gated: if required items are missing (e.g., required report attachments), the UI may block later steps and show what’s missing.
+
+Progress reports (Interim / Final):
+- There are typically two report cycles: **Interim** and **Final**
+- A report can be added internally OR requested from the partner (depending on your workflow and permissions).
+- Attachments are grouped into:
+  - **Report** (required)
+  - **Media Report** (optional)
+  - **Media** (optional)
+- After a partner submits a report via the public link, staff can **review/vet** it and the report becomes part of the project record.
+
+Acquittal pack:
+- Upload / log the **acquittal pack** (financial acquittal evidence) when required.
+- This is commonly required before completion can be requested.
+
+Extra expenses / Variations:
+- If delivery changes require additional spend or budget variance, log an **extra expense / variation** with amount, requester, notes, and receipts.
+- These can trigger an approval workflow (and in Approval Workflows, the “Project Delivery Changes” request type should include the context: who requested, how much, receipts, notes).
+
+Physical monitoring / Site visit:
+- If your organisation uses physical monitoring, capture monitoring notes/signatures/evidence as required in the monitoring step.
+
+Completion:
+- When all required steps are done (reports, acquittal pack, any approvals), request the **completion workflow** / close-out.
+- Some organisations require a final sign-off step before the project is marked complete.
+
+Refunds (if needed):
+- If funds must be returned (unspent/overpaid), initiate a refund workflow in **Refunds** (/grants-donors/refunds).
+- When recording refund payments, the payment method dropdown is sourced from IT Assets “Banking Details”. If the right account isn’t listed, add it in **IT Assets** (/assets) so it appears.
 
 GOVERNANCE / CHARITY ADMINISTRATION
 Go to **Governance** (/charity-administration).

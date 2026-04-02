@@ -163,6 +163,27 @@ export const initiateRefundProcess = asyncHandler(async (req, res) => {
   if (refund.status === 'completed') {
     throw new AppError('Refund is already completed', 400, 'REFUND_ALREADY_COMPLETED');
   }
+
+  const projIdEarly = refund.project_id?._id || refund.project_id;
+  const ProjectRegisterModel = tenantDb.model('ProjectRegister');
+  const linkedProject = projIdEarly ? await ProjectRegisterModel.findById(projIdEarly).lean() : null;
+  const isInternalRefundProject = String(linkedProject?.project_kind || '') === 'internal';
+
+  if (isInternalRefundProject && refund.status === 'pending_initiation') {
+    const updated = await repo.updateById(refundId, {
+      status: 'partner_receipts_submitted',
+      initiated_at: new Date(),
+      initiated_by: req.user?.userId || req.userId || null,
+      partner_contact_email: '',
+      partner_submission: {
+        submitted_at: new Date(),
+        notes: 'Internal project — surplus recorded in-house (no external partner refund form).',
+        receipts: []
+      }
+    });
+    return res.json({ success: true, data: updated });
+  }
+
   // If partner already submitted receipts but the internal approval workflow was not created (older runs),
   // allow "initiate" to create the approval workflow without re-sending partner emails.
   if (refund.status === 'partner_receipts_submitted') {
@@ -437,7 +458,9 @@ export const submitProgressReportPartnerResponse = asyncHandler(async (req, res)
   }
 
   const notes = String(req.body?.notes || '').trim();
-  const attachments = normalizeDataUrlFiles(req.body?.attachments);
+  const attachments_report = normalizeDataUrlFiles(req.body?.attachments_report || req.body?.attachments || []);
+  const attachments_media_report = normalizeDataUrlFiles(req.body?.attachments_media_report || []);
+  const attachments_media = normalizeDataUrlFiles(req.body?.attachments_media || []);
 
   const nextReports = [...reports];
   nextReports[idx] = {
@@ -446,7 +469,11 @@ export const submitProgressReportPartnerResponse = asyncHandler(async (req, res)
     partner_submission: {
       submitted_at: new Date(),
       notes: notes || '',
-      attachments
+      attachments_report,
+      attachments_media_report,
+      attachments_media,
+      // Back-compat for older UI: keep a flat list too.
+      attachments: attachments_report,
     }
   };
 
@@ -516,6 +543,14 @@ export const initiatePartnerProgressReport = asyncHandler(async (req, res) => {
   const project = await projectRepo.findById(projectId);
   if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
 
+  if (String(project.project_kind || '') === 'internal') {
+    throw new AppError(
+      'Internal projects do not use partner email links. Add a progress report using the staff upload action in Project Monitoring.',
+      400,
+      'INTERNAL_PROJECT_NO_PARTNER_REPORT'
+    );
+  }
+
   const FundingAgreement = tenantDb.model('FundingAgreement');
   const agreement = project.agreement_id ? await FundingAgreement.findById(project.agreement_id).lean() : null;
   const partnerEmail = await resolvePartnerEmailFromAgreement(tenantDb, agreement, req.orgId);
@@ -554,6 +589,66 @@ export const initiatePartnerProgressReport = asyncHandler(async (req, res) => {
   } catch (_) {
     // non-fatal: the request is still created even if email fails
   }
+
+  res.json({ success: true, data: updated });
+});
+
+/**
+ * Staff-uploaded interim/final progress report for internal projects (no partner / no public link).
+ * Reuses the same metadata list and vetting flow as partner reports.
+ */
+export const submitInternalProgressReport = asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const reportType = String(req.body?.report_type || 'interim').toLowerCase() === 'final' ? 'final' : 'interim';
+  const notes = String(req.body?.notes || '').trim();
+  const attachments_report = normalizeDataUrlFiles(req.body?.attachments_report || req.body?.attachments || []);
+  const attachments_media_report = normalizeDataUrlFiles(req.body?.attachments_media_report || []);
+  const attachments_media = normalizeDataUrlFiles(req.body?.attachments_media || []);
+  if (attachments_report.length === 0) {
+    throw new AppError('At least one file attachment is required', 400, 'ATTACHMENTS_REQUIRED');
+  }
+
+  const tenantDb = await getTenantConnection(req.orgId);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+  const project = await projectRepo.findById(projectId);
+  if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+  if (String(project.project_kind || '') !== 'internal') {
+    throw new AppError(
+      'Staff progress uploads are only for internal projects. For funded projects, request a partner report instead.',
+      400,
+      'NOT_INTERNAL_PROJECT'
+    );
+  }
+
+  const id = crypto.randomBytes(10).toString('hex');
+  const reports = Array.isArray(project?.metadata?.partner_progress_reports)
+    ? [...project.metadata.partner_progress_reports]
+    : [];
+  const userId = req.user?.userId || req.userId || null;
+  reports.unshift({
+    id,
+    report_type: reportType,
+    status: 'partner_submitted',
+    source: 'internal',
+    requested_at: new Date(),
+    requested_by: userId,
+    partner_submission: {
+      submitted_at: new Date(),
+      notes,
+      attachments_report,
+      attachments_media_report,
+      attachments_media,
+      // Back-compat
+      attachments: attachments_report,
+    }
+  });
+
+  const updated = await projectRepo.update(projectId, {
+    metadata: {
+      ...(project.metadata || {}),
+      partner_progress_reports: reports
+    }
+  });
 
   res.json({ success: true, data: updated });
 });
@@ -888,7 +983,12 @@ export const completeProject = asyncHandler(async (req, res) => {
 
   const FundingAgreement = tenantDb.model('FundingAgreement');
   const agreement = project.agreement_id ? await FundingAgreement.findById(project.agreement_id) : null;
-  const budget = Number(agreement?.total_amount || 0);
+  const completionMeta = project.metadata && typeof project.metadata === 'object' ? project.metadata : {};
+  const budget = project.agreement_id
+    ? Number(agreement?.total_amount || 0)
+    : String(project.project_kind || '') === 'internal'
+      ? Number(completionMeta.internal_budget || 0)
+      : 0;
   const remaining = Math.max(0, budget - paidTotal);
 
   // Create delivery workflow if not already active.

@@ -65,6 +65,20 @@ const fundingAgreementSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
+  // Partner must review this PDF before signing (shown in the public sign page).
+  // Stored as data-URL to reuse the existing in-app PDF viewer without adding new storage endpoints.
+  agreement_attachment_data_url: {
+    type: String,
+    default: ''
+  },
+  agreement_attachment_file_name: {
+    type: String,
+    default: ''
+  },
+  agreement_attachment_mime_type: {
+    type: String,
+    default: 'application/pdf'
+  },
   internal_signature: {
     signed_at: { type: Date, default: null },
     signed_by_user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },

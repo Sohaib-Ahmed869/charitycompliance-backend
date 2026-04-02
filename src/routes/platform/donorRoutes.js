@@ -31,11 +31,12 @@ router.post(
   '/refunds/public/:token/submit',
   [
     param('token').notEmpty().withMessage('Token is required'),
-    body('donation_date').optional().isString(),
-    body('donation_amount').optional().isNumeric(),
-    body('payment_method').optional().isString(),
-    body('reason').optional().isString(),
-    body('evidence').optional().isArray(),
+    body('donation_date').trim().notEmpty().withMessage('Donation date is required'),
+    body('donation_amount').isNumeric().withMessage('Donation amount is required'),
+    body('payment_method').trim().notEmpty().withMessage('Payment method is required'),
+    body('reason').trim().notEmpty().withMessage('Reason is required'),
+    body('notes').optional().isString(),
+    body('evidence').isArray({ min: 1 }).withMessage('At least one evidence file is required'),
   ],
   validate,
   submitDonorRefundPublicForm
