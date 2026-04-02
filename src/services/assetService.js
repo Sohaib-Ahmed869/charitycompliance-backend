@@ -31,11 +31,14 @@ export class AssetService {
     if (!assetData.type) {
       throw new AppError('Asset type is required', 400, 'TYPE_REQUIRED');
     }
-    if (assetData.worth === undefined || assetData.worth === null) {
-      throw new AppError('Asset worth is required', 400, 'ASSET_WORTH_REQUIRED');
-    }
-    if (!assetData.purchase_date) {
-      throw new AppError('Purchase date is required', 400, 'PURCHASE_DATE_REQUIRED');
+    const isCredentialsOnly = assetData.metadata?.creation_intent === 'credentials';
+    if (!isCredentialsOnly) {
+      if (assetData.worth === undefined || assetData.worth === null) {
+        throw new AppError('Asset worth is required', 400, 'ASSET_WORTH_REQUIRED');
+      }
+      if (!assetData.purchase_date) {
+        throw new AppError('Purchase date is required', 400, 'PURCHASE_DATE_REQUIRED');
+      }
     }
 
     const asset = await assetRepo.create({
