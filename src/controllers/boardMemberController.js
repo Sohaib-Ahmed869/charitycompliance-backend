@@ -162,6 +162,28 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     boardMemberData.email = normalizedEmail;
   }
 
+  // Enforce: only one Head of Department per department
+  if (boardMemberData.is_head_of_department === true) {
+    const nextDepartmentName = String(boardMemberData.department || '').trim();
+    let deptId = null;
+    try {
+      if (boardMemberData.position_id) {
+        const { PositionRepository } = await import('../repositories/positionRepository.js');
+        const positionRepo = new PositionRepository(tenantDb);
+        const pos = await positionRepo.findById(boardMemberData.position_id);
+        deptId = pos?.department_id || null;
+      }
+    } catch (_) { /* ignore */ }
+
+    const existingHead = await boardMemberRepo.findActiveDepartmentHead(org._id, {
+      departmentId: deptId,
+      departmentName: nextDepartmentName
+    });
+    if (existingHead) {
+      throw new AppError('This department already has a Head of Department. Remove the existing head before assigning a new one.', 400, 'DEPARTMENT_HEAD_EXISTS');
+    }
+  }
+
   // Generate invitation token whenever invite is requested (onboarding + admin flows share the same email + /invitation/:token link)
   let invitationData = {};
   if (invite) {
@@ -394,6 +416,31 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
       );
     }
     req.body.email = normalizedEmail;
+  }
+
+  // Enforce: only one Head of Department per department
+  if (req.body?.is_head_of_department === true) {
+    const nextDepartmentName =
+      req.body.department !== undefined ? String(req.body.department || '').trim() : String(existing.department || '').trim();
+    let deptId = null;
+    try {
+      const nextPositionId = req.body.position_id ?? existing.position_id ?? null;
+      if (nextPositionId) {
+        const { PositionRepository } = await import('../repositories/positionRepository.js');
+        const positionRepo = new PositionRepository(tenantDb);
+        const pos = await positionRepo.findById(nextPositionId);
+        deptId = pos?.department_id || null;
+      }
+    } catch (_) { /* ignore */ }
+
+    const existingHead = await boardMemberRepo.findActiveDepartmentHead(existing.org_id, {
+      departmentId: deptId,
+      departmentName: nextDepartmentName,
+      excludeBoardMemberId: boardMemberId
+    });
+    if (existingHead) {
+      throw new AppError('This department already has a Head of Department. Remove the existing head before assigning a new one.', 400, 'DEPARTMENT_HEAD_EXISTS');
+    }
   }
 
   const boardMember = await boardMemberRepo.update(boardMemberId, req.body);

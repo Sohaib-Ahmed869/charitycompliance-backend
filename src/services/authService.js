@@ -37,6 +37,7 @@ export const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => 
     const { PositionRepository } = await import('../repositories/positionRepository.js');
     const boardMemberRepo = new BoardMemberRepository(tenantDb);
     const positionRepo = new PositionRepository(tenantDb);
+    const Position = positionRepo.Position;
 
     // Get ALL active board_members (user may hold multiple positions after transfer)
     const allBoardMembers = await boardMemberRepo.findAllActiveByUserId(userId, orgId);
@@ -45,9 +46,26 @@ export const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => 
     const positionIds = allBoardMembers
       .map(bm => bm.position_id)
       .filter(Boolean);
-    if (positionIds.length === 0) return [];
-
-    const positions = await Promise.all(positionIds.map(pid => positionRepo.findById(pid)));
+    let positions = [];
+    if (positionIds.length > 0) {
+      positions = await Promise.all(positionIds.map((pid) => positionRepo.findById(pid)));
+    } else {
+      // Fallback: some legacy/onboarding-created records can have a role title but no position_id.
+      // Attempt to resolve a Position by matching the boardMember's position/custom title.
+      const titles = Array.from(
+        new Set(
+          allBoardMembers
+            .flatMap((bm) => [bm?.position, bm?.custom_position_title])
+            .map((t) => (typeof t === 'string' ? t.trim() : ''))
+            .filter(Boolean)
+        )
+      );
+      if (titles.length > 0 && Position) {
+        const ors = titles.map((t) => ({ title: { $regex: `^${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' } }));
+        positions = await Position.find({ org_id: orgId, is_active: true, $or: ors }).lean();
+      }
+    }
+    if (!positions || positions.length === 0) return [];
 
     const result = [];
 
@@ -61,7 +79,7 @@ export const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => 
 
     // Known sidebar modules - used for defaults when module_permissions is empty
     const MODULE_IDS = [
-      'dashboard', 'approval_workflow', 'audit_trail', 'complaints', 'charity_admin', 'policies', 'human_resources',
+      'dashboard', 'calendar', 'meetings', 'approval_workflow', 'audit_trail', 'complaints', 'charity_admin', 'policies', 'human_resources',
       'financial_mgmt', 'risk_mgmt', 'programs', 'grants_donors', 'reporting', 'systems_legal', 'donation_boxes'
     ];
 
