@@ -46,7 +46,7 @@ const donationSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['draft', 'submitted', 'approved'],
+    enum: ['draft', 'submitted', 'approved', 'resubmission_required'],
     default: 'draft',
     index: true
   },

@@ -3,7 +3,6 @@ import { body, param } from 'express-validator';
 import {
   generateVolunteerActionLinks,
   regenerateVolunteerActionLinks,
-  resendVolunteerActionLinks,
   getVolunteerActionContext,
   getVolunteerSubmissionsStats,
   submitVolunteerComplaint,
@@ -99,13 +98,6 @@ router.post(
   [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
   validate,
   regenerateVolunteerActionLinks
-);
-
-router.post(
-  '/:boardMemberId/resend-links',
-  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
-  validate,
-  resendVolunteerActionLinks
 );
 
 export default router;

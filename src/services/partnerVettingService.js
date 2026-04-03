@@ -26,8 +26,6 @@ const DEFAULT_DOCUMENTS = [
   { name: 'ACNC Registration Proof', status: 'completed' },
   { name: 'ABN Certificate', status: 'completed' },
   { name: 'AML/CTF Policy', status: 'completed' },
-  { name: 'Risk Policy', status: 'pending' },
-  { name: 'Conflict of Interest Policy', status: 'pending' },
   { name: 'Financial Statements', status: 'pending' }
 ];
 
@@ -235,63 +233,6 @@ export class PartnerVettingService {
       throw new AppError('Partner not found', 404, 'PARTNER_NOT_FOUND');
     }
     const doc = partner.documents?.[docIndex];
-    if (!doc?.file_path) {
-      throw new AppError('Document not found', 404, 'DOCUMENT_NOT_FOUND');
-    }
-
-    return await getFileStream(doc.file_path, rangeHeader);
-  }
-
-  async uploadVettingCheckDocument(partnerId, checkIndex, file) {
-    const tenantDb = await this.getTenantDb();
-    const repo = new PartnerVettingRepository(tenantDb);
-    const partner = await repo.findById(partnerId);
-    if (!partner) {
-      throw new AppError('Partner not found', 404, 'PARTNER_NOT_FOUND');
-    }
-
-    const idx = Number(checkIndex);
-    if (!Number.isInteger(idx) || idx < 0) {
-      throw new AppError('Invalid check index', 400, 'INVALID_INDEX');
-    }
-
-    if (!Array.isArray(partner.vetting_checks) || !partner.vetting_checks[idx]) {
-      throw new AppError('Vetting check not found', 404, 'CHECK_NOT_FOUND');
-    }
-
-    const { key } = await uploadToS3(
-      file.buffer,
-      file.originalname,
-      file.mimetype,
-      this.orgId,
-      'partner_vetting_check_documents'
-    );
-
-    const doc = {
-      file_path: key,
-      file_name: file.originalname,
-      uploaded_at: new Date()
-    };
-
-    return await repo.addVettingCheckDocument(partnerId, idx, doc);
-  }
-
-  async streamVettingCheckDocument(partnerId, checkIndex, docIndex, rangeHeader) {
-    const tenantDb = await this.getTenantDb();
-    const repo = new PartnerVettingRepository(tenantDb);
-    const partner = await repo.findById(partnerId);
-    if (!partner) {
-      throw new AppError('Partner not found', 404, 'PARTNER_NOT_FOUND');
-    }
-
-    const cIdx = Number(checkIndex);
-    const dIdx = Number(docIndex);
-    if (!Number.isInteger(cIdx) || cIdx < 0 || !Number.isInteger(dIdx) || dIdx < 0) {
-      throw new AppError('Invalid document index', 400, 'INVALID_INDEX');
-    }
-
-    const check = partner.vetting_checks?.[cIdx];
-    const doc = check?.documents?.[dIdx];
     if (!doc?.file_path) {
       throw new AppError('Document not found', 404, 'DOCUMENT_NOT_FOUND');
     }

@@ -99,7 +99,7 @@ const expenseSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['draft', 'pending', 'approved', 'rejected', 'paid', 'cancelled'],
+    enum: ['draft', 'pending', 'approved', 'rejected', 'resubmission_required', 'paid', 'cancelled'],
     default: 'draft',
     index: true
   },

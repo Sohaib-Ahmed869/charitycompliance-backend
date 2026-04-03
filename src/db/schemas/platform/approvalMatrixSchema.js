@@ -17,12 +17,10 @@ const approvalRuleSchema = new mongoose.Schema({
       'purchase',
       'grant',
       'donor',
-      'donor_refund',
       'donation',
       'donation_agreement',
       'donation_milestone',
       'social_media_campaign',
-      'social_media_campaign_compliance',
       'contract',
       'leave',
       'hr',
@@ -110,12 +108,10 @@ const approvalMatrixSchema = new mongoose.Schema({
       'project_approval',
       'grant_approval',
       'donor_review',
-      'donor_refund_workflow',
       'donation_workflow',
       'donation_agreement_workflow',
       'donation_milestone_workflow',
       'social_media_campaign_workflow',
-      'social_media_campaign_compliance_workflow',
       'emergency',
       'other'
     ],
@@ -217,13 +213,11 @@ const getCategoryDisplayName = (category) => {
     expense_approval: 'Expense Approval',
     policy_approval: 'Policy Approval',
     donor_review: 'Donor Review',
-    donor_refund_workflow: 'Donor Refunds',
     grant_approval: 'Grant Approval',
     donation_workflow: 'Donations',
     donation_agreement_workflow: 'Donation Funding Agreements',
     donation_milestone_workflow: 'Donation Milestones',
     social_media_campaign_workflow: 'Social Media Campaigns',
-    social_media_campaign_compliance_workflow: 'Marketing post-publication compliance',
     hr_approval: 'HR Approval',
     emergency: 'Emergency Response'
   };
@@ -268,7 +262,7 @@ approvalMatrixSchema.pre('save', async function(next) {
   }
   
   // Single-workflow categories: no workflow_type allowed
-  const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'risk_treatment', 'complaint_resolution', 'donor_refund_workflow'];
+  const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'risk_treatment', 'complaint_resolution'];
   if (singleWorkflowCategories.includes(doc.workflow_category)) {
     if (doc.workflow_type) {
       return next(new Error(`${getCategoryDisplayName(doc.workflow_category)} workflows cannot have a workflow type`));

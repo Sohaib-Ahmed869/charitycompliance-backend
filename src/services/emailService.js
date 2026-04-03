@@ -9,6 +9,7 @@ import nodemailer from 'nodemailer';
 import { logError, logInfo } from '../utils/logger.js';
 
 const APP_NAME = process.env.APP_NAME || 'Stewardex';
+const LOGO_URL = process.env.logo || process.env.LOGO_URL || '';
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@stewardex.com';
 
 const GRADIENT = 'linear-gradient(103.82deg, #132E5E 6.74%, #9A78EC 76.18%)';
@@ -27,12 +28,9 @@ const CONTAINER_GRADIENT = 'linear-gradient(180deg, #FFFFFF 0%, #FDFCFE 50%, #FA
  * @param {string} [options.rsvpButtonsHtml] - Optional RSVP Accept/Decline buttons HTML
  */
 function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, buttonLink, infoBoxLines, rsvpButtonsHtml }) {
-  // Emails always use the Stewardex wordmark (matches login page) rather than tenant/org logos.
-  const logoHtml = `
-    <span style="font-size: 40px; line-height: 1; font-weight: 700; letter-spacing: -1px; color: #111827;">
-      Stewardex
-    </span>
-  `;
+  const logoHtml = LOGO_URL
+    ? `<img src="${LOGO_URL}" alt="${APP_NAME}" style="max-width: 160px; height: auto;" />`
+    : `<span style="font-size: 32px; font-weight: 600; letter-spacing: 1px; color: #5B6B9D;">${APP_NAME.toLowerCase()}</span>`;
 
   const lockIcon = '🔒';
 
@@ -160,14 +158,6 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
 </body>
 </html>
 `;
-}
-
-function toTitleCase(v) {
-  return String(v || '')
-    .replace(/_/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 class EmailService {
@@ -314,23 +304,6 @@ class EmailService {
   }
 
   /**
-   * Build a branded Stewardex email HTML wrapper around custom body content.
-   * Use this when other services need to send a one-off email but still
-   * want consistent branding + no snake_case labels.
-   */
-  buildBrandedHtml({ heading, bodyHtml, buttonText, buttonLink, infoBoxLines = [], headingHighlight, rsvpButtonsHtml } = {}) {
-    return buildEmailTemplate({
-      heading: heading || APP_NAME,
-      headingHighlight,
-      bodyHtml: bodyHtml || '',
-      buttonText: buttonText || 'Open Stewardex',
-      buttonLink: buttonLink || (process.env.FRONTEND_URL || 'http://localhost:5173'),
-      infoBoxLines,
-      rsvpButtonsHtml
-    });
-  }
-
-  /**
    * Send board member invitation email
    * @param {Object} params - Invitation parameters
    * @param {string} params.to - Recipient email
@@ -372,109 +345,7 @@ class EmailService {
       bodyHtml,
       buttonText: 'Accept Invitation',
       buttonLink: inviteLink,
-      infoBoxLines: ["If you didn't expect this invitation, you can ignore this email."]
-    });
-
-    return this.sendEmail({ to, subject, html });
-  }
-
-  async sendVolunteerActionLinksEmail({ to, recipientName, organizationName, volunteerActionLinks }) {
-    const safeOrg = organizationName || 'your organisation';
-    const name = recipientName || 'Volunteer';
-    const links = volunteerActionLinks || {};
-    const bodyHtml = `
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">
-        Hi ${name},
-      </p>
-      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">
-        Here are your volunteer quick action links for <strong>${safeOrg}</strong>.
-      </p>
-      <div style="text-align:left; max-width: 440px; margin: 0 auto; border: 1px solid #E5E7EB; border-radius: 10px; background: #FFFFFF; padding: 14px 16px;">
-        <p style="margin: 0 0 10px 0; font-size: 12px; color: #0F172A; font-weight: 700;">Quick actions</p>
-        ${links.complaint ? `<p style="margin: 0 0 8px 0; font-size: 12px;"><a href="${links.complaint}" style="color: #2563EB; text-decoration: none;">Submit a complaint</a></p>` : ''}
-        ${links.risk ? `<p style="margin: 0 0 8px 0; font-size: 12px;"><a href="${links.risk}" style="color: #2563EB; text-decoration: none;">Submit a risk</a></p>` : ''}
-        ${links.coi ? `<p style="margin: 0; font-size: 12px;"><a href="${links.coi}" style="color: #2563EB; text-decoration: none;">Declare conflict of interest (COI)</a></p>` : ''}
-      </div>
-    `;
-
-    const firstLink = links.complaint || links.risk || links.coi || null;
-    const html = buildEmailTemplate({
-      heading: 'Volunteer Links',
-      headingHighlight: 'Volunteer',
-      bodyHtml,
-      buttonText: 'Open a link',
-      buttonLink: firstLink || 'https://stewardex.com',
-      infoBoxLines: [
-        'These links are unique to you.',
-        'If you did not request these links, you can ignore this email.',
-      ],
-    });
-
-    return this.sendEmail({
-      to,
-      subject: `Your volunteer quick action links`,
-      html,
-    });
-  }
-
-  /**
-   * Auditor invite: read-only access; temporary password + org ID for first sign-in.
-   * @param {Object} params
-   * @param {string} params.to
-   * @param {string} params.recipientName
-   * @param {string} params.organizationName
-   * @param {string} params.orgId - Organisation ID for login
-   * @param {string} params.tempPassword - One-time password (store only bcrypt server-side)
-   * @param {string} [params.inviterName]
-   */
-  async sendAuditorInviteEmail({ to, recipientName, organizationName, orgId, tempPassword, inviterName }) {
-    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const loginLink = `${baseUrl}/login`;
-
-    const escapeHtml = (s) =>
-      String(s)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-
-    const safeOrgId = escapeHtml(orgId);
-    const safeEmail = escapeHtml(to);
-    const safeTempPw = escapeHtml(tempPassword);
-    const safeName = escapeHtml(recipientName || 'there');
-    const safeOrgName = escapeHtml(organizationName);
-    const inviterPhrase = inviterName
-      ? `<strong>${escapeHtml(inviterName)}</strong> has granted you`
-      : 'You have been granted';
-
-    const subject = `Auditor access to ${organizationName}`;
-
-    const bodyHtml = `
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${safeName},</p>
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">${inviterPhrase} <strong>read-only auditor access</strong> to <strong>${safeOrgName}</strong> in ${APP_NAME}. You can browse the organisation but cannot change data or use in-app notifications.</p>
-      <p style="margin: 0 0 8px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Sign in with the details below (use <strong>Sign in</strong> when you are ready):</p>
-      <table cellpadding="0" cellspacing="0" border="0" align="center" style="margin: 12px auto 16px; max-width: 420px; border: 1px solid #E5E7EB; border-radius: 10px; background: #F8FAFC;">
-        <tr><td style="padding: 14px 18px; text-align: left;">
-          <p style="margin: 0 0 6px 0; font-size: 11px; color: #64748B; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Email</p>
-          <p style="margin: 0 0 12px 0; font-size: 13px; font-family: ui-monospace, monospace; color: #0F172A; word-break: break-all;">${safeEmail}</p>
-          <p style="margin: 0 0 6px 0; font-size: 11px; color: #64748B; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Temporary password</p>
-          <p style="margin: 0 0 12px 0; font-size: 13px; font-family: ui-monospace, monospace; color: #0F172A; letter-spacing: 0.06em;">${safeTempPw}</p>
-          <p style="margin: 0 0 6px 0; font-size: 11px; color: #64748B; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;">Organisation ID</p>
-          <p style="margin: 0; font-size: 13px; font-family: ui-monospace, monospace; color: #132E5E; font-weight: 600; word-break: break-all;">${safeOrgId}</p>
-        </td></tr>
-      </table>
-    `;
-
-    const html = buildEmailTemplate({
-      heading: 'Your auditor access',
-      bodyHtml,
-      buttonText: 'Sign in',
-      buttonLink: loginLink,
-      infoBoxLines: [
-        'Change this password after first login if your organisation requires it (Forgot password / account settings).',
-        'Keep your organisation ID safe — you need it every time you log in.',
-        "If you didn't expect this email, you can ignore it."
-      ]
+      infoBoxLines: ["If you didn't expect this invitation, you can ignore this email.", "This link expires in 7 days."]
     });
 
     return this.sendEmail({ to, subject, html });
@@ -562,103 +433,6 @@ class EmailService {
       buttonText: 'Go to Dashboard',
       buttonLink: dashboardLink,
       infoBoxLines: ["You can now access your dashboard and start managing compliance for your organisation."]
-    });
-
-    return this.sendEmail({ to, subject, html });
-  }
-
-  /**
-   * Request partner signature on an approved funding agreement
-   * @param {Object} params
-   * @param {string} params.to - Partner email
-   * @param {string} params.partnerName - Partner/organization name
-   * @param {string} params.agreementTitle - Agreement title
-   * @param {string} params.signLink - Public signing link
-   * @param {Date} params.expiryDate - Link expiry date
-   */
-  async sendFundingAgreementPartnerSignatureRequestEmail({ to, partnerName, agreementTitle, signLink, expiryDate }) {
-    const subject = `Signature requested: ${agreementTitle || 'Funding agreement'}`;
-    const exp = expiryDate ? new Date(expiryDate).toLocaleDateString('en-AU', { year: 'numeric', month: 'short', day: 'numeric' }) : null;
-    const escapeHtml = (s) =>
-      String(s || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-
-    const bodyHtml = `
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
-        Hi${partnerName ? ` ${partnerName}` : ''},
-      </p>
-      <p style="margin: 0 0 14px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
-        A funding agreement has been approved and is ready for your signature.
-      </p>
-      <div style="background: #F8F9FA; border-radius: 8px; padding: 14px; margin: 14px 0; text-align: left;">
-        <p style="margin: 0; font-size: 13px; font-weight: 700; color: #132E5E;">${escapeHtml(agreementTitle || 'Funding agreement')}</p>
-        ${exp ? `<p style="margin: 8px 0 0 0; font-size: 11px; color: #6B7280;">This link expires on ${exp}.</p>` : ''}
-      </div>
-      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
-        Click the button below to review the agreement PDF and sign.
-      </p>
-      <p style="margin: 0; margin-top: 10px; font-size: 11px; line-height: 16px; color: #6B7280; font-weight: 400; text-align: center; max-width: 500px;">
-        You must scroll through the full PDF before the signature submission button becomes available.
-      </p>
-    `;
-
-    const html = buildEmailTemplate({
-      heading: 'Funding agreement signature request',
-      bodyHtml,
-      buttonText: 'Review & sign',
-      buttonLink: signLink,
-      infoBoxLines: [
-        'If you were not expecting this email, you can ignore it.',
-        'For security, do not share this link with anyone.'
-      ]
-    });
-
-    return this.sendEmail({ to, subject, html });
-  }
-
-  /**
-   * Send partner COI declaration link
-   * @param {Object} params
-   * @param {string} params.to
-   * @param {string} params.partnerName
-   * @param {string} params.contactName
-   * @param {string} params.link
-   * @param {Date} params.expiryDate
-   */
-  async sendPartnerCoiRequestEmail({ to, partnerName, contactName, link, expiryDate }) {
-    const escapeHtml = (s) =>
-      String(s || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-
-    const exp = expiryDate ? new Date(expiryDate).toLocaleDateString('en-AU', { year: 'numeric', month: 'short', day: 'numeric' }) : null;
-    const subject = `Conflict of Interest (COI) declaration requested`;
-    const bodyHtml = `
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
-        Hi${contactName ? ` ${escapeHtml(contactName)}` : ''},
-      </p>
-      <p style="margin: 0 0 14px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
-        Please complete a Conflict of Interest (COI) declaration for <strong>${escapeHtml(partnerName || 'your organisation')}</strong>.
-      </p>
-      ${exp ? `<p style="margin: 0 0 14px 0; font-size: 11px; line-height: 16px; color: #6B7280; text-align: center;">This link expires on ${exp}.</p>` : ''}
-    `;
-
-    const html = buildEmailTemplate({
-      heading: 'COI declaration requested',
-      bodyHtml,
-      buttonText: 'Open COI form',
-      buttonLink: link,
-      infoBoxLines: [
-        'If you were not expecting this email, you can ignore it.',
-        'For security, do not share this link with anyone.'
-      ]
     });
 
     return this.sendEmail({ to, subject, html });
@@ -833,36 +607,6 @@ class EmailService {
   }
 
   /**
-   * Send policy returned-for-resubmission email (when an approver requests changes).
-   * @param {Object} params
-   * @param {string} params.to - Recipient email
-   * @param {string} params.recipientName - Recipient's name
-   * @param {string} params.policyTitle - Policy title
-   * @param {string} params.approvalRequestId - Approval request ID for link
-   */
-  async sendPolicyReturnedForResubmissionEmail({ to, recipientName, policyTitle, approvalRequestId }) {
-    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const viewLink = `${baseUrl}/approvals/${approvalRequestId}`;
-
-    const subject = `Returned for resubmission: ${policyTitle}`;
-
-    const bodyHtml = `
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
-      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Your policy <strong>${policyTitle}</strong> was returned for resubmission. Please review the approver comments, make any needed changes, and resubmit for approval.</p>
-    `;
-
-    const html = buildEmailTemplate({
-      heading: 'Returned for Resubmission',
-      bodyHtml,
-      buttonText: 'Review & Resubmit',
-      buttonLink: viewLink,
-      infoBoxLines: ['You can view all feedback in the approval trail.', 'Edit the policy document if needed, then resubmit.']
-    });
-
-    return this.sendEmail({ to, subject, html });
-  }
-
-  /**
    * Send external training invite (no login required).
    * @param {Object} params
    * @param {string} params.to
@@ -955,7 +699,7 @@ class EmailService {
       donation: 'Donation',
       contract: 'Contract',
       complaint: 'Complaint'
-    }[requestType] || toTitleCase(requestType);
+    }[requestType] || requestType.charAt(0).toUpperCase() + requestType.slice(1);
 
     const subject = `Action Required: ${typeLabel} approval - ${entityTitle}`;
 
@@ -1015,7 +759,7 @@ class EmailService {
       donation: 'Donation',
       contract: 'Contract',
       complaint: 'Complaint'
-    }[requestType] || toTitleCase(requestType);
+    }[requestType] || requestType.charAt(0).toUpperCase() + requestType.slice(1);
 
     const isApproved = decision === 'approved';
     const subject = `${typeLabel} ${isApproved ? 'Approved' : 'Rejected'}: ${entityTitle}`;
@@ -1085,7 +829,7 @@ class EmailService {
       donation: 'Donation',
       contract: 'Contract',
       complaint: 'Complaint'
-    }[requestType] || toTitleCase(requestType);
+    }[requestType] || requestType.charAt(0).toUpperCase() + requestType.slice(1);
 
     const subject = `Opinion Requested: ${typeLabel} review - ${entityTitle}`;
 
@@ -1134,62 +878,6 @@ class EmailService {
       ]
     });
 
-    return this.sendEmail({ to, subject, html });
-  }
-
-  async sendDonorRefundExternalFormEmail({ to, recipientName, donorName, formLink }) {
-    const safe = (s) =>
-      String(s || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-    const subject = `Refund request: ${donorName || 'Donation'}`;
-    const bodyHtml = `
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${safe(recipientName || 'there')},</p>
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
-        A refund has been requested. Please provide the donation details and proof of payment so we can process it.
-      </p>
-    `;
-    const html = buildEmailTemplate({
-      heading: 'Refund details required',
-      bodyHtml,
-      buttonText: 'Provide refund details',
-      buttonLink: formLink,
-      infoBoxLines: [
-        'Please submit accurate information and attach any supporting evidence.',
-        'If you did not expect this email, contact the organisation.'
-      ]
-    });
-    return this.sendEmail({ to, subject, html });
-  }
-
-  async sendDonorRefundPaymentAckEmail({ to, recipientName, donorName, ackLink }) {
-    const safe = (s) =>
-      String(s || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#039;');
-    const subject = `Refund payment sent: ${donorName || 'Donation'}`;
-    const bodyHtml = `
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${safe(recipientName || 'there')},</p>
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">
-        We have sent the refund payment. Please confirm you have received it by clicking the button below.
-      </p>
-    `;
-    const html = buildEmailTemplate({
-      heading: 'Confirm refund received',
-      bodyHtml,
-      buttonText: 'Confirm receipt',
-      buttonLink: ackLink,
-      infoBoxLines: [
-        'Please review the payment proof before confirming.',
-        'If you cannot access the link, contact the organisation.'
-      ]
-    });
     return this.sendEmail({ to, subject, html });
   }
 

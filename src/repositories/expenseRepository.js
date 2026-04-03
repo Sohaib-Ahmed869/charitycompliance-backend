@@ -128,7 +128,7 @@ export class ExpenseRepository {
     
     if (status === 'approved') {
       updateData.approved_at = new Date();
-    } else if (status === 'rejected') {
+    } else if (status === 'rejected' || status === 'resubmission_required') {
       updateData.rejected_at = new Date();
     } else if (status === 'paid') {
       updateData.paid_at = new Date();

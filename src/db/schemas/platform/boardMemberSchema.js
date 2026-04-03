@@ -90,12 +90,6 @@ const boardMemberSchema = new mongoose.Schema({
     encrypted: true,
     searchable: true
   },
-  /** Blind index for email (HMAC with master key); used for duplicate checks within org */
-  email_hash: {
-    type: String,
-    index: true,
-    sparse: true
-  },
   phone: {
     type: String,
     encrypted: true
@@ -221,18 +215,7 @@ const boardMemberSchema = new mongoose.Schema({
     type: String,
     trim: true,
     default: ''
-  },
-
-  /**
-   * Volunteer quick-action links (public token links).
-   * Stored so admins can view/resend without regenerating unless needed.
-   */
-  volunteer_action_links: {
-    complaint: { type: String, default: '' },
-    risk: { type: String, default: '' },
-    coi: { type: String, default: '' },
-    generated_at: { type: Date, default: null },
-  },
+  }
 }, {
   timestamps: true,
   collection: 'board_members'

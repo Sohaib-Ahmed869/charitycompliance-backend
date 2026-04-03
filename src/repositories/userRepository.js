@@ -69,11 +69,6 @@ const createUserSchema = () => {
         type: Boolean,
         default: false
       },
-      // External auditor: read-only app access (see authService / auditorAccess)
-      is_auditor: {
-        type: Boolean,
-        default: false
-      },
       // S3 key for profile/avatar (used when org owner has no BoardMember record)
       profile_picture_key: {
         type: String,
@@ -113,15 +108,6 @@ export class UserRepository {
 
   async findById(userId) {
     return this.User.findById(userId);
-  }
-
-  async findManyByIds(userIds = []) {
-    const ids = Array.isArray(userIds) ? userIds.filter(Boolean) : [];
-    if (ids.length === 0) return [];
-    return this.User.find({ _id: { $in: ids } })
-      .select('first_name last_name email status profile_picture_key')
-      .lean()
-      .exec();
   }
 
   async findOrgOwner() {

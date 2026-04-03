@@ -19,7 +19,6 @@ import { getFileUrl, uploadToS3 } from '../services/s3Service.js';
 import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
-import { ensureEmailNotInOtherTenants } from '../utils/ensureEmailNotInOtherTenants.js';
 
 export const getBoardMembers = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -133,12 +132,7 @@ export const createBoardMember = asyncHandler(async (req, res) => {
   }
 
   const orgId = req.orgId;
-  const { invite: inviteRaw, system_access, is_volunteer, password, ...boardMemberData } = req.body;
-  const invite =
-    inviteRaw === true ||
-    inviteRaw === 'true' ||
-    inviteRaw === 1 ||
-    inviteRaw === '1';
+  const { invite, system_access, is_volunteer, password, ...boardMemberData } = req.body;
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
   const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
@@ -148,50 +142,17 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
   }
 
-  if (boardMemberData.email) {
-    const normalizedEmail = String(boardMemberData.email).toLowerCase().trim();
-    await ensureEmailNotInOtherTenants(normalizedEmail, orgId);
-    const existingBm = await boardMemberRepo.findActiveByEmailInOrg(normalizedEmail, org._id);
-    if (existingBm) {
-      throw new AppError(
-        'A person with this email already exists in your organisation.',
-        409,
-        'DUPLICATE_EMAIL_IN_ORG'
-      );
-    }
-    boardMemberData.email = normalizedEmail;
-  }
-
-  // Enforce: only one Head of Department per department
-  if (boardMemberData.is_head_of_department === true) {
-    const nextDepartmentName = String(boardMemberData.department || '').trim();
-    let deptId = null;
-    try {
-      if (boardMemberData.position_id) {
-        const { PositionRepository } = await import('../repositories/positionRepository.js');
-        const positionRepo = new PositionRepository(tenantDb);
-        const pos = await positionRepo.findById(boardMemberData.position_id);
-        deptId = pos?.department_id || null;
-      }
-    } catch (_) { /* ignore */ }
-
-    const existingHead = await boardMemberRepo.findActiveDepartmentHead(org._id, {
-      departmentId: deptId,
-      departmentName: nextDepartmentName
-    });
-    if (existingHead) {
-      throw new AppError('This department already has a Head of Department. Remove the existing head before assigning a new one.', 400, 'DEPARTMENT_HEAD_EXISTS');
-    }
-  }
-
-  // Generate invitation token whenever invite is requested (onboarding + admin flows share the same email + /invitation/:token link)
+  // Generate invitation token if invite is requested
   let invitationData = {};
-  if (invite) {
+  if (invite && system_access !== false) {
     const invitationToken = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 7); // Expires in 7 days
 
     invitationData = {
       invitation_token: invitationToken,
       invitation_status: 'pending',
+      invitation_expires_at: expiresAt,
       has_system_access: system_access !== false
     };
   }
@@ -203,23 +164,8 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     ...invitationData
   });
 
-  // Enforce single Head of Department per department (by position's department)
-  try {
-    if (boardMemberData.is_head_of_department === true && boardMemberData.position_id) {
-      const { PositionRepository } = await import('../repositories/positionRepository.js');
-      const positionRepo = new PositionRepository(tenantDb);
-      const pos = await positionRepo.findById(boardMemberData.position_id);
-      const deptId = pos?.department_id;
-      if (deptId) {
-        await boardMemberRepo.clearOtherDepartmentHeads(org._id, deptId, boardMember._id);
-      }
-    }
-  } catch (_) {
-    // non-blocking: don't fail creation if enforcement query fails
-  }
-
-  // Send invitation email if requested — require a real token so the link is always /invitation/:token (set password)
-  if (invite && boardMemberData.email && invitationData.invitation_token) {
+  // Send invitation email if requested (for both regular staff and volunteers)
+  if (invite && boardMemberData.email) {
     try {
       const recipientName = `${boardMemberData.given_names} ${boardMemberData.family_name}`;
       const position = boardMemberData.custom_position_title || boardMemberData.position;
@@ -251,18 +197,6 @@ export const createBoardMember = asyncHandler(async (req, res) => {
           risk: `${frontendUrl}/public/volunteer/risk/${riskDoc.token}`,
           coi: `${frontendUrl}/public/volunteer/coi/${coiDoc.token}`,
         };
-
-        // Persist so the Volunteers page can display/resend later.
-        try {
-          await boardMemberRepo.update(boardMember._id, {
-            volunteer_action_links: {
-              ...volunteerActionLinks,
-              generated_at: new Date(),
-            },
-          });
-        } catch (_) {
-          // non-blocking: invitation can still be sent without persistence
-        }
       }
 
       await emailService.sendBoardMemberInvitation({
@@ -395,74 +329,9 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
-  const existing = await boardMemberRepo.findById(boardMemberId);
-  if (!existing) {
-    throw new AppError('Board member not found', 404, 'NOT_FOUND');
-  }
-
-  if (req.body.email !== undefined && req.body.email !== null && String(req.body.email).trim()) {
-    const normalizedEmail = String(req.body.email).toLowerCase().trim();
-    await ensureEmailNotInOtherTenants(normalizedEmail, orgId);
-    const dup = await boardMemberRepo.findActiveByEmailInOrg(
-      normalizedEmail,
-      existing.org_id,
-      boardMemberId
-    );
-    if (dup) {
-      throw new AppError(
-        'A person with this email already exists in your organisation.',
-        409,
-        'DUPLICATE_EMAIL_IN_ORG'
-      );
-    }
-    req.body.email = normalizedEmail;
-  }
-
-  // Enforce: only one Head of Department per department
-  if (req.body?.is_head_of_department === true) {
-    const nextDepartmentName =
-      req.body.department !== undefined ? String(req.body.department || '').trim() : String(existing.department || '').trim();
-    let deptId = null;
-    try {
-      const nextPositionId = req.body.position_id ?? existing.position_id ?? null;
-      if (nextPositionId) {
-        const { PositionRepository } = await import('../repositories/positionRepository.js');
-        const positionRepo = new PositionRepository(tenantDb);
-        const pos = await positionRepo.findById(nextPositionId);
-        deptId = pos?.department_id || null;
-      }
-    } catch (_) { /* ignore */ }
-
-    const existingHead = await boardMemberRepo.findActiveDepartmentHead(existing.org_id, {
-      departmentId: deptId,
-      departmentName: nextDepartmentName,
-      excludeBoardMemberId: boardMemberId
-    });
-    if (existingHead) {
-      throw new AppError('This department already has a Head of Department. Remove the existing head before assigning a new one.', 400, 'DEPARTMENT_HEAD_EXISTS');
-    }
-  }
-
   const boardMember = await boardMemberRepo.update(boardMemberId, req.body);
   if (!boardMember) {
     throw new AppError('Board member not found', 404, 'NOT_FOUND');
-  }
-
-  // Enforce single Head of Department per department (by position's department)
-  try {
-    const assigningHead = req.body?.is_head_of_department === true;
-    const nextPositionId = req.body?.position_id ?? existing?.position_id ?? null;
-    if (assigningHead && nextPositionId) {
-      const { PositionRepository } = await import('../repositories/positionRepository.js');
-      const positionRepo = new PositionRepository(tenantDb);
-      const pos = await positionRepo.findById(nextPositionId);
-      const deptId = pos?.department_id;
-      if (deptId) {
-        await boardMemberRepo.clearOtherDepartmentHeads(existing.org_id, deptId, boardMemberId);
-      }
-    }
-  } catch (_) {
-    // non-blocking: don't fail update if enforcement query fails
   }
 
   const obj = boardMember.toObject ? boardMember.toObject() : { ...boardMember };

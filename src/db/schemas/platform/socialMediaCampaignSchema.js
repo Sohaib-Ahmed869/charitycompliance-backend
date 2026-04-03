@@ -87,7 +87,7 @@ const socialMediaCampaignSchema = new mongoose.Schema({
    */
   status: {
     type: String,
-    enum: ['draft', 'pending', 'approved', 'rejected', 'lodged', 'published', 'compliance_pending', 'compliance_verified'],
+    enum: ['draft', 'pending', 'approved', 'rejected', 'resubmission_required', 'lodged', 'published', 'compliance_pending', 'compliance_verified'],
     default: 'draft',
     index: true
   },

@@ -48,10 +48,7 @@ const formatCalendarEvent = (event, type, sourceId = null) => {
     description: event.description || `${type} event`,
     is_custom: false,
     source: type,
-    source_id: event._id || sourceId,
-    // Preserve categorisation so frontend can deep-link to the correct register page.
-    category: event.category || null,
-    document_type: event.document_type || null
+    source_id: event._id || sourceId
   };
 };
 
@@ -91,7 +88,6 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
   let documentEvents = [];
   let governingReviewEvents = [];
   let legalReviewEvents = [];
-  let legalExpiryEvents = [];
   let meetingEvents = [];
 
   try {
@@ -187,7 +183,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
           date: d.expiry_date,
           description: d.document_type || d.category
         },
-        'document',
+        'governance_structure',
         d._id?.toString()
       ));
       logInfo('Document expiry events retrieved', { orgId, count: documentEvents.length });
@@ -205,7 +201,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
           date: d.review_date || d.effective_date || d.date_adopted,
           description: d.document_type || d.category
         },
-        'document',
+        'governance_structure',
         d._id?.toString()
       ));
       logInfo('Governing document review events retrieved', { orgId, count: governingReviewEvents.length });
@@ -230,23 +226,6 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
       logInfo('Legal document review events retrieved', { orgId, count: legalReviewEvents.length });
     } catch (error) {
       logError('Error retrieving legal document review events', { orgId, error: error.message, stack: error.stack });
-    }
-
-    try {
-      const legalExpiries = await calendarRepo.findUpcomingLegalDocumentExpiries(orgId, dateOptions);
-      legalExpiryEvents = legalExpiries.map((d) => formatCalendarEvent(
-        {
-          ...d,
-          title: `${d.document_name} - Expires`,
-          date: d.expiry_date,
-          description: d.category || 'legal document'
-        },
-        'legal_document',
-        d._id?.toString()
-      ));
-      logInfo('Legal document expiry events retrieved', { orgId, count: legalExpiryEvents.length });
-    } catch (error) {
-      logError('Error retrieving legal document expiry events', { orgId, error: error.message, stack: error.stack });
     }
   }
   } // if (orgObjectId)
@@ -297,7 +276,6 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
     ...documentEvents,
     ...governingReviewEvents,
     ...legalReviewEvents,
-    ...legalExpiryEvents,
     ...meetingEvents
   ];
 

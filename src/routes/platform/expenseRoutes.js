@@ -74,7 +74,7 @@ router.get(
   [
     query('status')
       .optional()
-      .isIn(['draft', 'pending', 'approved', 'rejected', 'paid', 'cancelled'])
+      .isIn(['draft', 'pending', 'approved', 'rejected', 'resubmission_required', 'paid', 'cancelled'])
       .withMessage('Invalid status'),
     query('submittedBy')
       .optional()

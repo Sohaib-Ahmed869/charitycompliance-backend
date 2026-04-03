@@ -93,12 +93,10 @@ const approvalRequestSchema = new mongoose.Schema({
       'purchase',
       'grant',
       'donor',
-      'donor_refund',
       'donation',
       'donation_agreement',
       'donation_milestone',
       'social_media_campaign',
-      'social_media_campaign_compliance',
       'contract',
       'leave',
       'hr',
@@ -140,7 +138,6 @@ const approvalRequestSchema = new mongoose.Schema({
       'risk',
       'grant',
       'donor',
-      'donor_refund',
       'donation',
       'donation_agreement',
       'donation_milestone',
@@ -185,13 +182,6 @@ const approvalRequestSchema = new mongoose.Schema({
    * This is shown to approvers in the workflow detail view.
    */
   change_control: {
-    type: String,
-    default: null
-  },
-  /**
-   * Optional extra context from the submitter (e.g. policy upload "Notes" alongside change control).
-   */
-  submitter_notes: {
     type: String,
     default: null
   },
