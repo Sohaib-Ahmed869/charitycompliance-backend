@@ -119,7 +119,6 @@ export const updateProfileCompletionStep = asyncHandler(async (req, res) => {
     'org_details_complete',
     'documents_complete',
     'responsible_people_complete',
-    'activities_complete',
     'finances_complete',
     'financial_controls_complete',
     'governance_complete',

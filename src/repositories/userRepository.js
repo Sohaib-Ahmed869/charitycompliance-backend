@@ -140,6 +140,15 @@ export class UserRepository {
   }
 
   async update(userId, updateData) {
+    if (updateData && Object.prototype.hasOwnProperty.call(updateData, 'email')) {
+      const doc = await this.User.findById(userId);
+      if (!doc) return null;
+      for (const key of Object.keys(updateData)) {
+        doc.set(key, updateData[key]);
+      }
+      await doc.save();
+      return await this.User.findById(userId);
+    }
     return this.User.findByIdAndUpdate(
       userId,
       { $set: updateData },

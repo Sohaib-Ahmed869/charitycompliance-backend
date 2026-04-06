@@ -99,3 +99,71 @@ export const uploadProfilePicture = asyncHandler(async (req, res) => {
     data: { profile_picture_url }
   });
 });
+
+/** PATCH /me/profile - update current user's name/email */
+export const updateProfile = asyncHandler(async (req, res) => {
+  const { boardMember, user, org, boardMemberRepo, userRepo } = await getTenantAndProfileContext(req);
+
+  const firstName = req.body?.first_name ?? req.body?.firstName;
+  const lastName = req.body?.last_name ?? req.body?.lastName;
+  const emailRaw = req.body?.email;
+
+  const updateUserData = {};
+  const updateBoardMemberData = {};
+
+  if (firstName !== undefined) {
+    const v = String(firstName || '').trim();
+    updateUserData.first_name = v;
+    updateBoardMemberData.given_names = v;
+  }
+  if (lastName !== undefined) {
+    const v = String(lastName || '').trim();
+    updateUserData.last_name = v;
+    updateBoardMemberData.family_name = v;
+  }
+
+  let normalizedEmail = null;
+  if (emailRaw !== undefined) {
+    normalizedEmail = String(emailRaw || '').trim().toLowerCase();
+    if (!normalizedEmail) {
+      throw new AppError('Email is required', 400, 'VALIDATION_ERROR');
+    }
+    // Check if email already exists on another user
+    const existingUser = await userRepo.findByEmail(normalizedEmail);
+    if (existingUser && String(existingUser._id) !== String(user._id)) {
+      throw new AppError('This email is already in use', 400, 'EMAIL_IN_USE');
+    }
+    if (boardMember) {
+      const existingMember = await boardMemberRepo.findActiveByEmailInOrg(normalizedEmail, org._id, boardMember._id);
+      if (existingMember) {
+        throw new AppError('This email is already assigned to another responsible person', 400, 'EMAIL_IN_USE');
+      }
+      updateBoardMemberData.email = normalizedEmail;
+    }
+    updateUserData.email = normalizedEmail;
+  }
+
+  if (Object.keys(updateUserData).length === 0 && Object.keys(updateBoardMemberData).length === 0) {
+    throw new AppError('No fields to update', 400, 'VALIDATION_ERROR');
+  }
+
+  // Persist: always update User; if BoardMember exists, keep it in sync too.
+  await userRepo.update(user._id, updateUserData);
+  // Ensure email_hash is updated deterministically for login lookup (safety net).
+  if (normalizedEmail) {
+    const email_hash = userRepo.createEmailHash(normalizedEmail);
+    await userRepo.update(user._id, { email_hash });
+  }
+  if (boardMember) {
+    await boardMemberRepo.update(boardMember._id, updateBoardMemberData);
+  }
+
+  res.json({
+    success: true,
+    data: {
+      firstName: updateBoardMemberData.given_names ?? updateUserData.first_name ?? (boardMember ? boardMember.given_names : user.first_name) ?? '',
+      lastName: updateBoardMemberData.family_name ?? updateUserData.last_name ?? (boardMember ? boardMember.family_name : user.last_name) ?? '',
+      email: updateUserData.email ?? user.email
+    }
+  });
+});

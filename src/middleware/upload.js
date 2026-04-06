@@ -50,8 +50,8 @@ const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB max file size
-    files: 1 // Only one file at a time
+    fileSize: 100 * 1024 * 1024, // 100MB max file size
+    files: 10 // Up to 10 files
   }
 });
 
@@ -180,7 +180,7 @@ export const handlePolicyUploadError = (err, req, res, next) => {
  * Middleware for multiple file uploads
  * Attaches files to req.files
  */
-export const uploadMultiple = upload.array('files', 5); // Max 5 files
+export const uploadMultiple = upload.array('files', 10); // Max 10 files
 
 /**
  * Middleware for acknowledgement file uploads

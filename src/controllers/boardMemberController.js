@@ -20,6 +20,11 @@ import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
 
+const getEffectivePositionLabel = (data = {}) => {
+  if (data?.is_volunteer) return '';
+  return String(data?.custom_position_title || data?.position || '').trim();
+};
+
 export const getBoardMembers = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const tenantDb = await getTenantConnection(orgId);
@@ -155,6 +160,21 @@ export const createBoardMember = asyncHandler(async (req, res) => {
       invitation_expires_at: expiresAt,
       has_system_access: system_access !== false
     };
+  }
+
+  const effectivePosition = getEffectivePositionLabel({
+    ...boardMemberData,
+    is_volunteer: !!is_volunteer,
+  });
+  if (effectivePosition) {
+    const duplicate = await boardMemberRepo.findActiveByEffectivePositionInOrg(org._id, effectivePosition);
+    if (duplicate) {
+      throw new AppError(
+        `A responsible person with the position "${effectivePosition}" already exists`,
+        400,
+        'DUPLICATE_POSITION'
+      );
+    }
   }
 
   const boardMember = await boardMemberRepo.create({
@@ -328,10 +348,70 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
   const { boardMemberId } = req.params;
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const userRepo = new UserRepository(tenantDb);
+  const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
+
+  const org = await orgRepo.findOne();
+  if (!org) {
+    throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+  }
+
+  const existingMember = await boardMemberRepo.findById(boardMemberId);
+  if (!existingMember) {
+    throw new AppError('Board member not found', 404, 'NOT_FOUND');
+  }
+
+  const incomingEmail = Object.prototype.hasOwnProperty.call(req.body, 'email')
+    ? String(req.body.email || '').trim().toLowerCase()
+    : null;
+  const currentEmail = String(existingMember.email || '').trim().toLowerCase();
+  const isEmailChange = incomingEmail !== null && incomingEmail !== currentEmail;
+  if (incomingEmail !== null && incomingEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(incomingEmail)) {
+    throw new AppError('Valid email is required', 400, 'VALIDATION_ERROR');
+  }
+  if (isEmailChange && incomingEmail) {
+    const duplicateMember = await boardMemberRepo.findActiveByEmailInOrg(
+      incomingEmail,
+      org._id,
+      boardMemberId
+    );
+    if (duplicateMember) {
+      throw new AppError('Another responsible person already uses this email', 409, 'EMAIL_ALREADY_IN_USE');
+    }
+    const userByEmail = await userRepo.findByEmail(incomingEmail);
+    if (userByEmail && String(userByEmail._id) !== String(existingMember.user_id || '')) {
+      throw new AppError('Another user already uses this email', 409, 'EMAIL_ALREADY_IN_USE');
+    }
+  }
+
+  const effectivePosition = getEffectivePositionLabel({
+    position: req.body?.position ?? existingMember.position,
+    custom_position_title: req.body?.custom_position_title ?? existingMember.custom_position_title,
+    is_volunteer: req.body?.is_volunteer ?? existingMember.is_volunteer,
+  });
+  if (effectivePosition) {
+    const duplicate = await boardMemberRepo.findActiveByEffectivePositionInOrg(
+      org._id,
+      effectivePosition,
+      boardMemberId
+    );
+    if (duplicate) {
+      throw new AppError(
+        `A responsible person with the position "${effectivePosition}" already exists`,
+        400,
+        'DUPLICATE_POSITION'
+      );
+    }
+  }
 
   const boardMember = await boardMemberRepo.update(boardMemberId, req.body);
   if (!boardMember) {
     throw new AppError('Board member not found', 404, 'NOT_FOUND');
+  }
+
+  // Keep login credentials in sync when this person has a linked user account.
+  if (isEmailChange && incomingEmail && existingMember.user_id) {
+    await userRepo.update(existingMember.user_id, { email: incomingEmail });
   }
 
   const obj = boardMember.toObject ? boardMember.toObject() : { ...boardMember };

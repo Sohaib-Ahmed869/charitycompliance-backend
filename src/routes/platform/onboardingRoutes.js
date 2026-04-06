@@ -47,8 +47,8 @@ router.put(
   '/step/:stepNumber',
   [
     param('stepNumber')
-      .isInt({ min: 1, max: 16 })
-      .withMessage('Step number must be between 1 and 16')
+      .isInt({ min: 1, max: 15 })
+      .withMessage('Step number must be between 1 and 15')
   ],
   validate,
   onboardingController.updateStep
@@ -62,7 +62,7 @@ router.put(
   '/profile-step',
   [
     body('stepKey')
-      .isIn(['org_details_complete', 'documents_complete', 'responsible_people_complete', 'activities_complete', 'finances_complete', 'financial_controls_complete', 'governance_complete', 'declaration_complete'])
+      .isIn(['org_details_complete', 'documents_complete', 'responsible_people_complete', 'finances_complete', 'financial_controls_complete', 'governance_complete', 'declaration_complete'])
       .withMessage('Invalid step key'),
     body('completed')
       .isBoolean()
