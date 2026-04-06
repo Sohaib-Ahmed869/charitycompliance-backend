@@ -48,9 +48,35 @@ export const updateFinancialControls = asyncHandler(async (req, res) => {
     current_revenue_sources: req.body.current_revenue_sources,
     intended_revenue_sources: req.body.intended_revenue_sources,
     uses_different_reporting_period: req.body.uses_different_reporting_period,
+    reporting_period_start_date: req.body.reporting_period_start_date ? new Date(req.body.reporting_period_start_date) : null,
+    reporting_period_end_date: req.body.reporting_period_end_date ? new Date(req.body.reporting_period_end_date) : null,
     reason_for_different_period: req.body.reason_for_different_period || null,
     education_id: req.body.education_id || null
   };
+
+  if (req.body.uses_different_reporting_period !== 'yes') {
+    updateData.reporting_period_start_date = null;
+    updateData.reporting_period_end_date = null;
+  }
+
+  if (req.body.uses_different_reporting_period === 'yes') {
+    const start = updateData.reporting_period_start_date;
+    const end = updateData.reporting_period_end_date;
+    if (!start || !end) {
+      throw new AppError(
+        'Reporting period start and end dates are required when using a different reporting period',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+    if (start > end) {
+      throw new AppError(
+        'Reporting period end date must be on or after the start date',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+  }
 
   // Remove undefined fields
   Object.keys(updateData).forEach(key => 

@@ -7,6 +7,7 @@ import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { validate } from '../../middleware/validation.js';
 import { body, param, query } from 'express-validator';
 import * as projectDeliveryController from '../../controllers/projectDeliveryController.js';
+import { uploadMultiple, handleUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
 
@@ -121,6 +122,21 @@ router.post(
   projectDeliveryController.addProjectUpdateEntry
 );
 
+// Multipart upload for project updates (avoids base64 JSON payloads)
+router.post(
+  '/:projectId/updates/upload',
+  uploadMultiple,
+  handleUploadError,
+  [
+    param('projectId').isMongoId().withMessage('Invalid projectId'),
+    body('title').trim().notEmpty().withMessage('Title is required'),
+    body('entry_type').optional().isIn(['report', 'media']).withMessage('entry_type must be report or media'),
+    body('notes').optional().isString(),
+  ],
+  validate,
+  projectDeliveryController.addProjectUpdateEntryMultipart
+);
+
 router.post(
   '/:projectId/complete',
   [param('projectId').isMongoId().withMessage('Invalid projectId')],
@@ -153,6 +169,16 @@ router.post(
   ],
   validate,
   projectDeliveryController.submitProjectDeliveryMaterials
+);
+
+// Multipart upload for acquittal materials (avoids base64 JSON payloads)
+router.post(
+  '/materials/:projectId/submit/upload',
+  uploadMultiple,
+  handleUploadError,
+  [param('projectId').isMongoId().withMessage('Invalid projectId')],
+  validate,
+  projectDeliveryController.submitProjectDeliveryMaterialsMultipart
 );
 
 router.get(

@@ -40,6 +40,12 @@ const financialControlsSchema = new mongoose.Schema({
     required: true,
     default: 'no'
   },
+  reporting_period_start_date: {
+    type: Date
+  },
+  reporting_period_end_date: {
+    type: Date
+  },
   reason_for_different_period: {
     type: String,
     trim: true

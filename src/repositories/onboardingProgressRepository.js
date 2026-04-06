@@ -44,16 +44,15 @@ export class OnboardingProgressRepository {
       4: 'responsible_people_complete',
       5: 'registration_date_complete',
       6: 'operating_locations_complete',
-      7: 'activities_complete',
-      8: 'subtypes_complete',
-      9: 'finances_complete',
-      10: 'governance_complete',
-      11: 'tax_complete',
-      12: 'withhold_info_complete',
-      13: 'documents_complete',
-      14: 'authorised_contact_complete',
-      15: 'declaration_complete',
-      16: 'platform_setup_complete'
+      7: 'subtypes_complete',
+      8: 'finances_complete',
+      9: 'governance_complete',
+      10: 'tax_complete',
+      11: 'withhold_info_complete',
+      12: 'documents_complete',
+      13: 'authorised_contact_complete',
+      14: 'declaration_complete',
+      15: 'platform_setup_complete'
     };
 
     const stepFields = isInitialOnboarding ? initialStepFields : fullProfileStepFields;
@@ -95,30 +94,18 @@ export class OnboardingProgressRepository {
       progress.initial_onboarding_completed_at = new Date();
     }
 
-    // Calculate full profile completion (4 initial onboarding + 6 profile steps = 10 total)
-    // Profile steps from dashboard:
-    // 1. Organisation Information (org_details_complete)
-    // 2. Upload Governing Documents (documents_complete)
-    // 3. Add Responsible Persons (responsible_people_complete)
-    // 4. Define Operating Activities (activities_complete)
-    // 5. Set Up Financial Controls (financial_controls_complete)
-    // 6. Configure Governance Structure (declaration_complete)
+    // 4 initial onboarding steps + 5 dashboard profile steps = 9 total
     const profileSteps = [
-      progress.org_details_complete,         // Organisation Information
-      progress.documents_complete,           // Upload Governing Documents
-      progress.responsible_people_complete,  // Add Responsible Persons
-      progress.activities_complete,          // Define Operating Activities
-      progress.financial_controls_complete, // Set Up Financial Controls
-      progress.declaration_complete          // Configure Governance Structure
+      progress.org_details_complete,
+      progress.documents_complete,
+      progress.responsible_people_complete,
+      progress.financial_controls_complete,
+      progress.declaration_complete
     ];
-    
-    const fullProfileSteps = [
-      ...initialSteps,
-      ...profileSteps
-    ];
+
+    const fullProfileSteps = [...initialSteps, ...profileSteps];
     const completedFullProfileSteps = fullProfileSteps.filter(Boolean).length;
-    // 4 initial + 6 profile steps = 10 total
-    const fullProfileCompletionPercentage = Math.round((completedFullProfileSteps / 10) * 100);
+    const fullProfileCompletionPercentage = Math.round((completedFullProfileSteps / 9) * 100);
     
     progress.full_profile_completion_percentage = fullProfileCompletionPercentage;
     

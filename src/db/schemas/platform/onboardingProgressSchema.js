@@ -62,10 +62,6 @@ const onboardingProgressSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
-  activities_complete: {
-    type: Boolean,
-    default: false
-  },
   subtypes_complete: {
     type: Boolean,
     default: false

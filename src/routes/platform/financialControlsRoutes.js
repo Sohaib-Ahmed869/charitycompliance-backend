@@ -45,6 +45,20 @@ router.put(
     body('uses_different_reporting_period')
       .isIn(['yes', 'no'])
       .withMessage('Invalid value for uses different reporting period'),
+    body('reporting_period_start_date')
+      .if(body('uses_different_reporting_period').equals('yes'))
+      .notEmpty()
+      .withMessage('Reporting period start date is required when using a different reporting period')
+      .bail()
+      .isISO8601()
+      .withMessage('Reporting period start date must be a valid date'),
+    body('reporting_period_end_date')
+      .if(body('uses_different_reporting_period').equals('yes'))
+      .notEmpty()
+      .withMessage('Reporting period end date is required when using a different reporting period')
+      .bail()
+      .isISO8601()
+      .withMessage('Reporting period end date must be a valid date'),
     body('reason_for_different_period')
       .optional()
       .trim(),

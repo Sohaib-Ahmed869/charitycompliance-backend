@@ -111,6 +111,25 @@ export class BoardMemberRepository {
     });
   }
 
+  async findActiveByEffectivePositionInOrg(orgId, effectivePosition, excludeBoardMemberId = null) {
+    const normalized = String(effectivePosition || '').trim().toLowerCase();
+    if (!normalized) return null;
+    const query = { org_id: orgId, is_active: true };
+    if (excludeBoardMemberId) {
+      query._id = { $ne: new mongoose.Types.ObjectId(String(excludeBoardMemberId)) };
+    }
+    const members = await this.BoardMember.find(query)
+      .select({ position: 1, custom_position_title: 1, is_volunteer: 1 })
+      .lean();
+    return (
+      members.find((m) => {
+        if (m?.is_volunteer) return false;
+        const label = String(m?.custom_position_title || m?.position || '').trim().toLowerCase();
+        return !!label && label === normalized;
+      }) || null
+    );
+  }
+
   async findByUserId(userId, orgId) {
     return await this.BoardMember.findOne({
       user_id: userId,

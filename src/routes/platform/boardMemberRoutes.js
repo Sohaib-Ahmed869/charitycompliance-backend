@@ -175,7 +175,11 @@ router.put(
   [
     param('boardMemberId')
       .isMongoId()
-      .withMessage('Invalid board member ID')
+      .withMessage('Invalid board member ID'),
+    body('email')
+      .optional({ values: 'falsy' })
+      .isEmail()
+      .withMessage('Valid email is required')
   ],
   validate,
   boardMemberController.updateBoardMember

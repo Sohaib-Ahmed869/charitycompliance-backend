@@ -17,6 +17,7 @@ import { ProjectRegisterRepository } from '../repositories/projectRegisterReposi
 import { ExpenseRepository } from '../repositories/expenseRepository.js';
 import { ApprovalWorkflowService } from '../services/approvalWorkflowService.js';
 import emailService from '../services/emailService.js';
+import { uploadToS3 } from '../services/s3Service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import crypto from 'crypto';
 
@@ -831,6 +832,116 @@ export const submitProjectDeliveryMaterials = asyncHandler(async (req, res) => {
   });
 });
 
+export const submitProjectDeliveryMaterialsMultipart = asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+
+  const tenantDb = await getTenantConnection(req.orgId);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+
+  const project = await projectRepo.findById(projectId);
+  if (!project) {
+    throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+  }
+
+  if (project.delivery_status === 'delivered_and_handed_off' || project.status === 'closed') {
+    throw new AppError('Project delivery is completed and materials cannot be updated', 403, 'PROJECT_DELIVERY_IMMUTABLE');
+  }
+
+  const userId = req.user?.userId || req.userId;
+  const alreadyReady = !!project.metadata?.delivery_materials_ready;
+
+  const uploadedFiles = Array.isArray(req.files) ? req.files : [];
+  if (!alreadyReady && uploadedFiles.length === 0) {
+    throw new AppError('At least one acquittal document is required', 400, 'AQUITTAL_DOC_REQUIRED');
+  }
+
+  const normalizedFiles = [];
+  for (const f of uploadedFiles) {
+    const fileName = String(f?.originalname || '').trim() || 'file';
+    const mimeType = String(f?.mimetype || '').trim() || 'application/octet-stream';
+    const size = Number(f?.size || 0);
+    if (!f?.buffer) continue;
+    const up = await uploadToS3(f.buffer, fileName, mimeType, req.orgId, 'delivery_materials');
+    normalizedFiles.push({
+      name: fileName,
+      url: String(up?.url || '').trim(),
+      key: String(up?.key || '').trim(),
+      size,
+      type: mimeType
+    });
+  }
+
+  if (!alreadyReady && normalizedFiles.length === 0) {
+    throw new AppError(
+      'At least one acquittal document must include a valid URL. Please re-upload the acquittal pack.',
+      400,
+      'AQUITTAL_DOC_REQUIRED'
+    );
+  }
+
+  const existingFiles = Array.isArray(project?.metadata?.delivery_materials?.files)
+    ? project.metadata.delivery_materials.files
+    : [];
+  const mergedFiles = [...existingFiles, ...normalizedFiles].reduce((acc, f) => {
+    const key = String(f?.key || f?.url || f?.name || '').trim();
+    if (!key) return acc;
+    if (acc._seen.has(key)) return acc;
+    acc._seen.add(key);
+    acc.files.push(f);
+    return acc;
+  }, { _seen: new Set(), files: [] }).files;
+
+  const newMetadata = {
+    ...(project.metadata || {}),
+    delivery_materials_ready: alreadyReady || mergedFiles.length > 0,
+    delivery_materials_submitted_at: new Date(),
+    delivery_materials: {
+      files: mergedFiles
+    }
+  };
+
+  let updatedProject = await projectRepo.update(projectId, { metadata: newMetadata });
+
+  const expenseRepo = new ExpenseRepository(tenantDb);
+  const readiness = await expenseRepo.getProjectDeliveryReadiness(projectId);
+  const totalRelevant = Number(readiness?.totalRelevant || 0);
+  const paidRelevant = Number(readiness?.paidRelevant || 0);
+  const paidTotal = Number(readiness?.paidAmount || 0);
+
+  const FundingAgreement = tenantDb.model('FundingAgreement');
+  const agreement = updatedProject.agreement_id ? await FundingAgreement.findById(updatedProject.agreement_id) : null;
+  const budget = Number(agreement?.total_amount || 0);
+  const remaining = Math.max(0, budget - paidTotal);
+
+  let createdApprovalRequest = null;
+  if (
+    totalRelevant > 0 &&
+    paidRelevant === totalRelevant &&
+    (budget <= 0 || remaining === 0) &&
+    updatedProject.delivery_status !== 'in_progress'
+  ) {
+    const workflowService = new ApprovalWorkflowService(req.orgId);
+    createdApprovalRequest = await workflowService.createProjectDeliveryCompletionRequest(projectId, userId);
+  }
+
+  if (createdApprovalRequest?._id) {
+    updatedProject = await projectRepo.update(projectId, {
+      metadata: {
+        ...(updatedProject.metadata || {}),
+        delivery_approval_request_id: createdApprovalRequest._id
+      }
+    });
+  }
+
+  res.json({
+    success: true,
+    data: {
+      project: updatedProject,
+      deliveryApprovalRequestId: createdApprovalRequest?._id || null
+    }
+  });
+});
+
 export const addProjectUpdateEntry = asyncHandler(async (req, res) => {
   const { projectId } = req.params;
   const tenantDb = await getTenantConnection(req.orgId);
@@ -856,6 +967,56 @@ export const addProjectUpdateEntry = asyncHandler(async (req, res) => {
   updates.unshift({
     id: crypto.randomBytes(10).toString('hex'),
     entry_date: req.body?.entry_date ? new Date(req.body.entry_date) : new Date(),
+    title: String(req.body?.title || '').trim(),
+    entry_type: String(req.body?.entry_type || 'report').trim().toLowerCase() === 'media' ? 'media' : 'report',
+    notes: String(req.body?.notes || '').trim(),
+    files: normalizedFiles,
+    created_at: new Date(),
+    created_by: req.user?.userId || req.userId || null
+  });
+
+  const updated = await projectRepo.update(projectId, {
+    metadata: {
+      ...(project.metadata || {}),
+      project_updates: updates
+    }
+  });
+
+  res.json({ success: true, data: updated });
+});
+
+export const addProjectUpdateEntryMultipart = asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const tenantDb = await getTenantConnection(req.orgId);
+  const projectRepo = new ProjectRegisterRepository(tenantDb);
+  const project = await projectRepo.findById(projectId);
+  if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
+
+  const uploadedFiles = Array.isArray(req.files) ? req.files : [];
+  const normalizedFiles = [];
+
+  for (const f of uploadedFiles) {
+    const fileName = String(f?.originalname || '').trim() || 'file';
+    const mimeType = String(f?.mimetype || '').trim() || 'application/octet-stream';
+    const size = Number(f?.size || 0);
+    if (!f?.buffer || !fileName) continue;
+    const up = await uploadToS3(f.buffer, fileName, mimeType, req.orgId, 'project_updates');
+    normalizedFiles.push({
+      name: fileName,
+      url: String(up?.url || '').trim(),
+      key: String(up?.key || '').trim(),
+      size,
+      type: mimeType
+    });
+  }
+
+  const updates = Array.isArray(project?.metadata?.project_updates)
+    ? [...project.metadata.project_updates]
+    : [];
+
+  updates.unshift({
+    id: crypto.randomBytes(10).toString('hex'),
+    entry_date: new Date(),
     title: String(req.body?.title || '').trim(),
     entry_type: String(req.body?.entry_type || 'report').trim().toLowerCase() === 'media' ? 'media' : 'report',
     notes: String(req.body?.notes || '').trim(),
