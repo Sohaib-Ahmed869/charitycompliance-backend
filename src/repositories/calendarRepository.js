@@ -78,9 +78,8 @@ export class CalendarRepository {
           is_custom: true,
           source,
           created_at: new Date(),
+          updated_at: new Date()
         },
-        // Never set the same field in both $set and $setOnInsert (Mongo conflict).
-        // updated_at should always reflect "last upsert touch", whether insert or update.
         $set: { updated_at: new Date() }
       },
       { upsert: true, new: true }
@@ -372,31 +371,6 @@ export class CalendarRepository {
       if (endDate && dueDate > endDate) return false;
       return true;
     });
-  }
-
-  /**
-   * Find legal document expiry dates.
-   */
-  async findUpcomingLegalDocumentExpiries(orgId, options = {}) {
-    const query = {
-      org_id: orgId,
-      status: { $in: ['active'] },
-      expiry_date: { $exists: true, $ne: null }
-    };
-
-    if (options.start_date || options.end_date) {
-      const dateQuery = {};
-      if (options.start_date) dateQuery.$gte = new Date(options.start_date);
-      if (options.end_date) dateQuery.$lte = new Date(options.end_date);
-      if (Object.keys(dateQuery).length > 0) {
-        query.expiry_date = { $exists: true, $ne: null, ...dateQuery };
-      }
-    }
-
-    return await this.LegalDocument.find(query)
-      .select('_id document_name category expiry_date')
-      .sort({ expiry_date: 1 })
-      .lean();
   }
 
   /**

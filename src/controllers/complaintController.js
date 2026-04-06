@@ -63,66 +63,6 @@ async function getDeptHeadUserIds(tenantDb, orgObjectId, departmentName) {
     .map(h => String(h.user_id));
 }
 
-async function getCurrentWorkflowApproverUserIds(tenantDb, complaint) {
-  if (!complaint?.workflow_instance_id || complaint?.workflow_instance_type !== 'complaint_resolution') return [];
-  try {
-    const approvalRequestSchema = (await import('../db/schemas/platform/approvalRequestSchema.js')).default;
-    tenantDb.models.ApprovalRequest || tenantDb.model('ApprovalRequest', approvalRequestSchema);
-    const ApprovalRequest = tenantDb.model('ApprovalRequest');
-    const wf = await ApprovalRequest.findById(complaint.workflow_instance_id).lean();
-    if (!wf || wf.status !== 'pending') return [];
-    const steps = Array.isArray(wf.approval_steps) ? wf.approval_steps : [];
-    if (!steps.length) return [];
-
-    const type = String(wf.approval_type || 'sequential');
-    if (type === 'any' || type === 'parallel') {
-      return steps
-        .filter((s) => s?.status === 'pending')
-        .map((s) => s?.approver_user_id?._id || s?.approver_user_id)
-        .filter(Boolean)
-        .map(String);
-    }
-
-    // sequential: first pending step (after contiguous approvals)
-    for (let i = 0; i < steps.length; i += 1) {
-      const s = steps[i];
-      if (s?.status === 'approved') continue;
-      if (s?.status === 'pending') {
-        const uid = s?.approver_user_id?._id || s?.approver_user_id;
-        return uid ? [String(uid)] : [];
-      }
-      return [];
-    }
-    return [];
-  } catch {
-    return [];
-  }
-}
-
-async function notifyUsers(tenantDb, userIds, { type, title, message, link, related_entity_id, related_entity_type }) {
-  const ids = Array.from(new Set((userIds || []).filter(Boolean).map(String)));
-  if (!ids.length) return;
-  const notifRepo = new NotificationRepository(tenantDb);
-  const now = new Date();
-  const docs = ids.map((uid) => ({
-    user_id: uid,
-    type,
-    title,
-    subject: title,
-    message,
-    link,
-    related_entity_id,
-    related_entity_type,
-    read: false,
-    created_at: now,
-  }));
-  if (typeof notifRepo.createMany === 'function') {
-    await notifRepo.createMany(docs);
-  } else {
-    for (const d of docs) await notifRepo.create(d);
-  }
-}
-
 function getActiveEscalationToUserId(complaint) {
   const stack = Array.isArray(complaint?.escalation_stack) ? complaint.escalation_stack : [];
   for (let i = stack.length - 1; i >= 0; i -= 1) {
@@ -709,24 +649,6 @@ export const adminTriageSelectDepartment = asyncHandler(async (req, res) => {
     },
   });
 
-  // Notify current complaint workflow approver(s) that resolution stage is ready
-  try {
-    const approverIds = await getCurrentWorkflowApproverUserIds(tenantDb, complaint);
-    if (approverIds.length > 0) {
-      const complaintTitle = complaint.complaint_title || 'Complaint';
-      await notifyUsers(tenantDb, approverIds, {
-        type: 'complaint_workflow_assigned',
-        title: 'Complaint workflow action required',
-        message: `Complaint "${complaintTitle}" is ready for workflow resolution approval.`,
-        link: `/complaints/${complaintId}`,
-        related_entity_id: complaintId,
-        related_entity_type: 'complaint',
-      });
-    }
-  } catch (err) {
-    logError('Failed to notify workflow approvers (dept head approve)', { error: err?.message, complaintId });
-  }
-
   res.json({ success: true, data: updated });
 });
 
@@ -865,24 +787,6 @@ export const adminRejectComplaint = asyncHandler(async (req, res) => {
     },
   });
 
-  // Notify workflow approver(s) that resolution stage is ready
-  try {
-    const approverIds = await getCurrentWorkflowApproverUserIds(tenantDb, complaint);
-    if (approverIds.length > 0) {
-      const complaintTitle = complaint.complaint_title || 'Complaint';
-      await notifyUsers(tenantDb, approverIds, {
-        type: 'complaint_workflow_assigned',
-        title: 'Complaint workflow action required',
-        message: `Complaint "${complaintTitle}" is ready for workflow resolution approval.`,
-        link: `/complaints/${complaintId}`,
-        related_entity_id: complaintId,
-        related_entity_type: 'complaint',
-      });
-    }
-  } catch (err) {
-    logError('Failed to notify workflow approvers (dept head complete)', { error: err?.message, complaintId });
-  }
-
   res.json({ success: true, data: updated });
 });
 
@@ -936,23 +840,6 @@ export const markComplaintInvalid = asyncHandler(async (req, res) => {
       },
     },
   });
-
-  // If moved to board sign-off, notify selected board member now
-  try {
-    if (stepNum === 3 && actionDetails.next_stage === 'board_signoff' && complaint.board_signoff_user_id) {
-      const complaintTitle = complaint.complaint_title || 'Complaint';
-      await notifyUsers(tenantDb, [String(complaint.board_signoff_user_id)], {
-        type: 'complaint_board_signoff_required',
-        title: 'Complaint sign-off required',
-        message: `Complaint "${complaintTitle}" is ready for your board sign-off.`,
-        link: `/complaints/${complaintId}`,
-        related_entity_id: complaintId,
-        related_entity_type: 'complaint',
-      });
-    }
-  } catch (err) {
-    logError('Failed to notify board sign-off required', { error: err?.message, complaintId });
-  }
 
   res.json({ success: true, data: updated });
 });
@@ -1014,26 +901,12 @@ export const deptHeadApproveComplaint = asyncHandler(async (req, res) => {
         complaint.workflow_instance_type = 'complaint_resolution';
       }
     } catch (err) {
-      // Only map known workflow configuration issues to the "configure workflow" message.
-      // For other failures (e.g. validation/cast errors), bubble up the real error so it can be fixed.
-      const code = err?.code;
-      const knownConfigCodes = new Set([
-        'NO_APPROVAL_MATRIX',
-        'NO_MATCHING_RULE',
-        'NO_APPROVERS_FOUND',
-        'COMPLAINT_WORKFLOW_MISCONFIGURED',
-        'MISSING_BOARD_SIGNOFF',
-        'COMPLAINT_WORKFLOW_NOT_ASSIGNED'
-      ]);
-      if (knownConfigCodes.has(code)) {
-        throw new AppError(
-          err?.message ||
-            'No complaint workflow is configured yet. Please configure a workflow.',
-          400,
-          code || 'COMPLAINT_WORKFLOW_NOT_ASSIGNED'
-        );
-      }
-      throw err;
+      throw new AppError(
+        err?.message ||
+          'Complaint workflow is not assigned yet. Ask an admin to approve the complaint (this assigns the workflow) or configure the complaint workflow.',
+        400,
+        err?.code || 'COMPLAINT_WORKFLOW_NOT_ASSIGNED'
+      );
     }
 
     if (!complaint.workflow_instance_id || complaint.workflow_instance_type !== 'complaint_resolution') {
@@ -1339,21 +1212,6 @@ export const workflowSelectBoardSignoff = asyncHandler(async (req, res) => {
     },
   });
 
-  // Notify selected board member that they were chosen for sign-off
-  try {
-    const complaintTitle = (updated?.complaint_title || 'Complaint');
-    await notifyUsers(tenantDb, [String(bm.user_id)], {
-      type: 'complaint_board_signoff_selected',
-      title: 'Board sign-off selected',
-      message: `You have been selected to sign off complaint "${complaintTitle}". You will be notified when it’s ready for final sign-off.`,
-      link: `/complaints/${complaintId}`,
-      related_entity_id: complaintId,
-      related_entity_type: 'complaint',
-    });
-  } catch (err) {
-    logError('Failed to notify board sign-off selection', { error: err?.message, complaintId });
-  }
-
   res.json({ success: true, data: updated });
 });
 
@@ -1397,21 +1255,6 @@ export const workflowEscalate = asyncHandler(async (req, res) => {
       },
     },
   });
-
-  // Notify escalated user
-  try {
-    const complaintTitle = complaint.complaint_title || 'Complaint';
-    await notifyUsers(tenantDb, [String(to_user_id)], {
-      type: 'complaint_escalated',
-      title: 'Complaint escalated to you',
-      message: `Complaint "${complaintTitle}" has been escalated to you for further review.`,
-      link: `/complaints/${complaintId}`,
-      related_entity_id: complaintId,
-      related_entity_type: 'complaint',
-    });
-  } catch (err) {
-    logError('Failed to notify escalated user', { error: err?.message, complaintId });
-  }
 
   res.json({ success: true, data: updated });
 });

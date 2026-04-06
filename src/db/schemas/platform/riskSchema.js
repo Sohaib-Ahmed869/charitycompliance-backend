@@ -95,7 +95,7 @@ const riskSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['draft', 'pending', 'under_treatment', 'approved', 'resolved', 'rejected', 'closed'],
+    enum: ['draft', 'pending', 'under_treatment', 'approved', 'resolved', 'rejected', 'resubmission_required', 'closed'],
     default: 'draft',
     index: true
   },

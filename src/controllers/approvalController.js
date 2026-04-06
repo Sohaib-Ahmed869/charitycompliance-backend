@@ -97,6 +97,15 @@ export const listApprovalRequests = asyncHandler(async (req, res) => {
       });
       if (isPositionApprover) return true;
 
+      // Escalated for opinion: approver may pick anyone in the org — they must see the workflow
+      // even when not a configured workflow step approver.
+      const hasPendingEscalationToUser = (request.escalations || []).some(
+        (e) =>
+          e.status === 'pending' &&
+          String(e.escalated_to?._id || e.escalated_to) === String(userId)
+      );
+      if (hasPendingEscalationToUser) return true;
+
       return false;
     });
   }

@@ -94,7 +94,7 @@ const bcpAuthorityTransferSchema = new mongoose.Schema({
   
   status: {
     type: String,
-    enum: ['pending', 'active', 'completed', 'revoked'],
+    enum: ['pending', 'active', 'completed', 'revoked', 'resubmission_required'],
     default: 'pending'
   },
   

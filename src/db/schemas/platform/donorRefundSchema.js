@@ -31,6 +31,7 @@ const donorRefundSchema = new mongoose.Schema(
         'donor_form_submitted',
         'internal_approved',
         'internal_rejected',
+        'internal_resubmission_required',
         'refund_processing',
         'refund_payment_sent',
         'awaiting_donor_acknowledgment',
