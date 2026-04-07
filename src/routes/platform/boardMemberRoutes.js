@@ -82,6 +82,14 @@ router.get(
 router.post(
   '/',
   [
+    body().custom((_, { req }) => {
+      const isBoard = req.body?.is_board_member === true;
+      const isHod = req.body?.is_head_of_department === true;
+      if (isBoard && isHod) {
+        throw new Error('Board members cannot be marked as Head of Department');
+      }
+      return true;
+    }),
     body('given_names')
       .trim()
       .notEmpty()
@@ -176,6 +184,14 @@ router.put(
     param('boardMemberId')
       .isMongoId()
       .withMessage('Invalid board member ID'),
+    body().custom((_, { req }) => {
+      const isBoard = req.body?.is_board_member === true;
+      const isHod = req.body?.is_head_of_department === true;
+      if (isBoard && isHod) {
+        throw new Error('Board members cannot be marked as Head of Department');
+      }
+      return true;
+    }),
     body('email')
       .optional({ values: 'falsy' })
       .isEmail()
