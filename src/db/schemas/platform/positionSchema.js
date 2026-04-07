@@ -21,13 +21,7 @@ const positionSchema = new mongoose.Schema({
   code: {
     type: String,
     trim: true,
-    uppercase: true,
-    default: undefined,
-    set: (v) => {
-      if (v === null || v === undefined) return undefined;
-      const s = String(v).trim();
-      return s ? s.toUpperCase() : undefined;
-    }
+    uppercase: true
   },
   department_id: {
     type: mongoose.Schema.Types.ObjectId,
@@ -116,17 +110,6 @@ const positionSchema = new mongoose.Schema({
 });
 
 positionSchema.index({ org_id: 1, title: 1, department_id: 1 });
-positionSchema.index({ org_id: 1, code: 1 }, { unique: true, sparse: true });
 positionSchema.index({ org_id: 1, department_id: 1 });
-
-// Prevent sparse+unique index collisions on `code: null` by ensuring null/empty are not persisted.
-positionSchema.pre('validate', function ensureCodeUndefined(next) {
-  if (this.code === null || this.code === undefined) {
-    this.code = undefined;
-  } else if (typeof this.code === 'string' && this.code.trim() === '') {
-    this.code = undefined;
-  }
-  next();
-});
 
 export default positionSchema;

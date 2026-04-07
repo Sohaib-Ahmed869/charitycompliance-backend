@@ -7,10 +7,25 @@
 import mongoose from 'mongoose';
 import positionSchema from '../db/schemas/platform/positionSchema.js';
 
+const _repairedDbs = new WeakSet();
+
 export class PositionRepository {
   constructor(tenantDb) {
     this.Position = tenantDb.models.Position || 
       tenantDb.model('Position', positionSchema);
+    this._tenantDb = tenantDb;
+
+    if (!_repairedDbs.has(tenantDb)) {
+      _repairedDbs.add(tenantDb);
+      this._repairPromise = this._dropBadCodeIndex().catch(() => {});
+    }
+  }
+
+  /** Drop the legacy unique index on (org_id, code) — code does not need uniqueness. */
+  async _dropBadCodeIndex() {
+    try {
+      await this._tenantDb.collection('positions').dropIndex('org_id_1_code_1');
+    } catch (_) { /* already gone */ }
   }
 
   async findByOrgId(orgId) {
@@ -31,11 +46,13 @@ export class PositionRepository {
   }
 
   async create(data) {
+    if (this._repairPromise) await this._repairPromise;
     const position = new this.Position(data);
     return await position.save();
   }
 
   async createMany(positions) {
+    if (this._repairPromise) await this._repairPromise;
     return await this.Position.insertMany(positions);
   }
 
