@@ -78,12 +78,30 @@ export const listApprovalRequests = asyncHandler(async (req, res) => {
         if (pid) posIdSet.add(pid);
       });
     }
+
+    // Collect every unique approver_position_id from all steps, then batch-resolve
+    // which users currently hold those positions (via UserPosition + BoardMember).
+    // This covers cases where a step has approver_position_id but no approver_user_id.
+    const stepPositionIds = new Set();
+    for (const req of requests) {
+      for (const step of req.approval_steps || []) {
+        const pid = step.approver_position_id?._id?.toString?.() || step.approver_position_id?.toString?.();
+        if (pid) stepPositionIds.add(pid);
+      }
+    }
+    const positionHolderMap = {};
+    await Promise.all([...stepPositionIds].map(async (pid) => {
+      const holders = await userPositionRepo.findUsersByPositionId(pid, true);
+      positionHolderMap[pid] = new Set(holders.map(h => h.toString()));
+    }));
+
+    // Add any extra positions where this user is a holder but wasn't in their own records
+    for (const [pid, holderSet] of Object.entries(positionHolderMap)) {
+      if (holderSet.has(String(userId))) posIdSet.add(pid);
+    }
     const userPositionIds = [...posIdSet];
 
     requests = requests.filter(request => {
-      // ONLY include if user is an approver in any approval step
-      // User must be involved in the approval chain
-      
       // Include if user is an approver by user_id
       const isDirectApprover = request.approval_steps?.some(step => 
         String(step.approver_user_id?._id || step.approver_user_id) === String(userId)
@@ -97,8 +115,14 @@ export const listApprovalRequests = asyncHandler(async (req, res) => {
       });
       if (isPositionApprover) return true;
 
+      // Include if user is a current holder of any step's position
+      const isResolvedHolder = request.approval_steps?.some(step => {
+        const pid = step.approver_position_id?._id?.toString?.() || step.approver_position_id?.toString?.();
+        return pid && positionHolderMap[pid]?.has(String(userId));
+      });
+      if (isResolvedHolder) return true;
+
       // Escalated for opinion: approver may pick anyone in the org — they must see the workflow
-      // even when not a configured workflow step approver.
       const hasPendingEscalationToUser = (request.escalations || []).some(
         (e) =>
           e.status === 'pending' &&

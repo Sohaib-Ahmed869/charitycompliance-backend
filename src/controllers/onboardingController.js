@@ -45,6 +45,28 @@ export const deleteDepartment = asyncHandler(async (req, res) => {
   });
 });
 
+export const getPositions = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const onboardingService = new OnboardingService(orgId);
+  const positions = await onboardingService.getPositions();
+  res.json({ success: true, data: positions });
+});
+
+export const createPosition = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const onboardingService = new OnboardingService(orgId);
+  const result = await onboardingService.createPosition(req.body);
+  res.status(201).json({ success: true, data: result });
+});
+
+export const deletePosition = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { positionId } = req.params;
+  const onboardingService = new OnboardingService(orgId);
+  await onboardingService.deletePosition(positionId);
+  res.json({ success: true, message: 'Position removed' });
+});
+
 export const updateStep = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
