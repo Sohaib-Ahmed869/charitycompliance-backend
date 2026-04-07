@@ -55,6 +55,122 @@ export class OnboardingService {
     return progress;
   }
 
+  async getPositions() {
+    const tenantDb = await this.getTenantDb();
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (!org) return [];
+
+    const positionRepo = new PositionRepository(tenantDb);
+    const departmentRepo = new DepartmentRepository(tenantDb);
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const bmRepo = new BoardMemberRepository(tenantDb);
+
+    const positions = await positionRepo.findByOrgId(org._id);
+    const departments = await departmentRepo.findByOrgId(org._id);
+    const deptMap = {};
+    departments.forEach(d => { deptMap[d._id.toString()] = d.name; });
+
+    const boardMembers = await bmRepo.findByOrgId(org._id);
+
+    return positions.map(pos => {
+      const deptName = pos.department_id ? (deptMap[pos.department_id.toString()] || '') : '';
+      // Match board member → position by position_id first, then fallback to text position+department
+      const bm = boardMembers.find(b => {
+        const bmPosId = b.position_id?._id?.toString?.() || b.position_id?.toString?.();
+        if (bmPosId && bmPosId === pos._id.toString()) return true;
+        // Fallback: match by text position name + department name
+        const bmPos = (b.custom_position_title || b.position || '').trim().toLowerCase();
+        const bmDept = (b.department || '').trim().toLowerCase();
+        return bmPos === pos.title.trim().toLowerCase() && bmDept === deptName.trim().toLowerCase();
+      });
+
+      const result = {
+        id: pos._id.toString(),
+        name: pos.title,
+        department: deptName,
+        departmentId: pos.department_id?.toString() || '',
+        level: pos.level || 1,
+        modulePermissions: {},
+        assignedUser: null,
+      };
+
+      (pos.module_permissions || []).forEach(mp => {
+        if (mp?.module_id) {
+          result.modulePermissions[mp.module_id] = {
+            view: !!mp.view, edit: !!mp.edit, delete: !!mp.delete
+          };
+        }
+      });
+
+      if (bm) {
+        result.assignedUser = {
+          boardMemberId: bm._id.toString(),
+          given_names: bm.given_names || '',
+          family_name: bm.family_name || '',
+          email: bm.email || '',
+          phone: bm.phone || '',
+          title: bm.title || '',
+          date_of_birth: bm.date_of_birth || '',
+          appointment_date: bm.appointment_date || '',
+          residential_address: bm.residential_address || { line1: '', suburb: '', state: '', postcode: '' },
+          is_head_of_department: !!bm.is_head_of_department,
+          is_board_member: !!bm.is_board_member,
+          method: bm.invitation_status === 'not_invited' ? 'manual' : 'invite',
+        };
+      }
+
+      return result;
+    });
+  }
+
+  async createPosition(posData) {
+    const tenantDb = await this.getTenantDb();
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (!org) throw new Error('Organization not found');
+
+    const positionRepo = new PositionRepository(tenantDb);
+    const departmentRepo = new DepartmentRepository(tenantDb);
+
+    let departmentId = null;
+    if (posData.department) {
+      const allDepts = await departmentRepo.findByOrgId(org._id);
+      const dept = allDepts.find(d => d.name === posData.department);
+      if (dept) departmentId = dept._id;
+    }
+
+    const positionData = {
+      org_id: org._id,
+      title: posData.name,
+      department_id: departmentId,
+      level: posData.level || 1,
+      is_active: true,
+    };
+
+    try {
+      const position = await positionRepo.create(positionData);
+      return { id: position._id.toString(), name: position.title, department: posData.department, departmentId: departmentId?.toString() || '' };
+    } catch (err) {
+      if (err.code === 11000) {
+        const existing = (await positionRepo.findByOrgId(org._id)).find(p =>
+          p.title === posData.name && departmentId && p.department_id?.toString() === departmentId.toString()
+        );
+        if (existing) {
+          if (!existing.is_active) await positionRepo.update(existing._id, { is_active: true });
+          return { id: existing._id.toString(), name: existing.title, department: posData.department, departmentId: departmentId?.toString() || '' };
+        }
+      }
+      throw err;
+    }
+  }
+
+  async deletePosition(positionId) {
+    const tenantDb = await this.getTenantDb();
+    const positionRepo = new PositionRepository(tenantDb);
+    await positionRepo.delete(positionId);
+  }
+
   async getDepartments() {
     const tenantDb = await this.getTenantDb();
     const orgRepo = new OrganizationRepository(tenantDb);
@@ -343,7 +459,8 @@ export class OnboardingService {
     // Get all departments created in step 2
     const allDepartments = await departmentRepo.findByOrgId(orgId);
     
-    // Create positions and link to departments
+    // Pre-load existing positions so we can skip already-persisted ones
+    const existingPositions = await positionRepo.findByOrgId(orgId);
     const positions = [];
     const skipped = [];
     const reactivated = [];
@@ -351,7 +468,6 @@ export class OnboardingService {
     for (const pos of stepData.positions || []) {
       let departmentId = null;
       
-      // Find matching department by name
       if (pos.department) {
         const department = allDepartments.find(d => 
           d.name === pos.department
@@ -360,26 +476,35 @@ export class OnboardingService {
           departmentId = department._id;
         }
       }
+
+      // If a position with same title+department already exists and is active, skip it
+      const alreadyExists = existingPositions.find(p =>
+        p.title === pos.name &&
+        (departmentId ? p.department_id?.toString() === departmentId.toString() : !p.department_id) &&
+        p.is_active
+      );
+      if (alreadyExists) {
+        skipped.push(pos.name);
+        positions.push(alreadyExists);
+        continue;
+      }
       
-      // Build position data - only include code if it has a value
-      // This prevents duplicate key errors with the sparse unique index on org_id + code
       const positionData = {
         org_id: orgId,
-        title: pos.name, // Frontend sends 'name', backend expects 'title'
+        title: pos.name,
         description: pos.description || undefined,
         level: pos.level || 1,
-        is_management: false, // Can be determined from level if needed
+        is_management: false,
         can_approve_expenses: pos.canApproveExpenses || false,
         can_approve_risks: pos.canApproveRisks || false,
         can_approve_grants: pos.canApproveGrants || false,
         can_approve_policies: pos.canApprovePolicies || false,
         can_approve_hr: pos.canApproveHR || false,
-        max_approval_amount: 0, // Can be configured later
+        max_approval_amount: 0,
         department_id: departmentId,
         is_active: true
       };
       
-      // Only include code if it has a non-empty value to avoid sparse index conflicts
       if (pos.code && pos.code.trim()) {
         positionData.code = pos.code.trim().toUpperCase();
       }
@@ -391,9 +516,6 @@ export class OnboardingService {
       } catch (error) {
         // Handle duplicate key errors (for org_id + code unique index)
         if (error.code === 11000) {
-         
-          // Try to find existing position by title and department
-          const existingPositions = await positionRepo.findByOrgId(orgId);
           const foundPos = existingPositions.find(p => 
             p.title === pos.name &&
             (departmentId ? p.department_id?.toString() === departmentId.toString() : !p.department_id)

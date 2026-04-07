@@ -21,6 +21,20 @@ router.get('/progress', onboardingController.getProgress);
 // Get departments (for Step 2)
 router.get('/departments', onboardingController.getDepartments);
 
+// Get positions with assigned board members (for Step 3 rehydration)
+router.get('/positions', onboardingController.getPositions);
+
+// Create a single position (Step 3 - immediate persist)
+router.post('/positions', onboardingController.createPosition);
+
+// Soft-delete a position (Step 3)
+router.delete(
+  '/positions/:positionId',
+  [param('positionId').isMongoId().withMessage('Valid position ID is required')],
+  validate,
+  onboardingController.deletePosition
+);
+
 // Delete department (when user removes in Step 2)
 router.delete(
   '/departments/:departmentId',
