@@ -19,6 +19,7 @@ import { getFileUrl, uploadToS3 } from '../services/s3Service.js';
 import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
+import { ensureEmailNotInOtherTenants } from '../utils/ensureEmailNotInOtherTenants.js';
 
 const getEffectivePositionLabel = (data = {}) => {
   if (data?.is_volunteer) return '';
@@ -145,6 +146,12 @@ export const createBoardMember = asyncHandler(async (req, res) => {
   const org = await orgRepo.findOne();
   if (!org) {
     throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+  }
+
+  // Enforce global email uniqueness across tenants for any account-capable responsible person.
+  // This is the same rule as the Responsible People setup flow.
+  if (system_access !== false && boardMemberData?.email) {
+    await ensureEmailNotInOtherTenants(boardMemberData.email, orgId);
   }
 
   // Generate invitation token if invite is requested
@@ -370,6 +377,10 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
     throw new AppError('Valid email is required', 400, 'VALIDATION_ERROR');
   }
   if (isEmailChange && incomingEmail) {
+    // Only block cross-tenant collisions when this person can access the system.
+    if (existingMember?.has_system_access !== false) {
+      await ensureEmailNotInOtherTenants(incomingEmail, orgId);
+    }
     const duplicateMember = await boardMemberRepo.findActiveByEmailInOrg(
       incomingEmail,
       org._id,

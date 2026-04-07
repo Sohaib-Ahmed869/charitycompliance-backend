@@ -892,6 +892,8 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
       request_type: 'user',
       request_id: userId,
       details: {
+        added_by: actorUser ? toName(actorUser) : 'System',
+        added_by_role: actorUser ? toRole(actorUser) : null,
         user_id: userId,
         email: u.email || null,
         first_name: u.first_name || null,
