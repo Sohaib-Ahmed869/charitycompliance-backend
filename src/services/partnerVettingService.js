@@ -162,12 +162,38 @@ export class PartnerVettingService {
     }
 
     const normalized = { ...updateData };
-    if (updateData.contact_name || updateData.contact_email || updateData.contact_phone) {
+    const hasContactPatch =
+      Object.prototype.hasOwnProperty.call(updateData, 'contact_name') ||
+      Object.prototype.hasOwnProperty.call(updateData, 'contact_email') ||
+      Object.prototype.hasOwnProperty.call(updateData, 'contact_phone');
+    if (hasContactPatch) {
+      const name =
+        Object.prototype.hasOwnProperty.call(updateData, 'contact_name')
+          ? updateData.contact_name
+          : partner.contact?.name;
+      const email =
+        Object.prototype.hasOwnProperty.call(updateData, 'contact_email')
+          ? updateData.contact_email
+          : partner.contact?.email;
+      const phone =
+        Object.prototype.hasOwnProperty.call(updateData, 'contact_phone')
+          ? updateData.contact_phone
+          : partner.contact?.phone;
       normalized.contact = {
-        name: updateData.contact_name || partner.contact?.name || '',
-        email: updateData.contact_email || partner.contact?.email || '',
-        phone: updateData.contact_phone || partner.contact?.phone || ''
+        name: String(name ?? '').trim(),
+        email: String(email ?? '').trim(),
+        phone: String(phone ?? '').trim()
       };
+      if (!normalized.contact.name || !normalized.contact.email || !normalized.contact.phone) {
+        throw new AppError(
+          'Contact name, email, and phone are required',
+          400,
+          'VALIDATION_ERROR'
+        );
+      }
+      delete normalized.contact_name;
+      delete normalized.contact_email;
+      delete normalized.contact_phone;
     }
 
     if (updateData.risk_assessment) {

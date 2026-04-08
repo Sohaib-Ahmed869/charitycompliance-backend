@@ -44,13 +44,6 @@ export class ComplaintRepository {
       query.priority = filters.priority;
     }
 
-    if (filters.assigned_to) {
-      // Convert string ID to ObjectId if needed
-      query.assigned_to = typeof filters.assigned_to === 'string' 
-        ? new mongoose.Types.ObjectId(filters.assigned_to)
-        : filters.assigned_to;
-    }
-
     if (filters.startDate || filters.endDate) {
       query.created_at = {};
       if (filters.startDate) {
@@ -62,7 +55,6 @@ export class ComplaintRepository {
     }
 
     return await this.Complaint.find(query)
-      .populate('assigned_to', 'first_name last_name email position')
       .populate({
         path: 'category',
         select: 'name head_user_id head_position_id',
@@ -77,7 +69,6 @@ export class ComplaintRepository {
 
   async findById(complaintId) {
     return await this.Complaint.findById(complaintId)
-      .populate('assigned_to', 'first_name last_name email position')
       .populate({
         path: 'category',
         select: 'name head_user_id head_position_id',
@@ -94,8 +85,7 @@ export class ComplaintRepository {
       complaintId,
       { ...updateData, updated_at: new Date() },
       { new: true }
-    ).populate('assigned_to', 'first_name last_name email position')
-     .populate({
+    ).populate({
        path: 'category',
        select: 'name head_user_id head_position_id',
        populate: [
@@ -110,7 +100,6 @@ export class ComplaintRepository {
     const $set = { ...(ops.$set || {}), updated_at: new Date() };
     const update = { ...ops, $set };
     return await this.Complaint.findByIdAndUpdate(complaintId, update, { new: true, ...options })
-      .populate('assigned_to', 'first_name last_name email position')
       .populate({
         path: 'category',
         select: 'name head_user_id head_position_id',
@@ -130,16 +119,10 @@ export class ComplaintRepository {
     const now = new Date();
     const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, 1);
     
-    // For non-admin users, filter by assigned_to
     const matchStage = {
       org_id: new mongoose.Types.ObjectId(orgId)
     };
-    
-    if (userId) {
-      matchStage.assigned_to = typeof userId === 'string' 
-        ? new mongoose.Types.ObjectId(userId)
-        : userId;
-    }
+    // Note: complaints are workflow-driven; no assignee-based filtering.
     
     const stats = await this.Complaint.aggregate([
       { $match: matchStage },

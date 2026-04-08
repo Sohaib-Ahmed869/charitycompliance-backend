@@ -2672,7 +2672,44 @@ export class ApprovalWorkflowService {
     }
 
     const approvers = await this.resolveApprovers(rule, orgObjectId);
-    const approverUserIds = approvers.map(a => String(a.user_id)).filter(Boolean);
+
+    const normalizeApproverUserId = (v) => {
+      // Already an ObjectId-like object
+      const objId = v?._id || v?.id;
+      if (objId) return String(objId);
+
+      // Plain string id
+      let s = String(v || '').trim();
+      if (!s) return '';
+      if (/^[a-fA-F0-9]{24}$/.test(s)) return s;
+
+      // Try to de-escape common serialized / logged shapes
+      // (e.g. value contains "\n" or "\'" sequences, or is built via string concatenation)
+      const cleaned = s
+        .replace(/\\\\n/g, '\n')
+        .replace(/\\\\'/g, "'")
+        .replace(/\\"/g, '"')
+        .replace(/\\\+/g, '+');
+
+      // Handle buggy stored values like "{ _id: new ObjectId('...'), email: ... }"
+      const m =
+        cleaned.match(/ObjectId\\?\('([a-fA-F0-9]{24})'\\?\)/) ||
+        cleaned.match(/new\s+ObjectId\\?\('([a-fA-F0-9]{24})'\\?\)/) ||
+        cleaned.match(/_id:\s*['"]?([a-fA-F0-9]{24})['"]?/);
+      if (m && m[1]) return m[1];
+
+      // Absolute fallback: if a 24-hex id exists anywhere in the string, take it.
+      // This covers cases where the value is a concatenated debug string like:
+      // "{\n' + \"  _id: new ObjectId('...'),\n\" + ... }"
+      const any = cleaned.match(/[a-fA-F0-9]{24}/);
+      if (any && any[0]) return any[0];
+
+      return '';
+    };
+
+    const approverUserIds = approvers
+      .map(a => normalizeApproverUserId(a.user_id))
+      .filter(Boolean);
 
     if (approverUserIds.length === 0) {
       throw new AppError(

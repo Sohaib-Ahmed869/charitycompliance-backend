@@ -141,6 +141,30 @@ export const requireRole = (role) => {
 export const requireAdmin = requireRole('admin');
 
 /**
+ * Check if user is org admin/owner (authoritative server-side gate).
+ * We support both the legacy `req.user.role` string and newer `req.user.roles[]`.
+ */
+export const requireAdminOrOwner = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ success: false, error: 'Authentication required' });
+  }
+
+  const role = req.user.role;
+  const roles = Array.isArray(req.user.roles) ? req.user.roles : [];
+  const isOwner = req.user.is_org_owner === true;
+  const isAdmin = role === 'admin' || roles.includes('admin');
+
+  if (!isAdmin && !isOwner) {
+    return res.status(403).json({
+      success: false,
+      error: 'Admin access required'
+    });
+  }
+
+  next();
+};
+
+/**
  * Check if user is board member
  */
 export const requireBoardMember = requireRole(['board_member', 'responsible_person']);
@@ -154,6 +178,7 @@ export default {
   requirePermission,
   requireRole,
   requireAdmin,
+  requireAdminOrOwner,
   requireBoardMember,
   requireAuditor,
   hasPermission,

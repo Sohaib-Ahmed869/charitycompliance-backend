@@ -110,8 +110,46 @@ export class DonorService {
     return donor;
   }
 
-  async updateDonor(id, updateData) {
-    const donor = await this.repo.update(id, updateData);
+  async updateDonor(id, rawUpdate) {
+    const existing = await this.getDonorById(id);
+    const allowed = new Set([
+      'name',
+      'donor_type',
+      'vip',
+      'abn_acn',
+      'dgr_status',
+      'description',
+      'primary_contact',
+      'size',
+      'expected_annual_donation'
+    ]);
+    const patch = {};
+    for (const key of allowed) {
+      if (rawUpdate[key] !== undefined) patch[key] = rawUpdate[key];
+    }
+
+    if (patch.primary_contact !== undefined) {
+      const pc = patch.primary_contact || {};
+      patch.primary_contact = {
+        name: pc.name !== undefined ? String(pc.name).trim() : (existing.primary_contact?.name || ''),
+        position: pc.position !== undefined ? String(pc.position).trim() : (existing.primary_contact?.position || ''),
+        email: pc.email !== undefined ? String(pc.email).trim() : (existing.primary_contact?.email || ''),
+        phone: pc.phone !== undefined ? String(pc.phone).trim() : (existing.primary_contact?.phone || '')
+      };
+      if (!patch.primary_contact.name || !patch.primary_contact.email || !patch.primary_contact.phone) {
+        throw new AppError(
+          'Primary contact name, email, and phone are required',
+          400,
+          'VALIDATION_ERROR'
+        );
+      }
+    }
+
+    if (patch.abn_acn !== undefined && patch.abn_acn && !this._isValidAbn(patch.abn_acn)) {
+      throw new AppError('ABN must be exactly 11 digits', 400, 'INVALID_ABN');
+    }
+
+    const donor = await this.repo.update(id, patch);
     if (!donor || String(donor.org_id) !== String(this.orgId)) {
       throw new AppError('Donor not found', 404, 'NOT_FOUND');
     }

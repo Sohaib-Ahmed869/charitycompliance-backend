@@ -456,7 +456,6 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
       { status: 'resolved' }
     ]
   })
-    .populate('assigned_to', 'first_name last_name email is_org_owner role position')
     .populate('trail.actor_user_id', 'first_name last_name email is_org_owner role position')
     .lean();
 
@@ -520,12 +519,8 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
     }
 
     // Fallback (older records without trail)
-    const actorUser = complaint.assigned_to;
-    const actor = {
-      id: actorUser?._id?.toString(),
-      name: toName(actorUser),
-      role: toRole(actorUser)
-    };
+    // Complaints are workflow-driven; older records may not have a clear actor. Use unknown.
+    const actor = { id: null, name: '—', role: null };
 
     if (resolutionDetails.root_cause) {
       events.push(normalizeEvent({
@@ -1384,7 +1379,6 @@ export const downloadAuditTrailPDF = asyncHandler(async (req, res) => {
   if (!reqDoc) {
     // Try complaint
     const complaint = await Complaint.findById(requestId)
-      .populate('assigned_to', 'first_name last_name email is_org_owner role position')
       .lean();
     if (complaint) {
       reqDoc = complaint;
@@ -1564,8 +1558,7 @@ export const downloadAuditTrailPDF = asyncHandler(async (req, res) => {
     });
   } else if (source === 'complaint') {
     module = 'complaint';
-    const actorUser = reqDoc.assigned_to;
-    const actor = { id: actorUser?._id?.toString(), name: toName(actorUser), role: toRole(actorUser) };
+    const actor = { id: null, name: '—', role: null };
     const rd = reqDoc.resolution_details || {};
     entityInfo = { title: reqDoc.complaint_title };
 

@@ -117,12 +117,6 @@ router.put(
     param('complaintId')
       .notEmpty()
       .withMessage('Complaint ID is required'),
-    body('assigned_to')
-      .optional()
-      .notEmpty()
-      .withMessage('Assigned to ID cannot be empty')
-      .isMongoId()
-      .withMessage('Invalid user ID format for assigned_to'),
   ],
   validate,
   complaintController.updateComplaint
