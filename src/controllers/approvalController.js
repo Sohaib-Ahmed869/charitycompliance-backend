@@ -1188,6 +1188,120 @@ export const approveRiskWithPriority = asyncHandler(async (req, res) => {
     });
   }
 
+  // If the department head's assessment changes the priority, we must switch the workflow
+  // to the correct matrix/rule for that priority. Otherwise the request stays on the
+  // default (low) rule chosen at creation time.
+  try {
+    const priorityAmount =
+      riskPriority === 'high' ? 3 :
+      riskPriority === 'moderate' ? 2 :
+      1; // low/default
+
+    const orgObjectId = await workflowService._getOrgObjectId();
+    const { matrix: newMatrix, rule: newRule } = await workflowService.findMatchingRule('risk', priorityAmount, orgObjectId);
+
+    const existingMatrixId = request.approval_matrix_id?._id || request.approval_matrix_id;
+    const shouldSwitchMatrix = newMatrix?._id && String(newMatrix._id) !== String(existingMatrixId);
+
+    if (shouldSwitchMatrix) {
+      // Reload the request AFTER processApproval so we keep the approved dept head step.
+      const updatedReq = await approvalRequestRepo.findById(approvalRequestId);
+      if (updatedReq) {
+        const stepsNow = updatedReq.approval_steps || [];
+        const deptHeadStep = stepsNow.find((s) => s.is_department_head) || null;
+
+        // Build approvers from the selected rule WITHOUT failing when positions have no users.
+        const { UserPositionRepository } = await import('../repositories/userPositionRepository.js');
+        const userPositionRepo = new UserPositionRepository(tenantDb);
+        const approvers = [];
+        for (const approverConfig of (newRule.requires_approval_from || [])) {
+          let userIds = [];
+          if (approverConfig.user_id) userIds = [approverConfig.user_id];
+          else if (approverConfig.position_id) {
+            userIds = await userPositionRepo.findUsersByPositionId(approverConfig.position_id);
+          }
+
+          if (userIds.length > 0) {
+            userIds.forEach((uid) => {
+              approvers.push({
+                user_id: uid,
+                position_id: approverConfig.position_id || null,
+                department_id: approverConfig.department_id || null,
+                level: approverConfig.approval_level
+              });
+            });
+          } else {
+            approvers.push({
+              user_id: null,
+              position_id: approverConfig.position_id || null,
+              department_id: approverConfig.department_id || null,
+              level: approverConfig.approval_level
+            });
+          }
+        }
+        approvers.sort((a, b) => (a.level || 0) - (b.level || 0));
+
+        const matrixSteps = approvers.map((a) => ({
+          level: (a.level || 0) + 1, // shift because dept head is level 1
+          approver_user_id: a.user_id || undefined,
+          approver_position_id: a.position_id,
+          approver_department_id: a.department_id,
+          status: 'pending'
+        }));
+
+        const nextSteps = deptHeadStep ? [deptHeadStep, ...matrixSteps] : matrixSteps;
+        const firstPendingIndex = nextSteps.findIndex((s) => s.status === 'pending');
+
+        updatedReq.approval_matrix_id = newMatrix._id;
+        updatedReq.approval_type = newRule.approval_type;
+        updatedReq.amount = priorityAmount;
+        updatedReq.approval_steps = nextSteps;
+        if (updatedReq.approval_type === 'sequential') {
+          updatedReq.current_step = firstPendingIndex >= 0 ? firstPendingIndex : 0;
+        }
+        updatedReq.markModified('approval_steps');
+        await updatedReq.save();
+
+        // Keep the risk pointing at the active workflow matrix.
+        if (risk) {
+          await riskRepo.update(request.entity_id, { approval_matrix_id: newMatrix._id });
+        }
+
+        // Notify new approvers (best-effort)
+        try {
+          const { UserRepository } = await import('../repositories/userRepository.js');
+          const emailService = (await import('../services/emailService.js')).default;
+          const userRepo = new UserRepository(tenantDb);
+          const submitter = updatedReq.submitted_by ? await userRepo.findById(updatedReq.submitted_by) : null;
+          const submitterName = submitter ? `${submitter.first_name} ${submitter.last_name}` : 'A user';
+          const riskTitle = risk?.title || 'Risk';
+          for (const step of updatedReq.approval_steps || []) {
+            if (!step?.approver_user_id) continue;
+            if (step?.is_department_head) continue; // already acted
+            const approverUser = await userRepo.findById(step.approver_user_id);
+            if (!approverUser?.email) continue;
+            const approverName = `${approverUser.first_name} ${approverUser.last_name}`;
+            await emailService.sendApprovalRequestEmail({
+              to: approverUser.email,
+              recipientName: approverName,
+              approvalRequestId: updatedReq._id.toString(),
+              requestType: 'risk',
+              entityTitle: `Risk: ${riskTitle}`,
+              approvalLevel: step.level,
+              submitterName,
+              approvalType: newRule.approval_type
+            });
+          }
+        } catch {
+          // ignore email failures
+        }
+      }
+    }
+  } catch {
+    // If workflow switching fails, don't block the approval; UI will still show
+    // the current workflow and admins can adjust. We already updated the risk values.
+  }
+
   res.json({
     success: true,
     data: approvalRequest,

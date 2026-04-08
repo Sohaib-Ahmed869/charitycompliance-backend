@@ -7,6 +7,7 @@ import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import * as fundingAgreementController from '../../controllers/fundingAgreementController.js';
+import { requirePermission } from '../../middleware/rbac.js';
 
 const router = express.Router();
 
@@ -36,6 +37,7 @@ router.get('/counts', fundingAgreementController.getAgreementCounts);
 
 router.post(
   '/',
+  requirePermission('module:grants_donors:edit'),
   [
     body('agreement_title').trim().notEmpty().withMessage('Agreement title is required'),
     body('partner_name').optional().trim(),
@@ -75,9 +77,11 @@ router.get(
 
 router.post(
   '/:agreementId/sign/internal',
+  requirePermission('module:grants_donors:edit'),
   [
     param('agreementId').isMongoId().withMessage('Invalid agreement ID'),
-    body('signature_data').notEmpty().withMessage('Signature is required'),
+    // Signature required only on first internal signing; re-send is allowed without re-signing.
+    body('signature_data').optional().isString(),
     body('notes').optional().isString(),
     body('partner_email').optional().isEmail().withMessage('Partner email must be valid if provided')
   ],

@@ -18,6 +18,7 @@ import { uploadToS3, getFileUrl, getFileStream } from '../services/s3Service.js'
 import { decryptBoardMemberFields } from '../utils/decryptBoardMember.js';
 import { ExternalTrainingEnrollmentRepository } from '../repositories/externalTrainingEnrollmentRepository.js';
 import emailService from '../services/emailService.js';
+import { NotificationRepository } from '../repositories/notificationRepository.js';
 
 const getOrgId = (req) => req.orgId;
 
@@ -1604,7 +1605,7 @@ export const getPersonTrainingRecord = asyncHandler(async (req, res) => {
 
 // --- Assign training to people (create enrollments for a program for selected board members) ---
 export const assignProgramToPeople = asyncHandler(async (req, res) => {
-  const { trainingRepo, boardMemberRepo, org } = await getTenantAndRepos(req);
+  const { trainingRepo, boardMemberRepo, org, tenantDb } = await getTenantAndRepos(req);
   const { programId } = req.params;
   const { board_member_ids } = req.body; // array of board member ids
   const program = await trainingRepo.findProgramById(programId);
@@ -1625,7 +1626,7 @@ export const assignProgramToPeople = asyncHandler(async (req, res) => {
     }
   }
 
-  // Notify assigned volunteers
+  // Notify assigned people (internal users + volunteers)
   try {
     const volunteers = await Promise.all(
       board_member_ids.map(async (bmId) => {
@@ -1633,17 +1634,54 @@ export const assignProgramToPeople = asyncHandler(async (req, res) => {
         return person;
       })
     );
-    const volunteerRecipients = volunteers.filter(
-      (v) => v && v.is_volunteer === true && v.email
-    );
-    await Promise.all(
-      volunteerRecipients.map((v) =>
-        emailService.sendVolunteerTrainingNotification({
-          to: v.email,
-          recipientName: `${v.given_names || ''} ${v.family_name || ''}`.trim() || 'Volunteer',
-          trainingTitle: program.title || program.category || 'Training',
+
+    const people = (volunteers || []).filter(Boolean);
+    const trainingTitle = program.title || program.category || 'Training';
+
+    // In-app notifications for org users (requires user_id)
+    try {
+      const notificationRepo = new NotificationRepository(tenantDb);
+      const items = people
+        .map((p) => {
+          const userId = p.user_id?._id || p.user_id;
+          if (!userId) return null;
+          return {
+            user_id: userId,
+            type: 'training_assigned',
+            title: 'Training assigned',
+            message: `A training has been assigned to you: ${trainingTitle}`,
+            link: '/human-resources/my-training',
+            related_entity_id: program._id,
+            related_entity_type: 'training_program',
+            read: false,
+            created_at: new Date(),
+          };
         })
-      )
+        .filter(Boolean);
+      await notificationRepo.createMany(items);
+    } catch {
+      // non-blocking
+    }
+
+    // Email notifications (if email exists)
+    await Promise.all(
+      people
+        .filter((p) => p?.email)
+        .map((p) => {
+          const recipientName = `${p.given_names || ''} ${p.family_name || ''}`.trim() || 'Member';
+          if (p.is_volunteer === true) {
+            return emailService.sendVolunteerTrainingNotification({
+              to: p.email,
+              recipientName,
+              trainingTitle,
+            });
+          }
+          return emailService.sendInternalTrainingAssignedEmail({
+            to: p.email,
+            recipientName,
+            trainingTitle,
+          });
+        })
     );
   } catch {
     // Do not block assignment if notification fails

@@ -36,5 +36,9 @@ export class DonorRepository {
       { new: true, runValidators: true }
     );
   }
+
+  async deleteById(id) {
+    return this.Donor.findByIdAndDelete(id);
+  }
 }
 

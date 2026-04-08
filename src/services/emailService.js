@@ -655,6 +655,27 @@ class EmailService {
     return this.sendEmail({ to, subject, html });
   }
 
+  /**
+   * Send internal training assignment email (org users: staff/board members).
+   */
+  async sendInternalTrainingAssignedEmail({ to, recipientName, trainingTitle }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const subject = `Training assigned: ${trainingTitle}`;
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName || 'there'},</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">A training has been assigned to you: <strong>${trainingTitle}</strong>.</p>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Please open your dashboard and complete it.</p>
+    `;
+    const html = buildEmailTemplate({
+      heading: 'Training Assigned',
+      bodyHtml,
+      buttonText: 'Open My Training',
+      buttonLink: `${baseUrl}/human-resources/my-training`,
+      infoBoxLines: ['This training is tracked for compliance reporting.'],
+    });
+    return this.sendEmail({ to, subject, html });
+  }
+
   async sendVolunteerPolicyNotification({ to, recipientName, policyTitle, policyId, acknowledgeUrl }) {
     const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const subject = `Policy update for acknowledgement: ${policyTitle}`;
