@@ -716,11 +716,35 @@ export class BcpService {
         const { PolicyAcknowledgementRepository } = await import('../repositories/policyAcknowledgementRepository.js');
         const policyAckRepo = new PolicyAcknowledgementRepository(tenantDb);
 
+        const BoardMemberModel = boardMemberRepo.BoardMember;
+        // Snapshot governance flags from the source position before deactivation (Responsible People / HOD visibility)
+        let governanceFromSnapshot = {
+          is_board_member: true,
+          is_head_of_department: false,
+          departmentLabel: null
+        };
+        if (fromUserOid) {
+          try {
+            const fromSnap = await BoardMemberModel.findOne({
+              user_id: fromUserOid,
+              position_id: fromPosOid,
+              org_id: org._id
+            }).lean();
+            if (fromSnap) {
+              governanceFromSnapshot = {
+                is_board_member: !!fromSnap.is_board_member,
+                is_head_of_department: !!fromSnap.is_head_of_department,
+                departmentLabel: fromSnap.department || null
+              };
+            }
+          } catch (snapErr) {
+            logError('[TRANSFER] Failed to snapshot governance flags from source position', snapErr, { transferId });
+          }
+        }
+
         // ─── 1) DEACTIVATE from-user's board_member record (revoke position) ───
         if (fromUserOid) {
           try {
-            const BoardMemberModel = boardMemberRepo.BoardMember;
-
             // Deactivate board_member (the source of truth for positions)
             const bmResult = await BoardMemberModel.updateMany(
               {
@@ -759,7 +783,6 @@ export class BcpService {
 
         // ─── 2) Ensure to-user has the from-position assigned ───
         try {
-          const BoardMemberModel = boardMemberRepo.BoardMember;
           const positionRepo = new PositionRepository(tenantDb);
           const fromPosition = await positionRepo.findById(fromPosOid);
 
@@ -780,7 +803,7 @@ export class BcpService {
                 user_id: toUserOid,
                 position_id: fromPosOid,
                 position: fromPosition?.title || 'Transferred Position',
-                department: toBm.department,
+                department: governanceFromSnapshot.departmentLabel || toBm.department,
                 title: toBm.title,
                 given_names: toBm.given_names,
                 family_name: toBm.family_name,
@@ -792,7 +815,9 @@ export class BcpService {
                 has_system_access: true,
                 is_active: true,
                 status: 'active',
-                invitation_status: 'accepted'
+                invitation_status: 'accepted',
+                is_board_member: governanceFromSnapshot.is_board_member,
+                is_head_of_department: governanceFromSnapshot.is_head_of_department
               });
               logInfo('[TRANSFER STEP 2a] Created board_member for to-user with from-position', {
                 transferId,

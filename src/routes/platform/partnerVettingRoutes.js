@@ -6,6 +6,7 @@ import express from 'express';
 import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requirePermission, requireAdminOrOwner } from '../../middleware/rbac.js';
 import * as partnerVettingController from '../../controllers/partnerVettingController.js';
 import { uploadPolicySingle, handlePolicyUploadError } from '../../middleware/upload.js';
 
@@ -79,6 +80,8 @@ router.get(
 
 router.put(
   '/:partnerId',
+  requirePermission('module:grants_donors:edit'),
+  requireAdminOrOwner,
   [
     param('partnerId').isMongoId().withMessage('Invalid partner ID'),
     body('organization_name').optional().trim().notEmpty(),

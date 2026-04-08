@@ -27,6 +27,24 @@ export class ApprovalRequestRepository {
       tenantDb.model('ApprovalRequest', approvalRequestSchema);
   }
 
+  _normalizeApproverUserId(value) {
+    const v = value?._id || value?.id || value;
+    if (!v) return value;
+    if (v instanceof mongoose.Types.ObjectId) return v;
+    const s = String(v).trim();
+    if (!s) return value;
+    if (/^[a-fA-F0-9]{24}$/.test(s)) return new mongoose.Types.ObjectId(s);
+
+    const cleaned = s
+      .replace(/\\\\n/g, '\n')
+      .replace(/\\\\'/g, "'")
+      .replace(/\\"/g, '"');
+
+    const any = cleaned.match(/[a-fA-F0-9]{24}/);
+    if (any && any[0]) return new mongoose.Types.ObjectId(any[0]);
+    return value;
+  }
+
   async findByOrgId(orgId, filters = {}) {
     const query = { org_id: orgId };
     
@@ -147,6 +165,17 @@ export class ApprovalRequestRepository {
   }
 
   async create(data) {
+    // Last-line-of-defense: coerce any malformed approver_user_id into an ObjectId if possible.
+    if (data?.approval_steps && Array.isArray(data.approval_steps)) {
+      data.approval_steps = data.approval_steps.map((step) => {
+        if (!step || typeof step !== 'object') return step;
+        if (!Object.prototype.hasOwnProperty.call(step, 'approver_user_id')) return step;
+        return {
+          ...step,
+          approver_user_id: this._normalizeApproverUserId(step.approver_user_id),
+        };
+      });
+    }
     const approvalRequest = new this.ApprovalRequest(data);
     return await approvalRequest.save();
   }

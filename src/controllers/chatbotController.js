@@ -343,10 +343,7 @@ POLICY — STUCK SCENARIOS:
 COMPLAINT — STUCK SCENARIOS:
 
 "I submitted a complaint — what happens now?":
-→ It's in "new" status. An admin needs to **assign** it to a responsible person. If you're an admin, go to the complaint and set the assigned_to field.
-
-"Complaint is 'assigned' — what's next?":
-→ The assigned person needs to start working on it. They should go to the complaint detail page and start the **resolution process** by saving resolution details (root cause, resolution actions, corrective/preventive actions). This moves it to "in_progress".
+→ It's in "new" status. An admin will review it in the complaint workflow (triage → department head review → resolution steps).
 
 "Complaint is 'in_progress' — how do I resolve it?":
 → There are 4 steps to complete: 1) Resolution details (if not done yet). 2) Link or create a risk from this complaint (or skip). 3) Link or create training related to the issue. 4) Click "Mark Resolved". All steps must be done — the system will block resolution if anything is missing.

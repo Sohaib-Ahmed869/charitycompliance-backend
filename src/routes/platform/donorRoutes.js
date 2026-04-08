@@ -5,6 +5,7 @@
 import express from 'express';
 import { body, param, query } from 'express-validator';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requirePermission, requireAdminOrOwner } from '../../middleware/rbac.js';
 import { validate } from '../../middleware/validation.js';
 import { uploadDonorKycFiles, handleUploadError } from '../../middleware/upload.js';
 import {
@@ -159,6 +160,8 @@ router.get(
 
 router.put(
   '/:donorId',
+  requirePermission('module:grants_donors:edit'),
+  requireAdminOrOwner,
   [param('donorId').isMongoId().withMessage('Invalid donor ID')],
   validate,
   updateDonor
