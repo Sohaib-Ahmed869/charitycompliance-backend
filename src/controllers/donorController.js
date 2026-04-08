@@ -8,6 +8,25 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { DonorService } from '../services/donorService.js';
 import { getTenantConnection } from '../db/connectionManager.js';
+import { getRouterConnection } from '../config/database.js';
+
+const REFUND_TOKEN_LOOKUP_COL = 'donor_refund_token_lookup';
+
+async function resolveOrgFromRefundToken(token) {
+  const routerDb = getRouterConnection();
+  const doc = await routerDb.collection(REFUND_TOKEN_LOOKUP_COL).findOne({ token });
+  if (!doc?.orgId) throw new AppError('Invalid or expired refund link', 404, 'REFUND_NOT_FOUND');
+  const tenantDb = await getTenantConnection(doc.orgId);
+  return { orgId: doc.orgId, tenantDb };
+}
+
+async function resolveOrgFromRefundPaymentAckToken(ackToken) {
+  const routerDb = getRouterConnection();
+  const doc = await routerDb.collection(REFUND_TOKEN_LOOKUP_COL).findOne({ payment_ack_token: ackToken });
+  if (!doc?.orgId) throw new AppError('Invalid or expired acknowledgement link', 404, 'REFUND_NOT_FOUND');
+  const tenantDb = await getTenantConnection(doc.orgId);
+  return { orgId: doc.orgId, tenantDb };
+}
 
 export const createDonor = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -116,10 +135,12 @@ export const uploadDonorKycDocuments = asyncHandler(async (req, res) => {
  */
 export const initiateDonorRefund = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
+  const donorId = req.params.donorId;
+  const userId = req.user?.userId || req.userId;
   const tenantDb = await getTenantConnection(orgId);
   const service = new DonorService(orgId, tenantDb);
 
-  const refund = await service.initiateDonorRefund(req.body);
+  const refund = await service.initiateDonorRefund(donorId, userId, req.body);
 
   res.status(201).json({
     success: true,
@@ -150,12 +171,12 @@ export const listDonorRefunds = asyncHandler(async (req, res) => {
 });
 
 /**
- * Submit public donor refund form
+ * Submit public donor refund form (public — no auth; resolves org from token)
  */
 export const submitDonorRefundPublicForm = asyncHandler(async (req, res) => {
   const token = req.params.token;
-  const tenantDb = await getTenantConnection(req.orgId);
-  const service = new DonorService(req.orgId, tenantDb);
+  const { orgId, tenantDb } = await resolveOrgFromRefundToken(token);
+  const service = new DonorService(orgId, tenantDb);
 
   const refund = await service.submitPublicRefundForm(token, req.body);
 
@@ -166,12 +187,12 @@ export const submitDonorRefundPublicForm = asyncHandler(async (req, res) => {
 });
 
 /**
- * Get donor refund payment acknowledgement context
+ * Get donor refund payment acknowledgement context (public — no auth)
  */
 export const getDonorRefundPaymentAckContext = asyncHandler(async (req, res) => {
   const token = req.params.token;
-  const tenantDb = await getTenantConnection(req.orgId);
-  const service = new DonorService(req.orgId, tenantDb);
+  const { orgId, tenantDb } = await resolveOrgFromRefundPaymentAckToken(token);
+  const service = new DonorService(orgId, tenantDb);
 
   const context = await service.getDonorRefundPaymentAckContext(token);
 
@@ -182,12 +203,12 @@ export const getDonorRefundPaymentAckContext = asyncHandler(async (req, res) => 
 });
 
 /**
- * Submit donor refund payment acknowledgement
+ * Submit donor refund payment acknowledgement (public — no auth)
  */
 export const submitDonorRefundPaymentAck = asyncHandler(async (req, res) => {
   const token = req.params.token;
-  const tenantDb = await getTenantConnection(req.orgId);
-  const service = new DonorService(req.orgId, tenantDb);
+  const { orgId, tenantDb } = await resolveOrgFromRefundPaymentAckToken(token);
+  const service = new DonorService(orgId, tenantDb);
 
   const ack = await service.submitDonorRefundPaymentAck(token, req.body);
 
@@ -246,14 +267,14 @@ export const completeDonorRefundProcessing = asyncHandler(async (req, res) => {
 });
 
 /**
- * Initiate donor refund workflow
+ * Initiate donor refund workflow (route param is :refundId)
  */
 export const initiateDonorRefundWorkflow = asyncHandler(async (req, res) => {
-  const donorId = req.params.donorId;
+  const refundId = req.params.refundId;
   const tenantDb = await getTenantConnection(req.orgId);
   const service = new DonorService(req.orgId, tenantDb);
 
-  const workflow = await service.initiateDonorRefundWorkflow(donorId, req.body);
+  const workflow = await service.initiateDonorRefundWorkflow(refundId, req.body);
 
   res.json({
     success: true,

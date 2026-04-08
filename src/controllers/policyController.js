@@ -47,6 +47,7 @@ async function notifyVolunteersForPolicy(orgId, tenantDb, policyLike) {
           to: bm.email,
           recipientName: `${bm.given_names || ''} ${bm.family_name || ''}`.trim() || 'Volunteer',
           policyTitle: policyLike.title || 'Policy',
+          policyId: String(policyLike._id),
           acknowledgeUrl,
         });
       })
@@ -66,6 +67,7 @@ export const getPolicies = asyncHandler(async (req, res) => {
   }
 
   const policyRepo = new PolicyRepository(tenantDb);
+  const acknowledgementRepo = new PolicyAcknowledgementRepository(tenantDb);
   const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
 

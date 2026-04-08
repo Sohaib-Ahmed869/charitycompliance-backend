@@ -605,7 +605,7 @@ export const submitInternalProgressReport = asyncHandler(async (req, res) => {
   const attachments_report = normalizeDataUrlFiles(req.body?.attachments_report || req.body?.attachments || []);
   const attachments_media_report = normalizeDataUrlFiles(req.body?.attachments_media_report || []);
   const attachments_media = normalizeDataUrlFiles(req.body?.attachments_media || []);
-  if (attachments_report.length === 0) {
+  if (attachments_report.length === 0 && attachments_media_report.length === 0 && attachments_media.length === 0) {
     throw new AppError('At least one file attachment is required', 400, 'ATTACHMENTS_REQUIRED');
   }
 
@@ -949,16 +949,16 @@ export const addProjectUpdateEntry = asyncHandler(async (req, res) => {
   const project = await projectRepo.findById(projectId);
   if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
 
-  const files = Array.isArray(req.body?.files) ? req.body.files : [];
-  const normalizedFiles = files
-    .map((f) => ({
-      name: String(f?.name || f?.file_name || '').trim(),
-      url: String(f?.url || '').trim(),
-      key: String(f?.key || '').trim(),
-      size: Number(f?.size || 0),
-      type: String(f?.type || '').trim()
-    }))
-    .filter((f) => f.name && f.url);
+  const normalizeFileList = (arr) =>
+    (Array.isArray(arr) ? arr : [])
+      .map((f) => ({
+        name: String(f?.name || f?.file_name || '').trim(),
+        url: String(f?.url || '').trim(),
+        key: String(f?.key || '').trim(),
+        size: Number(f?.size || 0),
+        type: String(f?.type || '').trim()
+      }))
+      .filter((f) => f.name && f.url);
 
   const updates = Array.isArray(project?.metadata?.project_updates)
     ? [...project.metadata.project_updates]
@@ -970,7 +970,9 @@ export const addProjectUpdateEntry = asyncHandler(async (req, res) => {
     title: String(req.body?.title || '').trim(),
     entry_type: String(req.body?.entry_type || 'report').trim().toLowerCase() === 'media' ? 'media' : 'report',
     notes: String(req.body?.notes || '').trim(),
-    files: normalizedFiles,
+    files: normalizeFileList(req.body?.files),
+    media_report_files: normalizeFileList(req.body?.media_report_files),
+    media_files: normalizeFileList(req.body?.media_files),
     created_at: new Date(),
     created_by: req.user?.userId || req.userId || null
   });
@@ -992,23 +994,35 @@ export const addProjectUpdateEntryMultipart = asyncHandler(async (req, res) => {
   const project = await projectRepo.findById(projectId);
   if (!project) throw new AppError('Project not found', 404, 'PROJECT_NOT_FOUND');
 
-  const uploadedFiles = Array.isArray(req.files) ? req.files : [];
-  const normalizedFiles = [];
+  const filesByField = req.files && typeof req.files === 'object' ? req.files : {};
+  const uploadedFiles = Array.isArray(filesByField.files) ? filesByField.files : (Array.isArray(req.files) ? req.files : []);
+  const uploadedMediaReport = Array.isArray(filesByField.media_report_files) ? filesByField.media_report_files : [];
+  const uploadedMedia = Array.isArray(filesByField.media_files) ? filesByField.media_files : [];
 
-  for (const f of uploadedFiles) {
-    const fileName = String(f?.originalname || '').trim() || 'file';
-    const mimeType = String(f?.mimetype || '').trim() || 'application/octet-stream';
-    const size = Number(f?.size || 0);
-    if (!f?.buffer || !fileName) continue;
-    const up = await uploadToS3(f.buffer, fileName, mimeType, req.orgId, 'project_updates');
-    normalizedFiles.push({
-      name: fileName,
-      url: String(up?.url || '').trim(),
-      key: String(up?.key || '').trim(),
-      size,
-      type: mimeType
-    });
-  }
+  const processFileList = async (list) => {
+    const result = [];
+    for (const f of list) {
+      const fileName = String(f?.originalname || '').trim() || 'file';
+      const mimeType = String(f?.mimetype || '').trim() || 'application/octet-stream';
+      const size = Number(f?.size || 0);
+      if (!f?.buffer || !fileName) continue;
+      const up = await uploadToS3(f.buffer, fileName, mimeType, req.orgId, 'project_updates');
+      result.push({
+        name: fileName,
+        url: String(up?.url || '').trim(),
+        key: String(up?.key || '').trim(),
+        size,
+        type: mimeType
+      });
+    }
+    return result;
+  };
+
+  const [normalizedFiles, normalizedMediaReport, normalizedMedia] = await Promise.all([
+    processFileList(uploadedFiles),
+    processFileList(uploadedMediaReport),
+    processFileList(uploadedMedia)
+  ]);
 
   const updates = Array.isArray(project?.metadata?.project_updates)
     ? [...project.metadata.project_updates]
@@ -1021,6 +1035,8 @@ export const addProjectUpdateEntryMultipart = asyncHandler(async (req, res) => {
     entry_type: String(req.body?.entry_type || 'report').trim().toLowerCase() === 'media' ? 'media' : 'report',
     notes: String(req.body?.notes || '').trim(),
     files: normalizedFiles,
+    media_report_files: normalizedMediaReport,
+    media_files: normalizedMedia,
     created_at: new Date(),
     created_by: req.user?.userId || req.userId || null
   });
@@ -1124,17 +1140,28 @@ export const completeProject = asyncHandler(async (req, res) => {
     );
   }
 
-  const materialsFiles = Array.isArray(project?.metadata?.delivery_materials?.files)
-    ? project.metadata.delivery_materials.files
-    : [];
-  const hasDeliveryMaterials =
-    !!project?.metadata?.delivery_materials_ready || materialsFiles.length > 0;
+  // --- Closure requirements: final report, media evidence, financial acquittals ---
+  const meta = project.metadata && typeof project.metadata === 'object' ? project.metadata : {};
+  const progressReports = Array.isArray(meta.partner_progress_reports) ? meta.partner_progress_reports : [];
+  const hasFinalReport = progressReports.some(
+    (r) => String(r?.report_type || '').toLowerCase() === 'final' && (r?.partner_submission?.submitted_at || r?.source === 'internal')
+  );
+  const projectUpdates = Array.isArray(meta.project_updates) ? meta.project_updates : [];
+  const hasMediaEvidence = projectUpdates.some(
+    (u) => String(u?.entry_type || '').toLowerCase() === 'media' && (Array.isArray(u?.files) ? u.files.length > 0 : false)
+  );
+  const materialsFiles = Array.isArray(meta.delivery_materials?.files) ? meta.delivery_materials.files : [];
+  const hasFinancialAcquittals = !!meta.delivery_materials_ready || materialsFiles.length > 0;
 
-  if (!hasDeliveryMaterials) {
+  const missing = [];
+  if (!hasFinalReport) missing.push('Final report');
+  if (!hasMediaEvidence) missing.push('Media evidence');
+  if (!hasFinancialAcquittals) missing.push('Financial acquittals');
+  if (missing.length > 0) {
     throw new AppError(
-      'Upload acquittal documents before completing the project',
+      `The following are required before project completion: ${missing.join(', ')}`,
       400,
-      'AQUITTAL_DOC_REQUIRED'
+      'CLOSURE_REQUIREMENTS_MISSING'
     );
   }
 

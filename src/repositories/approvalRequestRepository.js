@@ -241,7 +241,7 @@ export class ApprovalRequestRepository {
 
   async findPendingEscalationsForUser(userId) {
     return await this.ApprovalRequest.find({
-      status: 'pending',
+      status: { $in: ['pending', 'paused_for_coi', 'pending_rejection_review'] },
       escalations: {
         $elemMatch: {
           escalated_to: userId,

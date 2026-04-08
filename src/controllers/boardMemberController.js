@@ -20,6 +20,7 @@ import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
 import { ensureEmailNotInOtherTenants } from '../utils/ensureEmailNotInOtherTenants.js';
+import { PolicyRepository } from '../repositories/policyRepository.js';
 
 const getEffectivePositionLabel = (data = {}) => {
   if (data?.is_volunteer) return '';
@@ -254,6 +255,51 @@ export const createBoardMember = asyncHandler(async (req, res) => {
       });
       // Don't fail the request if email fails - board member is still created
     }
+  }
+
+  // Send all existing active policies to the new volunteer so they can acknowledge them
+  if (is_volunteer && boardMemberData.email) {
+    (async () => {
+      try {
+        const policyRepo = new PolicyRepository(tenantDb);
+        const activePolicies = await policyRepo.findByOrgId(org._id, { status: 'active' });
+        if (activePolicies && activePolicies.length > 0) {
+          const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+          const policiesWithLinks = await Promise.all(
+            activePolicies.map(async (p) => {
+              const tokenDoc = await createVolunteerActionToken({
+                orgId,
+                boardMemberId: boardMember._id,
+                actionType: 'policy_ack',
+                email: boardMemberData.email,
+                metadata: { policy_id: String(p._id) },
+              });
+              return {
+                title: p.title || 'Policy',
+                acknowledgeUrl: `${frontendUrl}/public/volunteer/policy_ack/${tokenDoc.token}`,
+              };
+            })
+          );
+          const recipientName = `${boardMemberData.given_names} ${boardMemberData.family_name}`.trim() || 'Volunteer';
+          await emailService.sendVolunteerAllPoliciesEmail({
+            to: boardMemberData.email,
+            recipientName,
+            organizationName: org.name || 'Your Organization',
+            policies: policiesWithLinks,
+          });
+          logInfo('Volunteer all-policies digest email sent', {
+            boardMemberId: boardMember._id,
+            policyCount: policiesWithLinks.length,
+            orgId,
+          });
+        }
+      } catch (err) {
+        logError('Failed to send volunteer all-policies digest email', err, {
+          boardMemberId: boardMember._id,
+          orgId,
+        });
+      }
+    })();
   }
 
   // Manual mode: create user with password directly (no invite email)

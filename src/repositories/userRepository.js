@@ -79,6 +79,11 @@ const createUserSchema = () => {
       password_reset_token: { type: String, default: null },
       password_reset_expires: { type: Date, default: null },
 
+      is_auditor: {
+        type: Boolean,
+        default: false,
+        index: true
+      },
       // Audit: who created this user (admin invite/manual create) or self (set to own id)
       created_by: {
         type: mongoose.Schema.Types.ObjectId,
