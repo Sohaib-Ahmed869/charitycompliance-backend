@@ -7,7 +7,7 @@ import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { validate } from '../../middleware/validation.js';
 import { body, param, query } from 'express-validator';
 import * as projectDeliveryController from '../../controllers/projectDeliveryController.js';
-import { uploadMultiple, handleUploadError } from '../../middleware/upload.js';
+import { uploadMultiple, uploadProjectUpdateFiles, handleUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
 
@@ -125,7 +125,7 @@ router.post(
 // Multipart upload for project updates (avoids base64 JSON payloads)
 router.post(
   '/:projectId/updates/upload',
-  uploadMultiple,
+  uploadProjectUpdateFiles,
   handleUploadError,
   [
     param('projectId').isMongoId().withMessage('Invalid projectId'),

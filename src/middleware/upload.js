@@ -182,6 +182,12 @@ export const handlePolicyUploadError = (err, req, res, next) => {
  */
 export const uploadMultiple = upload.array('files', 10); // Max 10 files
 
+export const uploadProjectUpdateFiles = upload.fields([
+  { name: 'files', maxCount: 10 },
+  { name: 'media_report_files', maxCount: 10 },
+  { name: 'media_files', maxCount: 10 }
+]);
+
 /**
  * Middleware for acknowledgement file uploads
  * Allows up to 10 files (PDF, Word, images) - 10MB max each
