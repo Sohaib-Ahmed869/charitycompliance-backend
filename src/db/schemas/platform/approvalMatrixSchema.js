@@ -21,6 +21,7 @@ const approvalRuleSchema = new mongoose.Schema({
       'donation_agreement',
       'donation_milestone',
       'social_media_campaign',
+      'social_media_campaign_compliance',
       'contract',
       'leave',
       'hr',
@@ -32,6 +33,9 @@ const approvalRuleSchema = new mongoose.Schema({
       'partner_vetting',
       'funding_agreement',
       'project',
+      // Project delivery & post-approval flows
+      'project_delivery',          // delivery completion / handoff
+      'project_delivery_changes',  // extra expenses, refunds (thresholded)
       'emergency',
       // legacy
       'policy_approval',
@@ -112,6 +116,9 @@ const approvalMatrixSchema = new mongoose.Schema({
       'donation_agreement_workflow',
       'donation_milestone_workflow',
       'social_media_campaign_workflow',
+      // Project delivery & post-approval flows
+      'project_delivery',
+      'project_delivery_changes',
       'emergency',
       'other'
     ],
@@ -218,6 +225,8 @@ const getCategoryDisplayName = (category) => {
     donation_agreement_workflow: 'Donation Funding Agreements',
     donation_milestone_workflow: 'Donation Milestones',
     social_media_campaign_workflow: 'Social Media Campaigns',
+    project_delivery: 'Project Delivery',
+    project_delivery_changes: 'Project Delivery Changes',
     hr_approval: 'HR Approval',
     emergency: 'Emergency Response'
   };

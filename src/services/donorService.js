@@ -24,9 +24,35 @@ export class DonorService {
     this.refundRepo = new DonorRefundRepository(tenantDb);
   }
 
+  _normalizeDigits(value) {
+    return String(value || '').replace(/[^\d]/g, '');
+  }
+
+  _isValidAbn(abnRaw) {
+    const abn = this._normalizeDigits(abnRaw);
+    if (!abn) return true; // optional field
+    // Requirement: only validate that ABN is 11 digits (no checksum enforcement)
+    return abn.length === 11;
+  }
+
   async createDonor(payload, submittedBy) {
     if (!payload?.name) {
       throw new AppError('Donor name is required', 400, 'VALIDATION_ERROR');
+    }
+
+    const contactName = String(payload?.primary_contact?.name || '').trim();
+    const contactEmail = String(payload?.primary_contact?.email || '').trim();
+    const contactPhone = String(payload?.primary_contact?.phone || '').trim();
+    if (!contactName || !contactEmail || !contactPhone) {
+      throw new AppError(
+        'Primary contact name, email, and phone are required',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+
+    if (payload.abn_acn && !this._isValidAbn(payload.abn_acn)) {
+      throw new AppError('ABN must be exactly 11 digits', 400, 'INVALID_ABN');
     }
 
     const sizeToAmountMap = {
@@ -37,19 +63,32 @@ export class DonorService {
     const donorSize = payload.size || 'small';
     const expectedAmount = sizeToAmountMap[donorSize] || 1;
 
-    const donor = await this.repo.create({
-      ...payload,
-      org_id: this.orgId,
-      size: donorSize,
-      expected_annual_donation: expectedAmount
-    });
-
     try {
       const workflowService = new ApprovalWorkflowService(this.orgId);
-      await workflowService.createDonorApprovalRequest(donor._id.toString(), submittedBy);
+      const orgObjectId = await workflowService._getOrgObjectId();
+
+      // Pre-flight check: if no matching rule/matrix exists, FAIL and do not create donor.
+      await workflowService.findMatchingRule('donor', expectedAmount, orgObjectId);
+
+      const donor = await this.repo.create({
+        ...payload,
+        org_id: this.orgId,
+        size: donorSize,
+        expected_annual_donation: expectedAmount
+      });
+
+      try {
+        await workflowService.createDonorApprovalRequest(donor._id.toString(), submittedBy);
+      } catch (err) {
+        // Rollback donor if workflow creation fails for any reason
+        try { await this.repo.deleteById(donor._id); } catch { /* ignore */ }
+        throw err;
+      }
+
+      return donor;
     } catch (err) {
       console.error('Failed to create donor approval workflow:', {
-        donorId: donor._id,
+        donorId: '(not created)',
         size: donorSize,
         submittedBy,
         error: err.message,
@@ -57,8 +96,6 @@ export class DonorService {
       });
       throw err;
     }
-
-    return donor;
   }
 
   async listDonors(filters = {}) {

@@ -25,6 +25,11 @@ const donorSchema = new mongoose.Schema({
     enum: ['individual', 'corporate', 'foundation', 'government', 'other'],
     default: 'other'
   },
+  vip: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
   abn_acn: {
     type: String,
     trim: true

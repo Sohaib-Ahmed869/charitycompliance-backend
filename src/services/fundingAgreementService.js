@@ -135,13 +135,19 @@ export class FundingAgreementService {
       throw new AppError('Agreement PDF attachment is required before requesting partner signature', 400, 'AGREEMENT_ATTACHMENT_REQUIRED');
     }
 
-    if (agreement?.internal_signature?.signed_at) {
-      throw new AppError('Funding agreement is already signed internally', 409, 'AGREEMENT_ALREADY_SIGNED_INTERNAL');
+    const alreadySignedInternally = !!agreement?.internal_signature?.signed_at;
+    const alreadySignedByPartner = !!agreement?.partner_signature?.signed_at;
+    if (alreadySignedByPartner) {
+      throw new AppError('Funding agreement is already signed by partner', 409, 'AGREEMENT_ALREADY_SIGNED_PARTNER');
     }
 
     const resolvedPartnerEmail = String(partner_email || agreement.partner_email || '').trim().toLowerCase();
     if (!resolvedPartnerEmail) {
       throw new AppError('Partner email is required to request partner signature', 400, 'PARTNER_EMAIL_REQUIRED');
+    }
+
+    if (!alreadySignedInternally && !String(signature_data || '').trim()) {
+      throw new AppError('Signature is required', 400, 'SIGNATURE_REQUIRED');
     }
 
     // Generate (or refresh) partner signing token
@@ -154,18 +160,30 @@ export class FundingAgreementService {
       String(user?.name || '').trim() ||
       'Internal user';
 
-    const updated = await repo.update(agreementId, {
+    const patch = {
       partner_email: resolvedPartnerEmail,
-      internal_signature: {
+      partner_sign_token: token,
+      partner_sign_token_expires_at: expiresAt,
+    };
+
+    // First-time internal signing: capture signature & notes.
+    // Re-send: keep the existing signature; optionally update notes if provided.
+    if (!alreadySignedInternally) {
+      patch.internal_signature = {
         signed_at: new Date(),
         signed_by_user_id: user?._id || user?.userId || null,
         signer_name: signerName,
         signature_data: signature_data,
         notes: String(notes || '').trim()
-      },
-      partner_sign_token: token,
-      partner_sign_token_expires_at: expiresAt
-    });
+      };
+    } else if (notes != null) {
+      patch.internal_signature = {
+        ...agreement.internal_signature,
+        notes: String(notes || '').trim()
+      };
+    }
+
+    const updated = await repo.update(agreementId, patch);
 
     const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const publicToken = `${this.orgId}.${token}`;

@@ -137,7 +137,28 @@ export class ApprovalWorkflowService {
     let selectedMatrix = null;
     let selectedRule = null;
 
-    for (const matrix of matrices) {
+    // Some workflows are tiered by workflow_type (e.g. donor_review: small/medium/large).
+    // In those cases we should prefer a matrix whose workflow_type matches the tier.
+    const desiredWorkflowType = (() => {
+      if (normalizedActionType === 'donor') {
+        const n = Number(amount || 0);
+        if (n === 1) return 'small';
+        if (n === 2) return 'medium';
+        if (n === 3) return 'large';
+        return null;
+      }
+      return null;
+    })();
+    const desiredCategory = normalizedActionType === 'donor' ? 'donor_review' : null;
+    const matricesToSearch =
+      desiredWorkflowType && desiredCategory
+        ? [
+            ...matrices.filter((m) => m?.workflow_category === desiredCategory && m?.workflow_type === desiredWorkflowType),
+            ...matrices
+          ]
+        : matrices;
+
+    for (const matrix of matricesToSearch) {
       for (const rule of matrix.rules) {
         if (!rule.is_active) continue;
         if (this._normalizeActionType(rule.action_type) !== normalizedActionType) continue;
@@ -385,6 +406,43 @@ export class ApprovalWorkflowService {
     const approvalRequest = await approvalRequestRepo.create({
       org_id: orgObjectId,
       request_type: 'social_media_campaign',
+      entity_id: campaignId,
+      entity_type: 'social_media_campaign',
+      amount: amount || 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Create approval request for a social media campaign compliance check (post-publication).
+   * action_type: social_media_campaign_compliance
+   */
+  async createSocialMediaCampaignComplianceRequest(campaignId, submittedBy, amount) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const { matrix, rule } = await this.findMatchingRule('social_media_campaign_compliance', amount || 0, orgObjectId);
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'social_media_campaign_compliance',
       entity_id: campaignId,
       entity_type: 'social_media_campaign',
       amount: amount || 0,

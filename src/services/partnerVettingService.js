@@ -53,6 +53,16 @@ export class PartnerVettingService {
     const orgId = await this._getOrgObjectId();
     const repo = new PartnerVettingRepository(tenantDb);
 
+    if (!String(data?.organization_name || '').trim()) {
+      throw new AppError('Organization name is required', 400, 'VALIDATION_ERROR');
+    }
+    const contactName = String(data?.contact?.name || data?.contact_name || '').trim();
+    const contactEmail = String(data?.contact?.email || data?.contact_email || '').trim();
+    const contactPhone = String(data?.contact?.phone || data?.contact_phone || '').trim();
+    if (!contactName || !contactEmail || !contactPhone) {
+      throw new AppError('Contact name, email, and phone are required', 400, 'VALIDATION_ERROR');
+    }
+
     const reviewDate = data.review_date
       ? new Date(data.review_date)
       : new Date(new Date().setFullYear(new Date().getFullYear() + 1));
@@ -66,9 +76,9 @@ export class PartnerVettingService {
       address: data.address || '',
       website: data.website || '',
       contact: {
-        name: data.contact?.name || data.contact_name || '',
-        email: data.contact?.email || data.contact_email || '',
-        phone: data.contact?.phone || data.contact_phone || ''
+        name: contactName,
+        email: contactEmail,
+        phone: contactPhone
       },
       status: data.status || 'pending',
       risk_rating: data.risk_rating || 'medium',

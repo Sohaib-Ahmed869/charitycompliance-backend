@@ -8,6 +8,7 @@ import { validate } from '../../middleware/validation.js';
 import { body, param, query } from 'express-validator';
 import * as projectDeliveryController from '../../controllers/projectDeliveryController.js';
 import { uploadMultiple, uploadProjectUpdateFiles, handleUploadError } from '../../middleware/upload.js';
+import { requirePermission } from '../../middleware/rbac.js';
 
 const router = express.Router();
 
@@ -50,6 +51,7 @@ router.post(
 
 // Internal endpoints (auth required)
 router.use(authAndResolveTenant);
+router.use(requirePermission('module:grants_donors:edit'));
 
 router.post(
   '/:projectId/progress-reports/initiate',

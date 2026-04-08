@@ -79,9 +79,44 @@ export const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => 
 
     // Known sidebar modules - used for defaults when module_permissions is empty
     const MODULE_IDS = [
-      'dashboard', 'calendar', 'meetings', 'approval_workflow', 'audit_trail', 'complaints',
-      'charity_admin', 'charity_admin_registrations', 'charity_admin_responsible_people', 'charity_admin_governing_docs', 'charity_admin_approval_thresholds',
-      'policies', 'human_resources', 'financial_mgmt', 'risk_mgmt', 'programs', 'grants_donors', 'reporting', 'systems_legal', 'donation_boxes'
+      // Core navigation
+      'dashboard',
+      'calendar',
+      'meetings',
+      'approval_workflow',
+      'audit_trail',
+      'complaints',
+
+      // Charity Administration (and submodules)
+      'charity_admin',
+      'charity_admin_registrations',
+      'charity_admin_responsible_people',
+      'charity_admin_governing_docs',
+      'charity_admin_approval_thresholds',
+
+      // Governance + operations
+      'policies',
+      'human_resources',
+      'financial_mgmt',
+      'donation_boxes',
+      'risk_mgmt',
+
+      // Funding + marketing
+      'programs',
+      'grants_donors',
+      'social_media_campaigns',
+
+      // Reporting
+      'reporting',
+
+      // Systems & Compliance (and submodules)
+      'systems_legal',
+      'bcp',
+      'asset_mgmt',
+      'legal_docs',
+
+      // Support
+      'support_tickets',
     ];
 
     // Fixed modules: dashboard & audit_trail (view only), approval_workflow & human_resources (view+edit)

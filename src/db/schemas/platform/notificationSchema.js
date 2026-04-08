@@ -39,6 +39,8 @@ const notificationSchema = new mongoose.Schema({
       'complaint_escalated',
       // Registration & Licenses
       'registration_license_expiry_reminder',
+      // Training
+      'training_assigned',
       // Grants & Donors
       'project_deadline_required',
       // Project handoff / delivery

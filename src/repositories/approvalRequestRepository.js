@@ -95,6 +95,7 @@ export class ApprovalRequestRepository {
     // Use $elemMatch to ensure all conditions apply to the SAME array element
     const orConditions = [
       {
+        status: { $in: ['pending', 'paused_for_coi'] },
         approval_steps: {
           $elemMatch: {
             approver_user_id: userId,
@@ -108,6 +109,7 @@ export class ApprovalRequestRepository {
     // This ensures position holders see approvals even when a different user was pre-assigned
     if (positionIds && positionIds.length > 0) {
       orConditions.push({
+        status: { $in: ['pending', 'paused_for_coi'] },
         approval_steps: {
           $elemMatch: {
             approver_position_id: { $in: positionIds },
