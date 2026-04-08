@@ -454,7 +454,7 @@ export const regenerateVolunteerActionLinks = asyncHandler(async (req, res) => {
     generated_at: new Date(),
   };
 
-  await boardMemberRepo.updateById(boardMemberId, {
+  await boardMemberRepo.update(boardMemberId, {
     volunteer_action_links: actionLinks,
   });
 
