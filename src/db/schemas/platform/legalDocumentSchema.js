@@ -65,6 +65,19 @@ const legalDocumentSchema = new mongoose.Schema({
   review_date: {
     type: Date
   },
+  contract_details: {
+    subtype: {
+      type: String,
+      enum: ['public_liability', 'professional_indemnity', 'd_and_o', 'workers_comp', 'property', 'cyber', 'volunteer'],
+      default: null
+    },
+    provider: { type: String, trim: true, default: '' },
+    policy_number: { type: String, trim: true, default: '' },
+    coverage_details: { type: String, trim: true, default: '' },
+    premium_amount: { type: Number, default: null },
+    renewal_frequency: { type: String, trim: true, default: '' },
+    renewal_notes: { type: String, trim: true, default: '' }
+  },
   owner_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -94,6 +107,7 @@ const legalDocumentSchema = new mongoose.Schema({
 
 legalDocumentSchema.index({ org_id: 1, status: 1 });
 legalDocumentSchema.index({ org_id: 1, category: 1 });
+legalDocumentSchema.index({ org_id: 1, category: 1, 'contract_details.subtype': 1 });
 legalDocumentSchema.index({ org_id: 1, created_at: -1 });
 
 export default legalDocumentSchema;

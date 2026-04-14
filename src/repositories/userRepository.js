@@ -79,11 +79,6 @@ const createUserSchema = () => {
       password_reset_token: { type: String, default: null },
       password_reset_expires: { type: Date, default: null },
 
-      is_auditor: {
-        type: Boolean,
-        default: false,
-        index: true
-      },
       // Audit: who created this user (admin invite/manual create) or self (set to own id)
       created_by: {
         type: mongoose.Schema.Types.ObjectId,
@@ -134,29 +129,30 @@ export class UserRepository {
   }
 
   async listActiveUsers(excludeUserId) {
-    const query = { status: 'active' };
+    const query = {
+      status: 'active',
+      $or: [
+        { is_auditor: { $exists: false } },
+        { is_auditor: false }
+      ]
+    };
     if (excludeUserId) {
       query._id = { $ne: excludeUserId };
     }
     return this.User.find(query)
-      .select('first_name last_name email status profile_picture_key')
+      .select('first_name last_name email status profile_picture_key is_auditor')
       .sort({ first_name: 1, last_name: 1 })
       .exec();
   }
 
   async update(userId, updateData) {
-    if (updateData && Object.prototype.hasOwnProperty.call(updateData, 'email')) {
-      const doc = await this.User.findById(userId);
-      if (!doc) return null;
-      for (const key of Object.keys(updateData)) {
-        doc.set(key, updateData[key]);
-      }
-      await doc.save();
-      return await this.User.findById(userId);
+    const data = { ...(updateData || {}) };
+    if (Object.prototype.hasOwnProperty.call(data, 'email') && data.email) {
+      data.email_hash = this.createEmailHash(data.email);
     }
     return this.User.findByIdAndUpdate(
       userId,
-      { $set: updateData },
+      { $set: data },
       { new: true, runValidators: true }
     );
   }

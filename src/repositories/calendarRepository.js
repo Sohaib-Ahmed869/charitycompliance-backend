@@ -29,6 +29,8 @@ export class CalendarRepository {
     this.Document = tenantDb.models.Document || tenantDb.model('Document', documentSchema);
     this.Meeting = tenantDb.models.Meeting || tenantDb.model('Meeting', meetingSchema);
     this.LegalDocument = tenantDb.models.LegalDocument || tenantDb.model('LegalDocument', legalDocumentSchema);
+    this.itRegisterCollection = tenantDb.collection('it_register');
+    this.legacyPhysicalLocationsCollection = tenantDb.collection('physical_storage_locations');
   }
 
   /**
@@ -270,7 +272,7 @@ export class CalendarRepository {
       org_id: orgIdObj,
       status: { $in: ['submitted', 'approved'] },
       expiry_date: { $exists: true, $ne: null },
-      category: { $in: ['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'registration_license'] }
+      category: { $in: ['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'registration_license', 'licences_permits'] }
     };
 
     if (options.start_date || options.end_date) {
@@ -434,6 +436,56 @@ export class CalendarRepository {
       .select('_id title date duration_minutes location meeting_link meeting_type status attendees')
       .sort({ date: 1 })
       .lean();
+  }
+
+  async findPhysicalRecordReviewEvents(orgId, options = {}) {
+    const dateQuery = {};
+    if (options.start_date) dateQuery.$gte = new Date(options.start_date);
+    if (options.end_date) dateQuery.$lte = new Date(options.end_date);
+    const itRegister = await this.itRegisterCollection.findOne({ org_id: orgId });
+    let rows = Array.isArray(itRegister?.physical_locations) ? itRegister.physical_locations : [];
+    if (!rows.length) {
+      rows = await this.legacyPhysicalLocationsCollection.find({ org_id: orgId }).toArray();
+    }
+    const events = [];
+    for (const row of rows) {
+      const nextAudit = row.nextAuditDue || row.next_audit_due || null;
+      const lastAudit = row.lastAuditDate || row.last_audit_date || null;
+      const retentionEnd = row.retentionEndDate || row.retention_end_date || null;
+      if (nextAudit || lastAudit) {
+        const dueDate = nextAudit || (() => {
+          const d = new Date(lastAudit);
+          if (Number.isNaN(d.getTime())) return null;
+          return new Date(d.getFullYear() + 1, d.getMonth(), d.getDate());
+        })();
+        if (dueDate) {
+          events.push({
+            _id: row._id,
+            title: `${row.name || row.location_name || 'Record Location'} - Audit Review Due`,
+            date: dueDate,
+            description: 'Physical record keeping audit review',
+            event_type: 'audit_due'
+          });
+        }
+      }
+      if (retentionEnd) {
+        events.push({
+          _id: row._id,
+          title: `${row.name || row.location_name || 'Record Location'} - Retention End`,
+          date: retentionEnd,
+          description: 'Record retention period is approaching end',
+          event_type: 'retention_end'
+        });
+      }
+    }
+    if (!Object.keys(dateQuery).length) return events;
+    return events.filter((e) => {
+      const d = new Date(e.date);
+      if (Number.isNaN(d.getTime())) return false;
+      if (dateQuery.$gte && d < dateQuery.$gte) return false;
+      if (dateQuery.$lte && d > dateQuery.$lte) return false;
+      return true;
+    });
   }
 
   /**

@@ -655,31 +655,9 @@ class EmailService {
     return this.sendEmail({ to, subject, html });
   }
 
-  /**
-   * Send internal training assignment email (org users: staff/board members).
-   */
-  async sendInternalTrainingAssignedEmail({ to, recipientName, trainingTitle }) {
-    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const subject = `Training assigned: ${trainingTitle}`;
-    const bodyHtml = `
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName || 'there'},</p>
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">A training has been assigned to you: <strong>${trainingTitle}</strong>.</p>
-      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Please open your dashboard and complete it.</p>
-    `;
-    const html = buildEmailTemplate({
-      heading: 'Training Assigned',
-      bodyHtml,
-      buttonText: 'Open My Training',
-      buttonLink: `${baseUrl}/human-resources/my-training`,
-      infoBoxLines: ['This training is tracked for compliance reporting.'],
-    });
-    return this.sendEmail({ to, subject, html });
-  }
-
-  async sendVolunteerPolicyNotification({ to, recipientName, policyTitle, policyId, acknowledgeUrl }) {
+  async sendVolunteerPolicyNotification({ to, recipientName, policyTitle, policyId }) {
     const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
     const subject = `Policy update for acknowledgement: ${policyTitle}`;
-    const link = acknowledgeUrl || `${baseUrl}/policies/acknowledge/${policyId}`;
     const bodyHtml = `
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName || 'Volunteer'},</p>
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">A policy relevant to you has been added or updated: <strong>${policyTitle}</strong>.</p>
@@ -689,61 +667,9 @@ class EmailService {
       heading: 'Policy Acknowledgement Required',
       bodyHtml,
       buttonText: 'Review Policy',
-      buttonLink: link,
+      buttonLink: `${baseUrl}/policies/acknowledge/${policyId}`,
       infoBoxLines: ['Your acknowledgement is tracked for compliance reporting.'],
     });
-    return this.sendEmail({ to, subject, html });
-  }
-
-  /**
-   * Send a digest email listing ALL active policies to a newly created volunteer.
-   * Each policy gets its own acknowledge link.
-   * @param {Object} params
-   * @param {string} params.to - Volunteer email
-   * @param {string} params.recipientName - Volunteer name
-   * @param {string} params.organizationName - Org name
-   * @param {Array<{title: string, acknowledgeUrl: string}>} params.policies - Active policies with their acknowledge URLs
-   */
-  async sendVolunteerAllPoliciesEmail({ to, recipientName, organizationName, policies }) {
-    if (!policies || policies.length === 0) return;
-
-    const subject = `${organizationName} - Policies requiring your acknowledgement`;
-
-    const policyRows = policies
-      .map(
-        (p) =>
-          `<tr>
-            <td style="padding: 8px 12px; font-size: 12px; color: #333333; border-bottom: 1px solid #E5E7EB;">${p.title}</td>
-            <td style="padding: 8px 12px; text-align: right; border-bottom: 1px solid #E5E7EB;">
-              <a href="${p.acknowledgeUrl}" style="color: #2563EB; font-size: 12px; text-decoration: none; font-weight: 600;">Review &amp; Acknowledge</a>
-            </td>
-          </tr>`
-      )
-      .join('');
-
-    const bodyHtml = `
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName || 'Volunteer'},</p>
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Welcome to <strong>${organizationName}</strong>! The following <strong>${policies.length}</strong> ${policies.length === 1 ? 'policy requires' : 'policies require'} your review and acknowledgement:</p>
-      <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 16px 0; border: 1px solid #E5E7EB; border-radius: 8px; overflow: hidden;">
-        <tr style="background: #F8FAFC;">
-          <th style="padding: 10px 12px; font-size: 12px; color: #0F172A; font-weight: 600; text-align: left; border-bottom: 1px solid #E5E7EB;">Policy</th>
-          <th style="padding: 10px 12px; font-size: 12px; color: #0F172A; font-weight: 600; text-align: right; border-bottom: 1px solid #E5E7EB;">Action</th>
-        </tr>
-        ${policyRows}
-      </table>
-    `;
-
-    const html = buildEmailTemplate({
-      heading: 'Policies Awaiting Acknowledgement',
-      bodyHtml,
-      buttonText: 'Open Dashboard',
-      buttonLink: process.env.FRONTEND_URL || 'http://localhost:5173',
-      infoBoxLines: [
-        'Please review each policy carefully before acknowledging.',
-        'Your acknowledgement is tracked for compliance reporting.',
-      ],
-    });
-
     return this.sendEmail({ to, subject, html });
   }
 

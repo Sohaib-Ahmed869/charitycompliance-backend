@@ -198,12 +198,36 @@ router.post(
       .optional()
       .isMongoId()
       .withMessage('Invalid reviewer user ID'),
+    body('payment_co_signatory_id')
+      .optional()
+      .isMongoId()
+      .withMessage('Invalid co-signatory user ID'),
     body()
       .custom((value) => {
         const hasLegacy = !!value?.assigned_to;
-        const hasTeam = !!value?.payment_processor_id && !!value?.payment_reviewer_id;
+        const hasTeam =
+          !!value?.payment_processor_id &&
+          !!value?.payment_reviewer_id &&
+          !!value?.payment_co_signatory_id;
+        const hasPartialTeam =
+          !!value?.payment_processor_id ||
+          !!value?.payment_reviewer_id ||
+          !!value?.payment_co_signatory_id;
         if (!hasLegacy && !hasTeam) {
-          throw new Error('Either assigned_to or both payment_processor_id and payment_reviewer_id are required');
+          if (hasPartialTeam) {
+            throw new Error(
+              'Payment team requires payment_processor_id, payment_reviewer_id (signing officer), and payment_co_signatory_id'
+            );
+          }
+          throw new Error('Either assigned_to or the full payment team (processor, co-signatory, signing officer) is required');
+        }
+        if (hasTeam) {
+          const a = String(value.payment_processor_id);
+          const b = String(value.payment_reviewer_id);
+          const c = String(value.payment_co_signatory_id);
+          if (new Set([a, b, c]).size !== 3) {
+            throw new Error('Processor, co-signatory, and signing officer must be different users');
+          }
         }
         return true;
       })
@@ -245,7 +269,11 @@ router.post(
     body('payments.*.amount')
       .optional()
       .isFloat({ min: 0 })
-      .withMessage('Payment amount must be a positive number')
+      .withMessage('Payment amount must be a positive number'),
+    body('payment_compliance')
+      .optional()
+      .isObject()
+      .withMessage('payment_compliance must be an object')
   ],
   validate,
   expenseController.submitPaymentsForReview
@@ -260,9 +288,18 @@ router.post(
       .withMessage('Invalid expense ID'),
     body('action')
       .optional()
-      .isIn(['accept', 'request_changes'])
+      .isIn([
+        'accept',
+        'request_changes',
+        'approve_co',
+        'approve_final',
+        'return_to_processor'
+      ])
       .withMessage('Invalid action'),
     body('review_notes')
+      .optional()
+      .trim(),
+    body('comment')
       .optional()
       .trim(),
     body('signature_data')

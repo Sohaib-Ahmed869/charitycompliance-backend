@@ -48,6 +48,8 @@ const REQUEST_TYPE_LABELS = {
   policy: 'Policy',
   policy_approval: 'Policy Approval',
   document_approval: 'Document Approval',
+  financial_reporting: 'Financial Reporting',
+  bas_lodgement: 'BAS lodgement',
   hr: 'HR',
   other: 'Approval Request',
 };
@@ -61,6 +63,8 @@ const GOVERNANCE_LABELS = {
   partner_vetting: 'Grants & Funders',
   grant: 'Grants & Funders',
   policy: 'Policies & Procedures',
+  financial_reporting: 'Financial Controls',
+  bas_lodgement: 'Financial Controls',
   hr: 'Human Resources',
   other: 'Compliance',
 };

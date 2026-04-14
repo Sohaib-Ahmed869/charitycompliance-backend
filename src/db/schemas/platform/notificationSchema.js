@@ -55,7 +55,11 @@ const notificationSchema = new mongoose.Schema({
       'reminder_overdue',
       'reminder_meeting',
       'reminder_escalated_dept_head',
-      'reminder_escalated_board'
+      'reminder_escalated_board',
+      /** Fiscal report due dates (monthly / financial year) */
+      'fiscal_report_reminder',
+      /** Fiscal report or BAS document needs re-upload after decline (includes reason in message) */
+      'document_resubmission_required'
     ],
     required: true,
     index: true

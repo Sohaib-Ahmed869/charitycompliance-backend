@@ -151,12 +151,19 @@ export const assignExpense = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const userId = req.user.userId;
   const { expenseId } = req.params;
-  const { assigned_to, payment_processor_id, payment_reviewer_id } = req.body;
+  const { assigned_to, payment_processor_id, payment_reviewer_id, payment_co_signatory_id } = req.body;
 
   const expenseService = new ExpenseService(orgId);
-  const expense = (payment_processor_id && payment_reviewer_id)
-    ? await expenseService.assignPaymentTeam(expenseId, payment_processor_id, payment_reviewer_id, userId)
-    : await expenseService.assignExpense(expenseId, assigned_to, userId);
+  const expense =
+    payment_processor_id && payment_reviewer_id && payment_co_signatory_id
+      ? await expenseService.assignPaymentTeam(
+          expenseId,
+          payment_processor_id,
+          payment_reviewer_id,
+          payment_co_signatory_id,
+          userId
+        )
+      : await expenseService.assignExpense(expenseId, assigned_to, userId);
 
   res.json({
     success: true,

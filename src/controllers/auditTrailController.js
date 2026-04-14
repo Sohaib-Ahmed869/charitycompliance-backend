@@ -30,6 +30,8 @@ import projectRegisterSchema from '../db/schemas/platform/projectRegisterSchema.
 import assetSchema from '../db/schemas/platform/assetSchema.js';
 import supportTicketSchema from '../db/schemas/platform/supportTicketSchema.js';
 import approvalThresholdSchema from '../db/schemas/platform/approvalThresholdSchema.js';
+import offboardingRequestSchema from '../db/schemas/platform/offboardingRequestSchema.js';
+import accessChangeLogSchema from '../db/schemas/platform/accessChangeLogSchema.js';
 import { decrypt, isEncrypted } from '../utils/encryption.js';
 import { getMasterKeyHex } from '../config/encryption.js';
 import { decryptBoardMemberFields } from '../utils/decryptBoardMember.js';
@@ -146,6 +148,8 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
   const Asset = tenantDb.models.Asset || tenantDb.model('Asset', assetSchema);
   const SupportTicket = tenantDb.models.SupportTicket || tenantDb.model('SupportTicket', supportTicketSchema);
   const ApprovalThreshold = tenantDb.models.ApprovalThreshold || tenantDb.model('ApprovalThreshold', approvalThresholdSchema);
+  const OffboardingRequest = tenantDb.models.OffboardingRequest || tenantDb.model('OffboardingRequest', offboardingRequestSchema);
+  const AccessChangeLog = tenantDb.models.AccessChangeLog || tenantDb.model('AccessChangeLog', accessChangeLogSchema);
   // Register User model (tenant)
   new UserRepository(tenantDb);
   const User = tenantDb.models.User;
@@ -1254,6 +1258,105 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
           source: 'project_refund'
         }));
       }
+    });
+  } catch (_) {
+    // Ignore audit enrichment failures
+  }
+
+  // ── Offboarding + access-change logs ──────────────────────────────────────
+  try {
+    const [offboardingRows, accessRows] = await Promise.all([
+      OffboardingRequest.find({ org_id: org?._id })
+        .populate('initiated_by', 'first_name last_name email is_org_owner')
+        .populate('user_id', 'first_name last_name email is_org_owner')
+        .lean(),
+      AccessChangeLog.find({ org_id: org?._id })
+        .populate('changed_by', 'first_name last_name email is_org_owner')
+        .populate('user_id', 'first_name last_name email is_org_owner')
+        .lean()
+    ]);
+
+    (offboardingRows || []).forEach((reqDoc) => {
+      events.push(normalizeEvent({
+        id: `offboarding-init-${reqDoc._id}`,
+        timestamp: reqDoc.createdAt || reqDoc.created_at || new Date(),
+        actor: {
+          id: reqDoc.initiated_by?._id?.toString() || null,
+          name: toName(reqDoc.initiated_by),
+          role: toRole(reqDoc.initiated_by)
+        },
+        action: 'Offboarding initiated',
+        module: 'offboarding',
+        request_type: 'offboarding',
+        request_id: reqDoc._id?.toString(),
+        details: {
+          user_id: reqDoc.user_id?._id?.toString() || reqDoc.user_id?.toString() || null,
+          user_name: toName(reqDoc.user_id),
+          status: reqDoc.status
+        },
+        source: 'offboarding'
+      }));
+
+      (reqDoc.steps || []).forEach((s) => {
+        if (!s?.completed) return;
+        events.push(normalizeEvent({
+          id: `offboarding-step-${reqDoc._id}-${s._id}`,
+          timestamp: s.completed_at || reqDoc.updatedAt || new Date(),
+          actor: {
+            id: s.completed_by?.toString?.() || null,
+            name: s.completed_by ? 'Workflow actor' : 'System',
+            role: null
+          },
+          action: `Offboarding step completed: ${s.name}`,
+          module: 'offboarding',
+          request_type: 'offboarding',
+          request_id: reqDoc._id?.toString(),
+          details: {
+            notes: s.notes || '',
+            override_reason: s.override_reason || ''
+          },
+          source: 'offboarding'
+        }));
+      });
+
+      if (reqDoc.status === 'completed' && reqDoc.completed_at) {
+        events.push(normalizeEvent({
+          id: `offboarding-complete-${reqDoc._id}`,
+          timestamp: reqDoc.completed_at,
+          actor: {
+            id: reqDoc.initiated_by?._id?.toString() || null,
+            name: toName(reqDoc.initiated_by),
+            role: toRole(reqDoc.initiated_by)
+          },
+          action: 'Offboarding completed (access auto-disabled)',
+          module: 'offboarding',
+          request_type: 'offboarding',
+          request_id: reqDoc._id?.toString(),
+          details: {
+            user_id: reqDoc.user_id?._id?.toString() || reqDoc.user_id?.toString() || null,
+            user_name: toName(reqDoc.user_id)
+          },
+          source: 'offboarding'
+        }));
+      }
+    });
+
+    (accessRows || []).forEach((row) => {
+      events.push(normalizeEvent({
+        id: `access-log-${row._id}`,
+        timestamp: row.created_at || row.createdAt || new Date(),
+        actor: {
+          id: row.changed_by?._id?.toString() || row.changed_by?.toString?.() || null,
+          name: toName(row.changed_by),
+          role: toRole(row.changed_by)
+        },
+        action: row.action || 'Access changed',
+        module: row.module || 'offboarding',
+        request_type: 'access_change',
+        request_id: row._id?.toString(),
+        details: row.details || {},
+        source: 'access_change'
+      }));
     });
   } catch (_) {
     // Ignore audit enrichment failures

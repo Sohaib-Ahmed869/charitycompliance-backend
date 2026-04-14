@@ -27,6 +27,13 @@ router.post(
     body('effective_date').optional({ values: 'falsy' }).isISO8601().withMessage('Invalid date format'),
     body('expiry_date').optional({ values: 'falsy' }).isISO8601().withMessage('Invalid date format'),
     body('review_date').optional({ values: 'falsy' }).isISO8601().withMessage('Invalid date format'),
+    body('contract_details.subtype').optional({ values: 'falsy' }).isIn(['public_liability', 'professional_indemnity', 'd_and_o', 'workers_comp', 'property', 'cyber', 'volunteer']),
+    body('contract_details.provider').optional({ values: 'falsy' }).trim(),
+    body('contract_details.policy_number').optional({ values: 'falsy' }).trim(),
+    body('contract_details.coverage_details').optional({ values: 'falsy' }).trim(),
+    body('contract_details.premium_amount').optional({ values: 'falsy' }).isFloat({ min: 0 }),
+    body('contract_details.renewal_frequency').optional({ values: 'falsy' }).trim(),
+    body('contract_details.renewal_notes').optional({ values: 'falsy' }).trim(),
     body('owner_id').optional({ values: 'falsy' }).isMongoId().withMessage('Invalid owner ID')
   ],
   validate,
@@ -38,6 +45,7 @@ router.get(
   [
     query('status').optional().isIn(['active', 'expired', 'archived']),
     query('category').optional().isIn(['mou', 'sponsorship_agreement', 'contract', 'lease_agreement', 'grant_agreement', 'sla', 'ambassadors_insurance', 'other']),
+    query('contract_subtype').optional().isIn(['public_liability', 'professional_indemnity', 'd_and_o', 'workers_comp', 'property', 'cyber', 'volunteer']),
     query('search').optional().trim()
   ],
   validate,
@@ -64,6 +72,13 @@ router.put(
     body('effective_date').optional({ values: 'falsy' }).isISO8601(),
     body('expiry_date').optional({ values: 'falsy' }).isISO8601(),
     body('review_date').optional({ values: 'falsy' }).isISO8601(),
+    body('contract_details.subtype').optional({ values: 'falsy' }).isIn(['public_liability', 'professional_indemnity', 'd_and_o', 'workers_comp', 'property', 'cyber', 'volunteer']),
+    body('contract_details.provider').optional({ values: 'falsy' }).trim(),
+    body('contract_details.policy_number').optional({ values: 'falsy' }).trim(),
+    body('contract_details.coverage_details').optional({ values: 'falsy' }).trim(),
+    body('contract_details.premium_amount').optional({ values: 'falsy' }).isFloat({ min: 0 }),
+    body('contract_details.renewal_frequency').optional({ values: 'falsy' }).trim(),
+    body('contract_details.renewal_notes').optional({ values: 'falsy' }).trim(),
     body('owner_id').optional({ values: 'falsy' }).isMongoId()
   ],
   validate,

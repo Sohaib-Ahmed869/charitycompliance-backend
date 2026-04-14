@@ -545,6 +545,29 @@ export const updateComplaint = asyncHandler(async (req, res) => {
 
   logInfo('Complaint updated', { complaintId, orgId, updatedData: req.body });
 
+  // Notify assignee when complaint is assigned/changed
+  try {
+    const newAssignedTo = req.body?.assigned_to;
+    if (newAssignedTo) {
+      const prevAssignedTo = complaint.assigned_to?._id || complaint.assigned_to;
+      if (!prevAssignedTo || String(prevAssignedTo) !== String(newAssignedTo)) {
+        const notificationRepo = new NotificationRepository(tenantDb);
+        await notificationRepo.create({
+          user_id: newAssignedTo,
+          type: 'complaint_assigned',
+          title: 'Complaint assigned to you',
+          message: 'A complaint has been assigned to you for review and resolution.',
+          link: `/complaints/${complaintId}`,
+          related_entity_id: complaintId,
+          related_entity_type: 'complaint',
+          created_at: new Date()
+        });
+      }
+    }
+  } catch (err) {
+    logError('Failed to create complaint assignment notification', { error: err?.message, complaintId });
+  }
+
   res.json({
     success: true,
     data: updatedComplaint,
@@ -572,8 +595,9 @@ export const getComplaintsStats = asyncHandler(async (req, res) => {
   const isOrgOwner = user?.is_org_owner || false;
   const isAdmin = userRole === 'admin' || isOrgOwner;
 
-  // Complaints are workflow-driven; stats are not assignee-filtered.
-  const stats = await complaintRepo.getStats(org._id, null);
+  // Non-admin/org-owner users only see stats for their assigned complaints
+  const filterUserId = !isAdmin ? userId : null;
+  const stats = await complaintRepo.getStats(org._id, filterUserId);
 
   res.json({
     success: true,
@@ -1214,8 +1238,7 @@ export const workflowEscalate = asyncHandler(async (req, res) => {
 
   const fromStage = complaint.workflow_stage || 'admin_triage';
   const updated = await complaintRepo.updateWithOps(complaintId, {
-    // Complaints are workflow-driven; keep escalation history but do not assign ownership.
-    $set: { status: 'in_progress' },
+    $set: { assigned_to: to_user_id, status: 'assigned' },
     $push: {
       escalation_stack: {
         from_stage: fromStage,
@@ -1265,6 +1288,7 @@ export const workflowDeescalate = asyncHandler(async (req, res) => {
 
   const updated = await complaintRepo.updateWithOps(complaintId, {
     $set: {
+      assigned_to: null,
       status: 'in_progress',
       workflow_stage: lastOpen.from_stage || complaint.workflow_stage || 'admin_triage',
       'escalation_stack.$[e].resolved_at': new Date(),

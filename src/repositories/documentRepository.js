@@ -49,6 +49,27 @@ export class DocumentRepository {
     }).sort({ createdAt: -1 });
   }
 
+  /** Blocks duplicate upload while a fiscal report for the same period is in flight or approved. */
+  async findBlockingFiscalReport(orgObjectId, periodKey) {
+    if (!periodKey) return null;
+    return await this.Document.findOne({
+      org_id: orgObjectId,
+      category: 'fiscal_report',
+      'metadata.period_key': String(periodKey),
+      status: { $in: ['submitted', 'review_pending', 'approved', 'resubmission_required'] }
+    }).lean();
+  }
+
+  /** Any BAS period document for this quarter key (shell or lodged). */
+  async findBasPeriodByKey(orgObjectId, periodKey) {
+    if (!periodKey) return null;
+    return await this.Document.findOne({
+      org_id: orgObjectId,
+      category: 'bas_lodgement',
+      'metadata.period_key': String(periodKey)
+    }).lean();
+  }
+
   async findVersions(parentDocumentId) {
     return await this.Document.find({
       parent_document_id: parentDocumentId

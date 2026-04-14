@@ -6,6 +6,21 @@
 
 import mongoose from 'mongoose';
 
+const maintenanceChecklistItemSchema = new mongoose.Schema({
+  completed: { type: Boolean, default: false },
+  date: { type: Date, default: null },
+  person: { type: String, trim: true, default: '' },
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  updatedAt: { type: Date, default: null }
+}, { _id: false });
+
+const policyComplianceSchema = new mongoose.Schema({
+  privacyPolicyUpdated: { type: Boolean, default: false },
+  termsUpdated: { type: Boolean, default: false },
+  accessibilityChecked: { type: Boolean, default: false },
+  sslExpiry: { type: Date, default: null }
+}, { _id: false });
+
 const assetSchema = new mongoose.Schema({
   org_id: {
     type: String,
@@ -78,6 +93,47 @@ const assetSchema = new mongoose.Schema({
   },
   maintenance_date: {
     type: Date
+  },
+  maintenanceChecklist: {
+    backupVerified: { type: maintenanceChecklistItemSchema, default: () => ({}) },
+    softwareUpdated: { type: maintenanceChecklistItemSchema, default: () => ({}) },
+    accessReviewed: { type: maintenanceChecklistItemSchema, default: () => ({}) },
+    integrityChecked: { type: maintenanceChecklistItemSchema, default: () => ({}) },
+    securityAudit: { type: maintenanceChecklistItemSchema, default: () => ({}) }
+  },
+  maintenanceStatus: {
+    type: String,
+    enum: ['all_good', 'attention', 'overdue'],
+    default: 'attention',
+    index: true
+  },
+  websiteUrl: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  admin_name: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  admin_role: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  access_level: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  last_login: {
+    type: Date,
+    default: null
+  },
+  policyCompliance: {
+    type: policyComplianceSchema,
+    default: () => ({})
   },
   department_owner: {
     type: String,

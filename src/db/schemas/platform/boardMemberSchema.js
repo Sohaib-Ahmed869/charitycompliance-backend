@@ -160,6 +160,10 @@ const boardMemberSchema = new mongoose.Schema({
     enum: ['active', 'resigned', 'removed'],
     default: 'active'
   },
+  offboarded_at: {
+    type: Date,
+    default: null
+  },
   /** S3 key for profile/avatar image (shown in header and user lists) */
   profile_picture_key: {
     type: String,
