@@ -1,5 +1,9 @@
 import checklistTemplateSchema from '../db/schemas/platform/checklistTemplateSchema.js';
 
+function escapeRegex(text) {
+  return String(text || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 export class ChecklistTemplateRepository {
   constructor(tenantDb) {
     this.Template =
@@ -23,7 +27,10 @@ export class ChecklistTemplateRepository {
   async list(orgId, { type, module } = {}) {
     const q = { org_id: orgId };
     if (type) q.type = type;
-    if (module) q['metadata.module'] = String(module);
+    if (module) {
+      const normalizedModule = String(module).replace(/\+/g, ' ').trim();
+      q['metadata.module'] = { $regex: `^${escapeRegex(normalizedModule)}$`, $options: 'i' };
+    }
     return await this.Template.find(q).sort({ createdAt: -1 });
   }
 

@@ -25,6 +25,7 @@ const instanceItemSchema = new mongoose.Schema(
     description_snapshot: { type: String, trim: true },
     category_snapshot: { type: String, trim: true },
     type_snapshot: { type: String, enum: ['manual', 'auto'], default: 'manual' },
+    auto_rule_key_snapshot: { type: String, trim: true },
     required_evidence_snapshot: { type: String, enum: ['none', 'optional', 'required'], default: 'optional' },
     due_date: { type: Date },
 
