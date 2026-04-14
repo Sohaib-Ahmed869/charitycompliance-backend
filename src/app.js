@@ -21,8 +21,29 @@ const app = express();
 // ============================================
 
 // CORS Configuration
+const configuredOrigins = [
+  ...(String(process.env.CORS_ORIGIN || '').split(',').map((v) => v.trim()).filter(Boolean)),
+  ...(String(process.env.FRONTEND_URL || '').split(',').map((v) => v.trim()).filter(Boolean)),
+  'http://localhost:5173',
+  'http://localhost:5174',
+  'http://localhost:3000'
+];
+const allowedOrigins = Array.from(new Set(configuredOrigins));
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true; // non-browser or same-origin calls
+  const normalized = String(origin).trim().replace(/\/$/, '');
+  if (allowedOrigins.some((allowed) => normalized === String(allowed).replace(/\/$/, ''))) {
+    return true;
+  }
+  // Allow localhost on arbitrary dev ports to avoid repeated env churn.
+  if (/^https?:\/\/localhost(?::\d+)?$/i.test(normalized)) return true;
+  return false;
+};
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:5173','http://localhost:5174'],
+  origin: (origin, callback) => {
+    if (isAllowedOrigin(origin)) return callback(null, true);
+    return callback(new Error(`CORS blocked for origin: ${origin}`));
+  },
   credentials: true,
   optionsSuccessStatus: 200
 };
