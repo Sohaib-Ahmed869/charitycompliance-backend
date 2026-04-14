@@ -113,6 +113,16 @@ const partnerVettingSchema = new mongoose.Schema({
     review_date: { type: Date },
     notes: { type: String, trim: true }
   },
+  /** Data protection / GDPR-style due diligence (partner jurisdiction vs org home is flagged automatically). */
+  data_gdpr_compliance: {
+    backup_verified: { type: Boolean, default: false },
+    storage_location: { type: String, trim: true, default: '' },
+    gdpr_confirmed: { type: Boolean, default: false },
+    dpa_signed: { type: Boolean, default: false },
+    breach_process_confirmed: { type: Boolean, default: false },
+    /** Set by application layer from partner country vs organization address_country */
+    overseas_partner_auto: { type: Boolean, default: false }
+  },
   metadata: {
     type: mongoose.Schema.Types.Mixed
   }

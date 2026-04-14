@@ -45,6 +45,7 @@ export const getDocuments = asyncHandler(async (req, res) => {
   const filters = {
     status: req.query.status,
     category: req.query.category,
+    contract_subtype: req.query.contract_subtype,
     search: req.query.search
   };
 

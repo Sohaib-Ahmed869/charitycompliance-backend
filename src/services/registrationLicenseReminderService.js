@@ -15,7 +15,8 @@ import { BoardMemberRepository } from '../repositories/boardMemberRepository.js'
 import emailService from './emailService.js';
 import { logError, logInfo } from '../utils/logger.js';
 
-const DEFAULT_DAYS_BEFORE = [60, 30, 14, 7, 3, 1];
+/** Includes 90 / 60 / 30-day windows for licences & permits (governance) and registration licences. */
+const DEFAULT_DAYS_BEFORE = [90, 60, 30, 14, 7, 3, 1];
 const ESCALATION_HOD_DAYS_OVERDUE = 1;
 const ESCALATION_BOARD_DAYS_AFTER_HOD = 7;
 
@@ -157,12 +158,14 @@ export async function runRegistrationLicenseRemindersOnce() {
       tenantDb.models.Document || tenantDb.model('Document', docSchema);
       const Document = tenantDb.model('Document');
 
+      const licenceCategories = ['registration_license', 'licences_permits'];
+
       const docs = await Document.find({
         org_id: orgObjectId,
-        category: 'registration_license',
+        category: { $in: licenceCategories },
         status: { $in: ['submitted', 'approved'] },
         expiry_date: { $exists: true, $ne: null, $gte: today, $lte: end }
-      }).select('_id title document_type registration_number expiry_date uploaded_by').lean();
+      }).select('_id title document_type registration_number expiry_date uploaded_by category licence_type issuing_authority').lean();
 
       for (const doc of docs) {
         const expiry = startOfDay(doc.expiry_date);
@@ -170,10 +173,16 @@ export async function runRegistrationLicenseRemindersOnce() {
         if (!daysBeforeList.includes(daysUntil)) continue;
 
         const label = daysUntil === 0 ? 'today' : `in ${daysUntil} day${daysUntil === 1 ? '' : 's'}`;
-        const title = `${doc.title || doc.document_type || 'Registration/License'} expires ${label}`;
-        const docType = toTitleCase(doc.document_type || 'Registration/License');
+        const isGovLicence = doc.category === 'licences_permits';
+        const displayType = isGovLicence
+          ? (doc.licence_type || doc.document_type || 'Licence / Permit')
+          : (doc.document_type || 'Registration/License');
+        const title = `${doc.title || displayType} expires ${label}`;
+        const docType = toTitleCase(displayType);
         const msg = `${docType}${doc.registration_number ? ` (${doc.registration_number})` : ''} expires on ${formatDate(doc.expiry_date)}.`;
-        const link = `/charity-administration/registrations-licenses`;
+        const link = isGovLicence
+          ? '/charity-administration/documents?registerTab=licences'
+          : '/charity-administration/registrations-licenses';
 
         // Create a reminder event dated today (so it shows as a reminder before expiry)
         const eventDate = new Date(today);
@@ -247,18 +256,24 @@ export async function runRegistrationLicenseRemindersOnce() {
       overdueStart.setDate(overdueStart.getDate() - overdueLookbackDays);
       const overdueLicenses = await Document.find({
         org_id: orgObjectId,
-        category: 'registration_license',
+        category: { $in: licenceCategories },
         status: { $in: ['submitted', 'approved'] },
         expiry_date: { $exists: true, $ne: null, $gte: overdueStart, $lt: today }
-      }).select('_id title document_type registration_number expiry_date uploaded_by').lean();
+      }).select('_id title document_type registration_number expiry_date uploaded_by category licence_type').lean();
 
       for (const doc of overdueLicenses) {
         const due = startOfDay(doc.expiry_date);
         const daysUntil = Math.round((due - today) / 86400000); // negative when overdue
         const daysOverdue = -daysUntil;
-        const docType = toTitleCase(doc.document_type || 'Registration/License');
-        const baseTitle = doc.title || doc.document_type || 'Registration/License';
-        const link = `/charity-administration/registrations-licenses`;
+        const isGovLicenceOd = doc.category === 'licences_permits';
+        const displayTypeOd = isGovLicenceOd
+          ? (doc.licence_type || doc.document_type || 'Licence / Permit')
+          : (doc.document_type || 'Registration/License');
+        const docType = toTitleCase(displayTypeOd);
+        const baseTitle = doc.title || displayTypeOd;
+        const link = isGovLicenceOd
+          ? '/charity-administration/documents?registerTab=licences'
+          : '/charity-administration/registrations-licenses';
 
         // Notify responsible person (uploader) at 7d & 3d before expiry as well (in addition to general recipients).
         if ([7, 3].includes(Math.max(daysUntil, 0))) {

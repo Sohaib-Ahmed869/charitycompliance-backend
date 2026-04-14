@@ -27,7 +27,10 @@ const getCategoryDisplayName = (category) => {
     project_approval: 'Project Approval',
     expense_approval: 'Expense Approval',
     policy_approval: 'Policy Approval',
-    hr_approval: 'HR Approval'
+    hr_approval: 'HR Approval',
+    financial_reporting: 'Financial Reporting',
+    bas_lodgement: 'BAS lodgement',
+    sweep_funds_approval: 'Sweep Funds'
   };
   return categoryNames[category] || category;
 };
@@ -780,7 +783,11 @@ const ACTION_TYPE_MAP = {
   policy: 'policy',
   hr: 'hr',
   complaints: 'complaint',
-  complaint: 'complaint'
+  complaint: 'complaint',
+  financial_reporting: 'financial_reporting',
+  bas_lodgement: 'bas_lodgement'
+  ,
+  sweep_funds: 'sweep_funds'
 };
 
 const PRIORITY_LEVEL_MAP = { high: 3, medium: 2, low: 1 };
@@ -815,7 +822,7 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
     }
 
     // Single-workflow categories cannot have workflow_type
-    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'complaint_resolution'];
+    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'complaint_resolution', 'financial_reporting', 'bas_lodgement'];
     if (singleWorkflowCategories.includes(workflow_category) && workflow_type) {
       return res.status(400).json({
         success: false,
@@ -824,7 +831,7 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
     }
 
     // Financial workflows must have workflow_type
-    const financialCategories = ['funding_agreement', 'expense_approval', 'project_approval'];
+    const financialCategories = ['funding_agreement', 'expense_approval', 'project_approval', 'sweep_funds_approval'];
     if (financialCategories.includes(workflow_category) && (!workflow_type || !['petty_cash', 'low_cash', 'moderate_cash', 'high_cash'].includes(workflow_type))) {
       return res.status(400).json({
         success: false,
@@ -980,7 +987,7 @@ export const updateApprovalMatrix = asyncHandler(async (req, res) => {
     }
 
     // Single-workflow categories cannot have workflow_type
-    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval'];
+    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'complaint_resolution', 'financial_reporting', 'bas_lodgement'];
     if (singleWorkflowCategories.includes(categoryToValidate) && typeToValidate) {
       return res.status(400).json({
         success: false,
@@ -989,7 +996,7 @@ export const updateApprovalMatrix = asyncHandler(async (req, res) => {
     }
 
     // Financial workflows must have workflow_type
-    const financialCategories = ['funding_agreement', 'expense_approval', 'project_approval'];
+    const financialCategories = ['funding_agreement', 'expense_approval', 'project_approval', 'sweep_funds_approval'];
     if (financialCategories.includes(categoryToValidate) && (!typeToValidate || !['petty_cash', 'low_cash', 'moderate_cash', 'high_cash'].includes(typeToValidate))) {
       return res.status(400).json({
         success: false,

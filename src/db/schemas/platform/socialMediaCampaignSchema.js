@@ -112,6 +112,10 @@ const socialMediaCampaignSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  last_audit_date: {
+    type: Date,
+    default: null
+  },
   metadata: {
     type: mongoose.Schema.Types.Mixed
   }
@@ -123,6 +127,7 @@ const socialMediaCampaignSchema = new mongoose.Schema({
 socialMediaCampaignSchema.index({ org_id: 1, createdAt: -1 });
 socialMediaCampaignSchema.index({ org_id: 1, platform: 1 });
 socialMediaCampaignSchema.index({ org_id: 1, platforms: 1 });
+socialMediaCampaignSchema.index({ org_id: 1, last_audit_date: -1 });
 
 export default socialMediaCampaignSchema;
 

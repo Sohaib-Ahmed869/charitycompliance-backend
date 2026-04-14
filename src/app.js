@@ -92,11 +92,13 @@ import positionPermissionsRoutes from './routes/platform/positionPermissions.js'
 import notificationRoutes from './routes/platform/notificationRoutes.js';
 import partnerVettingRoutes from './routes/platform/partnerVettingRoutes.js';
 import donorRoutes from './routes/platform/donorRoutes.js';
+import fundingProgramRoutes from './routes/platform/fundingProgramRoutes.js';
 import projectRegisterRoutes from './routes/platform/projectRegisterRoutes.js';
 import fundingAgreementRoutes from './routes/platform/fundingAgreementRoutes.js';
 import assetRoutes from './routes/platform/assetRoutes.js';
 import coiRoutes from './routes/platform/coiRoutes.js';
 import auditTrailRoutes from './routes/platform/auditTrailRoutes.js';
+import reportingRoutes from './routes/platform/reportingRoutes.js';
 import approvalThresholdRoutes from './routes/platform/approvalThresholdRoutes.js';
 import userRoutes from './routes/platform/userRoutes.js';
 import complaintRoutes from './routes/platform/complaintRoutes.js';
@@ -113,11 +115,16 @@ import socialMediaCampaignRoutes from './routes/platform/socialMediaCampaignRout
 import disciplinaryRoutes from './routes/platform/disciplinaryRoutes.js';
 import volunteerRoutes from './routes/platform/volunteerRoutes.js';
 import projectDeliveryRoutes from './routes/platform/projectDeliveryRoutes.js';
+import checklistRoutes from './routes/platform/checklistRoutes.js';
+import itRegisterRoutes from './routes/platform/itRegisterRoutes.js';
+import offboardingRoutes from './routes/platform/offboardingRoutes.js';
+import sweepFundsRoutes from './routes/platform/sweepFundsRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
 app.use('/api/v1/platform/expenses', expenseRoutes);
 app.use('/api/v1/platform/approvals', approvalRoutes);
+app.use('/api/v1/platform/checklists', checklistRoutes);
 app.use('/api/v1/platform/approval-thresholds', approvalThresholdRoutes);
 app.use('/api/v1/platform/users', userRoutes);
 app.use('/api/v1/platform/board-members', boardMemberRoutes);
@@ -134,6 +141,7 @@ app.use('/api/v1/platform/position-permissions', positionPermissionsRoutes);
 app.use('/api/v1/platform/notifications', notificationRoutes);
 app.use('/api/v1/platform/partner-vetting', partnerVettingRoutes);
 app.use('/api/v1/platform/donors', donorRoutes);
+app.use('/api/v1/platform/funding-programs', fundingProgramRoutes);
 app.use('/api/v1/platform/donations', donationRoutes);
 app.use('/api/v1/platform/donation-milestones', donationMilestoneRoutes);
 app.use('/api/v1/platform/donation-boxes', donationBoxRoutes);
@@ -144,6 +152,7 @@ app.use('/api/v1/platform/funding-agreements', fundingAgreementRoutes);
 app.use('/api/v1/platform/assets', assetRoutes);
 app.use('/api/v1/platform/coi', coiRoutes);
 app.use('/api/v1/platform/audit-trail', auditTrailRoutes);
+app.use('/api/v1/platform/reporting', reportingRoutes);
 app.use('/api/v1/platform/complaints', complaintRoutes);
 app.use('/api/v1/platform/meetings', meetingRoutes);
 app.use('/api/v1/platform/support-tickets', supportTicketRoutes);
@@ -153,6 +162,9 @@ app.use('/api/v1/platform/dashboard', dashboardRoutes);
 app.use('/api/v1/platform/chatbot', chatbotRoutes);
 app.use('/api/v1/platform/volunteers', volunteerRoutes);
 app.use('/api/v1/platform/project-delivery', projectDeliveryRoutes);
+app.use('/api/v1/platform/it-register', itRegisterRoutes);
+app.use('/api/v1/platform/offboarding', offboardingRoutes);
+app.use('/api/v1/platform/sweep-funds', sweepFundsRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

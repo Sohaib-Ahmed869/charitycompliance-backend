@@ -28,6 +28,12 @@ const documentSchema = new mongoose.Schema({
       'supporting_document',
       'withholding_evidence',
       'registration_license',
+      /** Licences, fundraising permits, regulatory registrations (Governance → Documents). Australian spelling: licences. */
+      'licences_permits',
+      /** Monthly / yearly fiscal reports (uploaded from Finance → Fiscal reports); use document_type for schedule. */
+      'fiscal_report',
+      /** Quarterly BAS (Business Activity Statement) tracking — GST/PAYG; use document_type bas_period_quarterly + metadata.period_key. */
+      'bas_lodgement',
       'other'
     ],
     index: true
@@ -38,6 +44,24 @@ const documentSchema = new mongoose.Schema({
     trim: true
   },
   registration_number: {
+    type: String,
+    trim: true
+  },
+  /** licences_permits: kind of licence/permit (e.g. fundraising, ACL). */
+  licence_type: {
+    type: String,
+    trim: true
+  },
+  issuing_authority: {
+    type: String,
+    trim: true
+  },
+  renewal_requirements: {
+    type: String,
+    trim: true
+  },
+  /** Australian state/territory or National for permits */
+  state_or_territory: {
     type: String,
     trim: true
   },
@@ -108,7 +132,8 @@ const documentSchema = new mongoose.Schema({
   // Status
   status: {
     type: String,
-    enum: ['draft', 'submitted', 'review_pending', 'reviewed', 'approved', 'archived'],
+    /** resubmission_required: fiscal/BAS document needs a revised file after decline (see metadata.resubmission_reason). */
+    enum: ['draft', 'submitted', 'review_pending', 'resubmission_required', 'reviewed', 'approved', 'archived'],
     default: 'submitted'
   },
   metadata: {

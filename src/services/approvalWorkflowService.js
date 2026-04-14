@@ -6,6 +6,7 @@
  */
 
 import { getTenantConnection } from '../db/connectionManager.js';
+import mongoose from 'mongoose';
 import { ApprovalMatrixRepository } from '../repositories/approvalMatrixRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
 import { NotificationRepository } from '../repositories/notificationRepository.js';
@@ -137,28 +138,7 @@ export class ApprovalWorkflowService {
     let selectedMatrix = null;
     let selectedRule = null;
 
-    // Some workflows are tiered by workflow_type (e.g. donor_review: small/medium/large).
-    // In those cases we should prefer a matrix whose workflow_type matches the tier.
-    const desiredWorkflowType = (() => {
-      if (normalizedActionType === 'donor') {
-        const n = Number(amount || 0);
-        if (n === 1) return 'small';
-        if (n === 2) return 'medium';
-        if (n === 3) return 'large';
-        return null;
-      }
-      return null;
-    })();
-    const desiredCategory = normalizedActionType === 'donor' ? 'donor_review' : null;
-    const matricesToSearch =
-      desiredWorkflowType && desiredCategory
-        ? [
-            ...matrices.filter((m) => m?.workflow_category === desiredCategory && m?.workflow_type === desiredWorkflowType),
-            ...matrices
-          ]
-        : matrices;
-
-    for (const matrix of matricesToSearch) {
+    for (const matrix of matrices) {
       for (const rule of matrix.rules) {
         if (!rule.is_active) continue;
         if (this._normalizeActionType(rule.action_type) !== normalizedActionType) continue;
@@ -406,43 +386,6 @@ export class ApprovalWorkflowService {
     const approvalRequest = await approvalRequestRepo.create({
       org_id: orgObjectId,
       request_type: 'social_media_campaign',
-      entity_id: campaignId,
-      entity_type: 'social_media_campaign',
-      amount: amount || 0,
-      approval_matrix_id: matrix._id,
-      approval_type: rule.approval_type,
-      status: 'pending',
-      approval_steps: approvalSteps,
-      submitted_by: submittedBy
-    });
-
-    return approvalRequest;
-  }
-
-  /**
-   * Create approval request for a social media campaign compliance check (post-publication).
-   * action_type: social_media_campaign_compliance
-   */
-  async createSocialMediaCampaignComplianceRequest(campaignId, submittedBy, amount) {
-    const tenantDb = await this.getTenantDb();
-    this._ensureTenantModels(tenantDb);
-    const orgObjectId = await this._getOrgObjectId();
-    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
-
-    const { matrix, rule } = await this.findMatchingRule('social_media_campaign_compliance', amount || 0, orgObjectId);
-    const approvers = await this.resolveApprovers(rule, orgObjectId);
-
-    const approvalSteps = approvers.map((approver) => ({
-      level: approver.level,
-      approver_user_id: approver.user_id,
-      approver_position_id: approver.position_id,
-      approver_department_id: approver.department_id,
-      status: 'pending'
-    }));
-
-    const approvalRequest = await approvalRequestRepo.create({
-      org_id: orgObjectId,
-      request_type: 'social_media_campaign_compliance',
       entity_id: campaignId,
       entity_type: 'social_media_campaign',
       amount: amount || 0,
@@ -2638,6 +2581,56 @@ export class ApprovalWorkflowService {
     return approvalRequest;
   }
 
+  async createSweepFundsApprovalRequest(payload, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const amount = Number(payload?.amount || 0);
+    if (!(amount > 0)) {
+      throw new AppError('Sweep amount must be greater than 0', 400, 'INVALID_SWEEP_AMOUNT');
+    }
+
+    const { matrix, rule } = await this.findMatchingRule('sweep_funds', amount, orgObjectId);
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id || undefined,
+      approver_position_id: approver.position_id || undefined,
+      approver_department_id: approver.department_id || undefined,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'sweep_funds',
+      entity_id: new mongoose.Types.ObjectId(),
+      entity_type: 'other',
+      amount,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy,
+      sweep_funds: {
+        source_portal: payload.source_portal,
+        source_account_identifier: payload.source_account_identifier || '',
+        destination_asset_id: payload.destination_asset_id,
+        destination_account_label: payload.destination_account_label || '',
+        receipt_files: Array.isArray(payload.receipt_files) ? payload.receipt_files : [],
+        audit_trail: [{
+          action: 'initiated',
+          by_user_id: submittedBy,
+          comments: payload.comments || '',
+          created_at: new Date()
+        }]
+      }
+    });
+
+    return approvalRequest;
+  }
+
   /**
    * Create approval workflow for complaint resolution
    * Called when admin approves a complaint - initiates the complaint_resolution workflow
@@ -2672,44 +2665,7 @@ export class ApprovalWorkflowService {
     }
 
     const approvers = await this.resolveApprovers(rule, orgObjectId);
-
-    const normalizeApproverUserId = (v) => {
-      // Already an ObjectId-like object
-      const objId = v?._id || v?.id;
-      if (objId) return String(objId);
-
-      // Plain string id
-      let s = String(v || '').trim();
-      if (!s) return '';
-      if (/^[a-fA-F0-9]{24}$/.test(s)) return s;
-
-      // Try to de-escape common serialized / logged shapes
-      // (e.g. value contains "\n" or "\'" sequences, or is built via string concatenation)
-      const cleaned = s
-        .replace(/\\\\n/g, '\n')
-        .replace(/\\\\'/g, "'")
-        .replace(/\\"/g, '"')
-        .replace(/\\\+/g, '+');
-
-      // Handle buggy stored values like "{ _id: new ObjectId('...'), email: ... }"
-      const m =
-        cleaned.match(/ObjectId\\?\('([a-fA-F0-9]{24})'\\?\)/) ||
-        cleaned.match(/new\s+ObjectId\\?\('([a-fA-F0-9]{24})'\\?\)/) ||
-        cleaned.match(/_id:\s*['"]?([a-fA-F0-9]{24})['"]?/);
-      if (m && m[1]) return m[1];
-
-      // Absolute fallback: if a 24-hex id exists anywhere in the string, take it.
-      // This covers cases where the value is a concatenated debug string like:
-      // "{\n' + \"  _id: new ObjectId('...'),\n\" + ... }"
-      const any = cleaned.match(/[a-fA-F0-9]{24}/);
-      if (any && any[0]) return any[0];
-
-      return '';
-    };
-
-    const approverUserIds = approvers
-      .map(a => normalizeApproverUserId(a.user_id))
-      .filter(Boolean);
+    const approverUserIds = approvers.map(a => String(a.user_id)).filter(Boolean);
 
     if (approverUserIds.length === 0) {
       throw new AppError(

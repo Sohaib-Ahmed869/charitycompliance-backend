@@ -110,6 +110,7 @@ const approvalRequestSchema = new mongoose.Schema({
       'emergency',
       'project_delivery',
       'project_delivery_changes',
+      'sweep_funds',
       // legacy
       'policy_approval',
       'document_approval',
@@ -189,6 +190,25 @@ const approvalRequestSchema = new mongoose.Schema({
   treatment_index: {
     type: Number,
     min: 0
+  },
+  sweep_funds: {
+    source_portal: { type: String },
+    source_account_identifier: { type: String },
+    destination_asset_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Asset' },
+    destination_account_label: { type: String },
+    receipt_files: [{
+      name: { type: String },
+      size: { type: Number },
+      file_type: { type: String },
+      url: { type: String },
+      key: { type: String }
+    }],
+    audit_trail: [{
+      action: { type: String },
+      by_user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      comments: { type: String },
+      created_at: { type: Date, default: Date.now }
+    }]
   },
   created_at: {
     type: Date,

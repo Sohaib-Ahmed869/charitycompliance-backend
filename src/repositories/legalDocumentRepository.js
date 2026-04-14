@@ -25,6 +25,9 @@ export class LegalDocumentRepository {
     if (filters.category) {
       query.category = filters.category;
     }
+    if (filters.contract_subtype) {
+      query['contract_details.subtype'] = filters.contract_subtype;
+    }
 
     if (filters.search) {
       query.document_name = { $regex: filters.search, $options: 'i' };

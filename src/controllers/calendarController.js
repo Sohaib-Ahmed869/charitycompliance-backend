@@ -63,6 +63,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
   const userPermissions = req.user?.permissions || [];
   const canViewGoverningDocs = hasModuleViewPermission(userPermissions, 'charity_admin');
   const canViewLegalDocs = hasModuleViewPermission(userPermissions, 'legal_docs') || hasModuleViewPermission(userPermissions, 'systems_legal');
+  const canViewAssets = hasModuleViewPermission(userPermissions, 'asset_mgmt') || hasModuleViewPermission(userPermissions, 'systems_legal');
 
   const tenantDb = await getTenantConnection(orgId);
   const calendarRepo = new CalendarRepository(tenantDb);
@@ -89,6 +90,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
   let governingReviewEvents = [];
   let legalReviewEvents = [];
   let meetingEvents = [];
+  let physicalRecordEvents = [];
 
   try {
     customEvents = await calendarRepo.findByUserId(userId, dateOptions);
@@ -228,6 +230,25 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
       logError('Error retrieving legal document review events', { orgId, error: error.message, stack: error.stack });
     }
   }
+
+  if (canViewAssets) {
+    try {
+      const physicalReviews = await calendarRepo.findPhysicalRecordReviewEvents(orgObjectId, dateOptions);
+      physicalRecordEvents = physicalReviews.map((d) => formatCalendarEvent(
+        {
+          ...d,
+          title: d.title,
+          date: d.date,
+          description: d.description
+        },
+        'physical_record',
+        d._id?.toString()
+      ));
+      logInfo('Physical record review events retrieved', { orgId, count: physicalRecordEvents.length });
+    } catch (error) {
+      logError('Error retrieving physical record review events', { orgId, error: error.message, stack: error.stack });
+    }
+  }
   } // if (orgObjectId)
 
   try {
@@ -276,6 +297,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
     ...documentEvents,
     ...governingReviewEvents,
     ...legalReviewEvents,
+    ...physicalRecordEvents,
     ...meetingEvents
   ];
 

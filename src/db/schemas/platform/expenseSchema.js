@@ -160,6 +160,61 @@ const expenseSchema = new mongoose.Schema({
     ref: 'User',
     index: true
   },
+  /** Second signatory: approves first (no e-signature). Distinct from processor and signing reviewer. */
+  payment_co_signatory_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    index: true
+  },
+  payment_initiated_by: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
+  payment_proof_uploaded_at: {
+    type: Date
+  },
+  payment_approval_status: {
+    type: String,
+    enum: ['none', 'proof_uploaded', 'pending_dual', 'released', 'rejected'],
+    default: 'none',
+    index: true
+  },
+  payment_return_reason: {
+    type: String,
+    trim: true
+  },
+  payment_dual_approval: {
+    co_signatory: {
+      status: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected', 'waived'],
+        default: 'waived'
+      },
+      comment: { type: String, trim: true },
+      acted_at: { type: Date }
+    },
+    signing_reviewer: {
+      status: {
+        type: String,
+        enum: ['pending', 'approved', 'rejected'],
+        default: 'pending'
+      },
+      comment: { type: String, trim: true },
+      acted_at: { type: Date },
+      signature_data: { type: String }
+    }
+  },
+  payment_audit_log: {
+    type: [
+      {
+        at: { type: Date, default: Date.now },
+        user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        action: { type: String, trim: true },
+        detail: { type: String, trim: true }
+      }
+    ],
+    default: []
+  },
   payment_stage: {
     type: String,
     enum: ['unassigned', 'processing', 'review', 'completed'],
@@ -176,6 +231,24 @@ const expenseSchema = new mongoose.Schema({
     signature_data: { type: String }, // base64 data URL from DigitalSignature
     reviewed_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     reviewed_at: { type: Date }
+  },
+  payment_compliance_checkpoint: {
+    supplier_abn: { type: String, trim: true },
+    abn_checksum_valid: { type: Boolean },
+    gst_treatment: { type: String, trim: true },
+    supplier_claims_tax_exempt: { type: Boolean },
+    gst_consistent: { type: Boolean },
+    expense_amount_snapshot: { type: Number },
+    high_value_threshold_exceeded: { type: Boolean },
+    high_value_acknowledged: { type: Boolean },
+    compliance_status: {
+      type: String,
+      enum: ['verified', 'pending', 'failed']
+    },
+    manual_override: { type: Boolean },
+    override_comment: { type: String },
+    recorded_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    recorded_at: { type: Date }
   },
   payment_method: {
     type: String,

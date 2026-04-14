@@ -86,6 +86,7 @@ export class SocialMediaCampaignService {
       registered_social_account: '',
       published_at: null,
       compliance_approval_request_id: null,
+      last_audit_date: payload.last_audit_date || null,
       metadata: {
         ...stripPerformanceFromMetadata(metaIn),
         workflow_stage: 'pre_publication'
@@ -260,9 +261,9 @@ export class SocialMediaCampaignService {
 
     if (performanceEditable) {
       const keys = Object.keys(payload || {});
-      const metadataOnly = keys.length > 0 && keys.every((k) => k === 'metadata');
-      if (!metadataOnly) {
-        throw new AppError('Only performance metrics can be updated for published campaigns', 400, 'INVALID_STATUS');
+      const metadataOrAuditOnly = keys.length > 0 && keys.every((k) => k === 'metadata' || k === 'last_audit_date');
+      if (!metadataOrAuditOnly) {
+        throw new AppError('Only performance metrics and last audit date can be updated for published campaigns', 400, 'INVALID_STATUS');
       }
       const mergedMetadata = { ...(existing.metadata || {}) };
       for (const k of PERF_KEYS) {
@@ -270,7 +271,11 @@ export class SocialMediaCampaignService {
           mergedMetadata[k] = this._validatePerformanceField(k, payload.metadata[k]);
         }
       }
-      await repo.update(campaignId, { metadata: mergedMetadata });
+      const lockedUpdates = { metadata: mergedMetadata };
+      if (payload.last_audit_date !== undefined) {
+        lockedUpdates.last_audit_date = payload.last_audit_date ? new Date(payload.last_audit_date) : null;
+      }
+      await repo.update(campaignId, lockedUpdates);
       const updatedLocked = await repo.findById(campaignId);
       return await this._hydrateImageUrls(updatedLocked);
     }
@@ -293,6 +298,7 @@ export class SocialMediaCampaignService {
       'currency',
       'images',
       'notes',
+      'last_audit_date',
       'metadata'
     ];
     const updates = {};
@@ -325,6 +331,9 @@ export class SocialMediaCampaignService {
     }
     if (updates.estimated_budget != null) updates.estimated_budget = Number(updates.estimated_budget || 0);
     if (updates.ad_spend_estimate != null) updates.ad_spend_estimate = Number(updates.ad_spend_estimate || 0);
+    if (updates.last_audit_date !== undefined) {
+      updates.last_audit_date = updates.last_audit_date ? new Date(updates.last_audit_date) : null;
+    }
     if (updates.metadata !== undefined) {
       updates.metadata = stripPerformanceFromMetadata({
         ...(existing.metadata || {}),

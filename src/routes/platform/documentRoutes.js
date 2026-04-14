@@ -22,7 +22,7 @@ router.get(
   [
     query('category')
       .optional()
-      .isIn(['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'board_minutes', 'financial_statement', 'responsible_person_consent', 'evidence_of_activities', 'supporting_document', 'withholding_evidence', 'registration_license', 'other'])
+      .isIn(['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'board_minutes', 'financial_statement', 'fiscal_report', 'bas_lodgement', 'responsible_person_consent', 'evidence_of_activities', 'supporting_document', 'withholding_evidence', 'registration_license', 'licences_permits', 'other'])
       .withMessage('Invalid category')
   ],
   validate,
@@ -48,7 +48,7 @@ router.post(
   handleUploadError,
   [
     body('category')
-      .isIn(['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'board_minutes', 'financial_statement', 'responsible_person_consent', 'evidence_of_activities', 'supporting_document', 'withholding_evidence', 'registration_license', 'other'])
+      .isIn(['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'board_minutes', 'financial_statement', 'fiscal_report', 'bas_lodgement', 'responsible_person_consent', 'evidence_of_activities', 'supporting_document', 'withholding_evidence', 'registration_license', 'licences_permits', 'other'])
       .withMessage('Valid category is required'),
     body('document_type')
       .trim()
@@ -84,6 +84,20 @@ router.post(
   ],
   validate,
   documentController.createDocument
+);
+
+// Replace fiscal / BAS file during resubmission (multipart)
+router.post(
+  '/:documentId/replace-workflow-file',
+  uploadSingle,
+  handleUploadError,
+  [
+    param('documentId')
+      .isMongoId()
+      .withMessage('Invalid document ID')
+  ],
+  validate,
+  documentController.replaceWorkflowDocumentFile
 );
 
 // Update document

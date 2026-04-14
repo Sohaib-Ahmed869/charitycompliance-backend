@@ -12,6 +12,11 @@ import { ApprovalRequestRepository } from '../repositories/approvalRequestReposi
 import { ApprovalWorkflowService } from './approvalWorkflowService.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
+import { ChecklistService } from './checklistService.js';
+import {
+  buildPaymentComplianceCheckpoint,
+  assertCheckpointAllowsPaymentAcceptance
+} from '../utils/expensePaymentCompliance.js';
 
 export class ExpenseService {
   constructor(orgId) {
@@ -115,10 +120,23 @@ export class ExpenseService {
 
     logInfo('Expense created', { expenseId: expense._id, submittedBy });
 
-    // If status is not draft, create approval request
+    // If status is not draft, create approval request + attach expense workflow checklist
     if (expense.status !== 'draft') {
       const workflowService = new ApprovalWorkflowService(this.orgId);
-      await workflowService.createExpenseApprovalRequest(expense._id, submittedBy);
+      const approvalRequest = await workflowService.createExpenseApprovalRequest(expense._id, submittedBy);
+      try {
+        const checklistService = new ChecklistService(this.orgId);
+        await checklistService.ensureExpenseWorkflowChecklist({
+          expenseId: expense._id,
+          approvalRequestId: approvalRequest?._id,
+          createdBy: submittedBy
+        });
+      } catch (err) {
+        logError('Failed to create expense workflow checklist on createExpense', {
+          error: err?.message,
+          expenseId: expense._id
+        });
+      }
     }
 
     return expense;
@@ -150,6 +168,21 @@ export class ExpenseService {
     // Create approval request
     const workflowService = new ApprovalWorkflowService(this.orgId);
     const approvalRequest = await workflowService.createExpenseApprovalRequest(expenseId, submittedBy);
+
+    // Create/checklist against this expense workflow
+    try {
+      const checklistService = new ChecklistService(this.orgId);
+      await checklistService.ensureExpenseWorkflowChecklist({
+        expenseId,
+        approvalRequestId: approvalRequest?._id,
+        createdBy: submittedBy
+      });
+    } catch (err) {
+      logError('Failed to create expense workflow checklist on submitExpense', {
+        error: err?.message,
+        expenseId
+      });
+    }
 
     logInfo('Expense submitted for approval', { expenseId, approvalRequestId: approvalRequest._id });
 
@@ -314,7 +347,7 @@ export class ExpenseService {
     return updatedExpense;
   }
 
-  async assignPaymentTeam(expenseId, processorUserId, reviewerUserId, assigningUserId) {
+  async assignPaymentTeam(expenseId, processorUserId, reviewerUserId, coSignatoryUserId, assigningUserId) {
     const tenantDb = await this.getTenantDb();
     const expenseRepo = new ExpenseRepository(tenantDb);
     const userRepo = new UserRepository(tenantDb);
@@ -327,29 +360,62 @@ export class ExpenseService {
       throw new AppError('Only approved expenses can be assigned for payment', 400, 'INVALID_STATUS');
     }
 
+    if (!coSignatoryUserId) {
+      throw new AppError('Co-signatory is required for dual payment approval', 400, 'VALIDATION_ERROR');
+    }
+
+    const distinct = new Set(
+      [processorUserId, reviewerUserId, coSignatoryUserId].map((id) => String(id))
+    );
+    if (distinct.size !== 3) {
+      throw new AppError(
+        'Processor, co-signatory, and signing officer must be three different people',
+        400,
+        'VALIDATION_ERROR'
+      );
+    }
+
     const processor = await userRepo.findById(processorUserId);
     if (!processor) throw new AppError('Payment processor not found', 404, 'USER_NOT_FOUND');
 
     const reviewer = await userRepo.findById(reviewerUserId);
-    if (!reviewer) throw new AppError('Payment reviewer not found', 404, 'USER_NOT_FOUND');
+    if (!reviewer) throw new AppError('Signing officer not found', 404, 'USER_NOT_FOUND');
+
+    const coSignatory = await userRepo.findById(coSignatoryUserId);
+    if (!coSignatory) throw new AppError('Co-signatory not found', 404, 'USER_NOT_FOUND');
+
+    const prevLog = Array.isArray(expense.payment_audit_log) ? expense.payment_audit_log : [];
+    const auditEntry = {
+      at: new Date(),
+      user_id: assigningUserId,
+      action: 'payment_team_assigned',
+      detail: 'Processor, co-signatory, and signing officer assigned for dual payment approval'
+    };
 
     const updatedExpense = await expenseRepo.update(expenseId, {
       payment_processor_id: processorUserId,
       payment_reviewer_id: reviewerUserId,
+      payment_co_signatory_id: coSignatoryUserId,
       payment_stage: 'processing',
-      // legacy: keep assigned_to as processor for existing UI/exports
-      assigned_to: processorUserId
+      payment_approval_status: 'none',
+      assigned_to: processorUserId,
+      payment_audit_log: [...prevLog, auditEntry]
     });
 
-    logInfo('Expense payment team assigned', { expenseId, processorUserId, reviewerUserId, assignedBy: assigningUserId });
+    logInfo('Expense payment team assigned', {
+      expenseId,
+      processorUserId,
+      reviewerUserId,
+      coSignatoryUserId,
+      assignedBy: assigningUserId
+    });
 
-    // notify processor
     try {
       await notificationRepo.create({
         user_id: processorUserId,
         type: 'expense_payment_processing_assigned',
         title: 'Payment processing assigned to you',
-        message: 'You have been assigned to add payment details for an approved expense. Submit the payment(s) for review when ready.',
+        message: 'You have been assigned to add payment details for an approved expense. Submit the payment(s) for dual approval when ready.',
         link: `/expenses/${expenseId}#payment-section`,
         related_entity_id: expenseId,
         related_entity_type: 'expense',
@@ -359,13 +425,27 @@ export class ExpenseService {
       logError('Failed to create expense payment processing assignment notification', { error: err?.message, expenseId, processorUserId });
     }
 
-    // notify reviewer (heads-up)
+    try {
+      await notificationRepo.create({
+        user_id: coSignatoryUserId,
+        type: 'expense_payment_co_signatory_assigned',
+        title: 'Payment co-signatory',
+        message: 'You are co-signatory on an expense payment. You will be notified when payment proof is uploaded.',
+        link: `/expenses/${expenseId}#payment-section`,
+        related_entity_id: expenseId,
+        related_entity_type: 'expense',
+        created_at: new Date()
+      });
+    } catch (err) {
+      logError('Failed to notify co-signatory', { error: err?.message, expenseId, coSignatoryUserId });
+    }
+
     try {
       await notificationRepo.create({
         user_id: reviewerUserId,
         type: 'expense_payment_review_required',
-        title: 'Payment review will be required',
-        message: 'You have been assigned as the payment reviewer for an approved expense. You’ll be notified once payment details are submitted.',
+        title: 'Signing officer — payment approval',
+        message: 'You are the signing officer for this expense (e-signature after co-signatory approves). You will be notified when payment proof is uploaded.',
         link: `/expenses/${expenseId}#payment-section`,
         related_entity_id: expenseId,
         related_entity_type: 'expense',
@@ -378,7 +458,7 @@ export class ExpenseService {
     return updatedExpense;
   }
 
-  async submitPaymentsForReview(expenseId, { payments = [] } = {}, userId) {
+  async submitPaymentsForReview(expenseId, { payments = [], payment_compliance: paymentCompliance } = {}, userId) {
     const tenantDb = await this.getTenantDb();
     const expenseRepo = new ExpenseRepository(tenantDb);
     const notificationRepo = new NotificationRepository(tenantDb);
@@ -399,6 +479,19 @@ export class ExpenseService {
       throw new AppError('At least one payment entry is required', 400, 'VALIDATION_ERROR');
     }
 
+    const { checkpoint, canProceed } = buildPaymentComplianceCheckpoint(
+      paymentCompliance || {},
+      expense.amount,
+      userId
+    );
+    if (!canProceed) {
+      throw new AppError(
+        'Complete tax compliance checks or provide a manual override with a comment before submitting payments for review',
+        400,
+        'PAYMENT_COMPLIANCE_INCOMPLETE'
+      );
+    }
+
     const normalized = payments.map(p => ({
       amount: p.amount,
       payment_method: p.payment_method,
@@ -417,34 +510,87 @@ export class ExpenseService {
       if (!p.payment_proof) throw new AppError('Payment proof is required', 400, 'VALIDATION_ERROR');
     }
 
+    const coId = expense.payment_co_signatory_id?._id || expense.payment_co_signatory_id;
+    const hasCo = !!coId;
+
+    const prevLog = Array.isArray(expense.payment_audit_log) ? expense.payment_audit_log : [];
+    const submitAudit = {
+      at: new Date(),
+      user_id: userId,
+      action: 'payment_proof_submitted',
+      detail: `Payment proof uploaded; ${normalized.length} row(s); dual approval ${hasCo ? 'required' : 'waived (no co-signatory)'}`
+    };
+
+    const dualInit = {
+      co_signatory: {
+        status: hasCo ? 'pending' : 'waived',
+        comment: null,
+        acted_at: null
+      },
+      signing_reviewer: {
+        status: 'pending',
+        comment: null,
+        acted_at: null,
+        signature_data: null
+      }
+    };
+
     const updatedExpense = await expenseRepo.update(expenseId, {
       payments: normalized,
+      payment_compliance_checkpoint: checkpoint,
       payment_stage: 'review',
-      payment_review: { status: null, review_notes: null, reviewed_by: null, reviewed_at: null }
+      payment_initiated_by: userId,
+      payment_proof_uploaded_at: new Date(),
+      payment_approval_status: 'pending_dual',
+      payment_return_reason: null,
+      payment_dual_approval: dualInit,
+      payment_review: { status: null, review_notes: null, signature_data: null, reviewed_by: null, reviewed_at: null },
+      payment_audit_log: [...prevLog, submitAudit]
     });
 
     const reviewerId = expense.payment_reviewer_id?._id || expense.payment_reviewer_id;
-    if (reviewerId) {
+
+    const notifyDualProof = async (uid, title, message) => {
+      if (!uid) return;
       try {
         await notificationRepo.create({
-          user_id: reviewerId,
-          type: 'expense_payment_review_required',
-          title: 'Payment review required',
-          message: 'Payment details have been submitted for an approved expense. Please review and accept.',
+          user_id: uid,
+          type: 'expense_payment_dual_approval_required',
+          title,
+          message,
           link: `/expenses/${expenseId}#payment-section`,
           related_entity_id: expenseId,
           related_entity_type: 'expense',
           created_at: new Date()
         });
       } catch (err) {
-        logError('Failed to create expense payment review notification', { error: err?.message, expenseId, reviewerId });
+        logError('Failed to create dual-approval payment notification', { error: err?.message, expenseId, uid });
       }
+    };
+
+    if (hasCo) {
+      await notifyDualProof(
+        coId,
+        'Payment proof uploaded — your approval needed',
+        'An expense payment has proof uploaded. Please review and approve as co-signatory (first approval).'
+      );
     }
+    await notifyDualProof(
+      reviewerId,
+      'Payment proof uploaded — dual approval',
+      hasCo
+        ? 'Payment proof is uploaded. Co-signatory must approve first; you will e-sign to release funds after that.'
+        : 'Payment proof is uploaded. Please review and e-sign to complete payment.'
+    );
 
     return updatedExpense;
   }
 
-  async reviewPayments(expenseId, { action = 'accept', review_notes = '', signature_data = null } = {}, userId) {
+  async reviewPayments(
+    expenseId,
+    { action = 'accept', review_notes = '', comment = '', signature_data = null } = {},
+    userId
+  ) {
     const tenantDb = await this.getTenantDb();
     const expenseRepo = new ExpenseRepository(tenantDb);
     const notificationRepo = new NotificationRepository(tenantDb);
@@ -460,31 +606,198 @@ export class ExpenseService {
       throw new AppError('Payment is not pending review', 400, 'INVALID_STATUS');
     }
 
-    const reviewerId = expense.payment_reviewer_id?._id || expense.payment_reviewer_id;
-    if (reviewerId && reviewerId.toString() !== userId.toString()) {
-      throw new AppError('You are not assigned as the payment reviewer for this expense', 403, 'UNAUTHORIZED');
-    }
+    let op = action;
+    if (op === 'accept') op = 'approve_final';
+    if (op === 'request_changes') op = 'return_to_processor';
 
-    const isAccept = action === 'accept';
-    if (isAccept && !signature_data) {
-      throw new AppError('Reviewer signature is required to complete payment', 400, 'VALIDATION_ERROR');
-    }
-    const update = {
-      payment_review: {
-        status: isAccept ? 'accepted' : 'changes_requested',
-        review_notes: review_notes || null,
-        signature_data: isAccept ? signature_data : null,
-        reviewed_by: userId,
-        reviewed_at: new Date()
-      },
-      payment_stage: isAccept ? 'completed' : 'processing'
+    const coId = expense.payment_co_signatory_id?._id || expense.payment_co_signatory_id;
+    const reviewerId = expense.payment_reviewer_id?._id || expense.payment_reviewer_id;
+    const processorId =
+      expense.payment_processor_id?._id || expense.payment_processor_id || expense.assigned_to?._id || expense.assigned_to;
+    const initiatedBy =
+      expense.payment_initiated_by?._id || expense.payment_initiated_by || processorId;
+
+    const dual = expense.payment_dual_approval || {};
+    const coSlot = dual.co_signatory || { status: 'waived', comment: null, acted_at: null };
+    const signingSlot = dual.signing_reviewer || {
+      status: 'pending',
+      comment: null,
+      acted_at: null,
+      signature_data: null
     };
 
-    if (isAccept) {
-      update.status = 'paid';
-      update.paid_at = new Date();
-      // Legacy: keep first payment mirrored for existing “Payment Completed” block if needed
+    const prevLog = Array.isArray(expense.payment_audit_log) ? expense.payment_audit_log : [];
+    const pushAudit = (auditAction, detail) => [...prevLog, { at: new Date(), user_id: userId, action: auditAction, detail }];
+
+    const isCoUser = coId && coId.toString() === userId.toString();
+    const isSigningUser = reviewerId && reviewerId.toString() === userId.toString();
+    const isSignatory = isCoUser || isSigningUser;
+    const isProcessorUser =
+      processorId && processorId.toString() === userId.toString();
+
+    if (op === 'return_to_processor') {
+      const reason = String(comment || review_notes || '').trim();
+      if (!reason) {
+        throw new AppError('A reason is required to return the payment to the processor', 400, 'VALIDATION_ERROR');
+      }
+      if (!isSignatory && !isProcessorUser) {
+        throw new AppError(
+          'Only an assigned signatory or the payment processor can return this payment',
+          403,
+          'UNAUTHORIZED'
+        );
+      }
+
+      const hasCo = !!coId;
+      const resetDual = {
+        co_signatory: {
+          status: hasCo ? 'pending' : 'waived',
+          comment: null,
+          acted_at: null
+        },
+        signing_reviewer: {
+          status: 'pending',
+          comment: null,
+          acted_at: null,
+          signature_data: null
+        }
+      };
+
+      const updatedExpense = await expenseRepo.update(expenseId, {
+        payment_stage: 'processing',
+        payments: [],
+        payment_compliance_checkpoint: null,
+        payment_dual_approval: resetDual,
+        payment_initiated_by: null,
+        payment_proof_uploaded_at: null,
+        payment_approval_status: 'rejected',
+        payment_return_reason: reason,
+        payment_review: {
+          status: 'changes_requested',
+          review_notes: reason,
+          signature_data: null,
+          reviewed_by: userId,
+          reviewed_at: new Date()
+        },
+        payment_audit_log: pushAudit('payment_returned_to_processor', reason)
+      });
+
+      if (processorId) {
+        try {
+          await notificationRepo.create({
+            user_id: processorId,
+            type: 'expense_payment_returned',
+            title: 'Payment returned for revision',
+            message: `Payment was returned to you for revision: ${reason.slice(0, 200)}`,
+            link: `/expenses/${expenseId}#payment-section`,
+            related_entity_id: expenseId,
+            related_entity_type: 'expense',
+            created_at: new Date()
+          });
+        } catch (err) {
+          logError('Failed to notify processor of payment return', { error: err?.message, expenseId });
+        }
+      }
+
+      return updatedExpense;
+    }
+
+    if (initiatedBy && initiatedBy.toString() === userId.toString()) {
+      throw new AppError('You cannot approve a payment you initiated (separation of duties)', 403, 'SELF_APPROVAL');
+    }
+
+    if (op === 'approve_co') {
+      if (!coId) {
+        throw new AppError('This expense has no co-signatory step', 400, 'VALIDATION_ERROR');
+      }
+      if (!isCoUser) {
+        throw new AppError('Only the assigned co-signatory can provide the first approval', 403, 'UNAUTHORIZED');
+      }
+      if (coSlot.status !== 'pending') {
+        throw new AppError('Co-signatory has already acted on this payment', 400, 'INVALID_STATUS');
+      }
+
+      const coComment = String(comment || review_notes || '').trim() || null;
+      const nextDual = {
+        co_signatory: {
+          status: 'approved',
+          comment: coComment,
+          acted_at: new Date()
+        },
+        signing_reviewer: { ...signingSlot }
+      };
+
+      const updatedExpense = await expenseRepo.update(expenseId, {
+        payment_dual_approval: nextDual,
+        payment_audit_log: pushAudit('payment_co_signatory_approved', coComment || 'Approved')
+      });
+
+      if (reviewerId) {
+        try {
+          await notificationRepo.create({
+            user_id: reviewerId,
+            type: 'expense_payment_co_approved',
+            title: 'Co-signatory approved — e-signature needed',
+            message: 'The co-signatory has approved this expense payment. Please review and complete with your e-signature to release funds.',
+            link: `/expenses/${expenseId}#payment-section`,
+            related_entity_id: expenseId,
+            related_entity_type: 'expense',
+            created_at: new Date()
+          });
+        } catch (err) {
+          logError('Failed to notify signing officer after co-approval', { error: err?.message, expenseId });
+        }
+      }
+
+      return updatedExpense;
+    }
+
+    if (op === 'approve_final') {
+      if (!isSigningUser) {
+        throw new AppError('Only the assigned signing officer can complete this payment', 403, 'UNAUTHORIZED');
+      }
+      const coOk = coSlot.status === 'waived' || coSlot.status === 'approved';
+      if (!coOk) {
+        throw new AppError('Co-signatory approval is required before the signing officer can release funds', 400, 'INVALID_STATUS');
+      }
+      if (signingSlot.status !== 'pending') {
+        throw new AppError('Signing officer has already acted on this payment', 400, 'INVALID_STATUS');
+      }
+      if (!signature_data) {
+        throw new AppError('Signing officer e-signature is required to complete payment', 400, 'VALIDATION_ERROR');
+      }
+
+      assertCheckpointAllowsPaymentAcceptance(expense.payment_compliance_checkpoint);
+
+      const finalComment = String(comment || review_notes || '').trim() || null;
+      const now = new Date();
+      const nextDual = {
+        co_signatory: { ...coSlot },
+        signing_reviewer: {
+          status: 'approved',
+          comment: finalComment,
+          acted_at: now,
+          signature_data
+        }
+      };
+
       const first = (expense.payments || [])[0];
+      const update = {
+        payment_dual_approval: nextDual,
+        payment_review: {
+          status: 'accepted',
+          review_notes: finalComment,
+          signature_data,
+          reviewed_by: userId,
+          reviewed_at: now
+        },
+        payment_stage: 'completed',
+        payment_approval_status: 'released',
+        status: 'paid',
+        paid_at: now,
+        payment_audit_log: pushAudit('payment_signing_officer_approved', finalComment || 'Signed and released')
+      };
+
       if (first) {
         update.payment_method = first.payment_method;
         update.payment_proof = first.payment_proof;
@@ -493,13 +806,9 @@ export class ExpenseService {
         update.payment_reference = first.payment_reference;
         update.payment_notes = first.payment_notes;
       }
-    }
 
-    const updatedExpense = await expenseRepo.update(expenseId, update);
+      const updatedExpense = await expenseRepo.update(expenseId, update);
 
-    // notify processor + submitter when completed
-    if (isAccept) {
-      const processorId = expense.payment_processor_id?._id || expense.payment_processor_id || expense.assigned_to?._id || expense.assigned_to;
       const submitterId = expense.submitted_by?._id || expense.submitted_by;
       const targets = [processorId, submitterId].filter(Boolean).map(String);
       const uniq = [...new Set(targets)];
@@ -509,7 +818,7 @@ export class ExpenseService {
             user_id: uid,
             type: 'expense_payment_completed',
             title: 'Expense payment completed',
-            message: 'Payment details were accepted by the reviewer and the expense is now marked as paid.',
+            message: 'Dual approval is complete and the expense is marked as paid.',
             link: `/expenses/${expenseId}#payment-section`,
             related_entity_id: expenseId,
             related_entity_type: 'expense',
@@ -519,10 +828,7 @@ export class ExpenseService {
           logError('Failed to create expense payment completed notification', { error: err?.message, expenseId, uid });
         }
       }
-    }
 
-    // After marking as paid, see if the project is ready for handoff completion.
-    if (isAccept) {
       try {
         await this._maybeTriggerProjectDeliveryCompletion({
           tenantDb,
@@ -537,9 +843,11 @@ export class ExpenseService {
           expenseId
         });
       }
+
+      return updatedExpense;
     }
 
-    return updatedExpense;
+    throw new AppError('Invalid payment review action', 400, 'VALIDATION_ERROR');
   }
 
   async submitPaymentProof(expenseId, paymentData, userId) {

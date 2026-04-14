@@ -19,13 +19,14 @@ const fileFilter = (req, file, cb) => {
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
     'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // .xlsx
+    'text/csv',
     'image/jpeg',
     'image/jpg',
     'image/png',
     'image/gif'
   ];
 
-  const allowedExtensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.jpg', '.jpeg', '.png', '.gif'];
+  const allowedExtensions = ['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv', '.jpg', '.jpeg', '.png', '.gif'];
 
   // Check MIME type
   if (allowedMimeTypes.includes(file.mimetype)) {

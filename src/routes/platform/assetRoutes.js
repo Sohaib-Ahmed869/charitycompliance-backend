@@ -97,6 +97,52 @@ router.get(
 // Get asset stats
 router.get('/stats', assetController.getAssetStats);
 
+// Physical record-keeping register (paper archives)
+router.get('/physical-storage', assetController.getPhysicalStorageLocations);
+router.post(
+  '/physical-storage',
+  [
+    body('name').trim().notEmpty().withMessage('Name is required'),
+    body('type').isIn(['on-site', 'off-site', 'archive']).withMessage('Type must be on-site, off-site, or archive'),
+    body('address').optional().isString(),
+    body('recordCategories').optional().isArray().withMessage('Record categories must be an array'),
+    body('accessLevel').optional().isString(),
+    body('access_restrictions').optional().isString(),
+    body('responsiblePerson').optional().isString(),
+    body('responsibleUserId').optional({ nullable: true }).isMongoId().withMessage('Responsible user must be a valid user ID'),
+    body('retentionPolicy').optional().isString(),
+    body('retentionEndDate').optional({ nullable: true }).isISO8601().withMessage('Retention end date must be valid'),
+    body('lastAuditDate').optional({ nullable: true }).isISO8601().withMessage('Last audit date must be valid'),
+    body('nextAuditDue').optional({ nullable: true }).isISO8601().withMessage('Next audit due date must be valid'),
+    body('notes').optional().isString(),
+    body('documents').optional().isArray().withMessage('Documents must be an array')
+  ],
+  validate,
+  assetController.createPhysicalStorageLocation
+);
+router.patch(
+  '/physical-storage/:locationId',
+  [
+    param('locationId').isMongoId().withMessage('Invalid location ID'),
+    body('name').optional().isString(),
+    body('type').optional().isIn(['on-site', 'off-site', 'archive']).withMessage('Type must be on-site, off-site, or archive'),
+    body('address').optional().isString(),
+    body('recordCategories').optional().isArray().withMessage('Record categories must be an array'),
+    body('accessLevel').optional().isString(),
+    body('access_restrictions').optional().isString(),
+    body('responsiblePerson').optional().isString(),
+    body('responsibleUserId').optional({ nullable: true }).isMongoId().withMessage('Responsible user must be a valid user ID'),
+    body('retentionPolicy').optional().isString(),
+    body('retentionEndDate').optional({ nullable: true }).isISO8601().withMessage('Retention end date must be valid'),
+    body('lastAuditDate').optional({ nullable: true }).isISO8601().withMessage('Last audit date must be valid'),
+    body('nextAuditDue').optional({ nullable: true }).isISO8601().withMessage('Next audit due date must be valid'),
+    body('notes').optional().isString(),
+    body('review_comment').optional().isString()
+  ],
+  validate,
+  assetController.updatePhysicalStorageLocation
+);
+
 // Get asset by ID
 router.get(
   '/:assetId',

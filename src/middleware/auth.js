@@ -283,19 +283,22 @@ export const authenticate = async (req, res, next) => {
         // Don't block auth if the check fails
       }
 
-      // Also check if user account is suspended (set during BCP transfer activation)
+    }
+
+    // Enforce account status for all roles: only active users can continue.
+    if (decoded.orgId && decoded.userId) {
       try {
         const { getTenantConnection } = await import('../db/connectionManager.js');
         const { UserRepository } = await import('../repositories/userRepository.js');
         const tenantDb = await getTenantConnection(decoded.orgId);
         const userRepo = new UserRepository(tenantDb);
         const usr = await userRepo.findById(decoded.userId);
-        if (usr && usr.status === 'suspended') {
+        if (!usr || usr.status !== 'active') {
           return res.status(403).json({
             success: false,
             error: {
-              message: 'Your account has been suspended as part of a Business Continuity transfer. Please contact your administrator.',
-              code: 'POSITION_TRANSFERRED'
+              message: 'Your account is inactive. Please contact your administrator.',
+              code: 'ACCOUNT_INACTIVE'
             }
           });
         }

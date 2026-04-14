@@ -424,13 +424,13 @@ export class AuthService {
         throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
       }
 
-      // Block login if user account is suspended (set during BCP authority transfer)
-      if (!user.is_org_owner && user.status === 'suspended') {
-        logWarn('Login blocked - user account suspended (BCP transfer)', { userId: user._id, orgId });
+      // Block login for any non-active account state.
+      if (user.status && user.status !== 'active') {
+        logWarn('Login blocked - user account not active', { userId: user._id, orgId, status: user.status });
         throw new AppError(
-          'Your account has been suspended as part of a Business Continuity transfer. Please contact your administrator.',
+          'Your account is inactive. Please contact your administrator.',
           403,
-          'POSITION_TRANSFERRED'
+          'ACCOUNT_INACTIVE'
         );
       }
 

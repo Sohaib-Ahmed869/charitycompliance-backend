@@ -14,6 +14,10 @@ import { startRegistrationLicenseReminderScheduler } from './src/services/regist
 import { startMeetingReminderScheduler } from './src/services/meetingReminderService.js';
 import { runRegistrationLicenseRemindersOnce } from './src/services/registrationLicenseReminderService.js';
 import { runMeetingRemindersOnce } from './src/services/meetingReminderService.js';
+import { startFinanceCloseScheduler } from './src/services/checklistSchedulerService.js';
+import { startFiscalReportReminderScheduler, runFiscalReportRemindersOnce } from './src/services/fiscalReportReminderService.js';
+import { startSuitabilityRenewalScheduler, runSuitabilityRenewalsOnce } from './src/services/suitabilityReminderService.js';
+import { startSubscriptionMaintenanceReminderScheduler, runSubscriptionMaintenanceRemindersOnce } from './src/services/subscriptionMaintenanceReminderService.js';
 
 dotenv.config();
 
@@ -33,6 +37,11 @@ const startServer = async () => {
       startRegistrationLicenseReminderScheduler();
       // Meeting reminders (~1h / ~15m before start, with catch-up if ticks were missed). Tick: MEETING_REMINDER_TICK_MS (default 3m). SMTP required for email.
       startMeetingReminderScheduler();
+      // Finance close: auto-generate month-end / quarter-end checklist workflows.
+      startFinanceCloseScheduler();
+      startFiscalReportReminderScheduler();
+      startSuitabilityRenewalScheduler();
+      startSubscriptionMaintenanceReminderScheduler();
 
       // Optional: run catch-up reminders immediately on boot (useful after downtime).
       // These are deduped (notifications) and phase-tracked (meetings), so safe on restarts.
@@ -41,6 +50,9 @@ const startServer = async () => {
         setTimeout(() => {
           runMeetingRemindersOnce().catch((err) => logError('Meeting reminders run-on-boot failed', err));
           runRegistrationLicenseRemindersOnce().catch((err) => logError('Reg/license reminders run-on-boot failed', err));
+          runFiscalReportRemindersOnce().catch((err) => logError('Fiscal report reminders run-on-boot failed', err));
+          runSuitabilityRenewalsOnce().catch((err) => logError('Suitability renewals run-on-boot failed', err));
+          runSubscriptionMaintenanceRemindersOnce().catch((err) => logError('Subscription maintenance reminders run-on-boot failed', err));
         }, Number(process.env.REMINDERS_RUN_ON_BOOT_DELAY_MS) || 8000);
       }
     });

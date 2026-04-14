@@ -88,10 +88,10 @@ export class BoardMemberRepository {
     );
   }
 
-  async delete(id) {
+  async delete(id, extraFields = {}) {
     return await this.BoardMember.findByIdAndUpdate(
       id,
-      { $set: { is_active: false, status: 'removed' } },
+      { $set: { is_active: false, status: 'removed', ...extraFields } },
       { new: true }
     );
   }

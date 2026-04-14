@@ -10,6 +10,7 @@ import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { uploadSingle, handleUploadError } from '../../middleware/upload.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireMfa } from '../../middleware/mfa.js';
 
 const router = express.Router();
 
@@ -82,7 +83,6 @@ router.get(
 router.post(
   '/',
   [
-    // NOTE: Board member and Head of Department can coexist (a board member may also be HOD).
     body('given_names')
       .trim()
       .notEmpty()
@@ -176,12 +176,7 @@ router.put(
   [
     param('boardMemberId')
       .isMongoId()
-      .withMessage('Invalid board member ID'),
-    // NOTE: Board member and Head of Department can coexist (a board member may also be HOD).
-    body('email')
-      .optional({ values: 'falsy' })
-      .isEmail()
-      .withMessage('Valid email is required')
+      .withMessage('Invalid board member ID')
   ],
   validate,
   boardMemberController.updateBoardMember
@@ -196,6 +191,7 @@ router.delete(
       .withMessage('Invalid board member ID')
   ],
   validate,
+  requireMfa('offboarding_access'),
   boardMemberController.deleteBoardMember
 );
 

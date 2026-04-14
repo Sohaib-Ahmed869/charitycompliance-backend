@@ -19,13 +19,6 @@ import { getFileUrl, uploadToS3 } from '../services/s3Service.js';
 import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
-import { ensureEmailNotInOtherTenants } from '../utils/ensureEmailNotInOtherTenants.js';
-import { PolicyRepository } from '../repositories/policyRepository.js';
-
-const getEffectivePositionLabel = (data = {}) => {
-  if (data?.is_volunteer) return '';
-  return String(data?.custom_position_title || data?.position || '').trim();
-};
 
 export const getBoardMembers = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -149,12 +142,6 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
   }
 
-  // Enforce global email uniqueness across tenants for any account-capable responsible person.
-  // This is the same rule as the Responsible People setup flow.
-  if (system_access !== false && boardMemberData?.email) {
-    await ensureEmailNotInOtherTenants(boardMemberData.email, orgId);
-  }
-
   // Generate invitation token if invite is requested
   let invitationData = {};
   if (invite && system_access !== false) {
@@ -168,21 +155,6 @@ export const createBoardMember = asyncHandler(async (req, res) => {
       invitation_expires_at: expiresAt,
       has_system_access: system_access !== false
     };
-  }
-
-  const effectivePosition = getEffectivePositionLabel({
-    ...boardMemberData,
-    is_volunteer: !!is_volunteer,
-  });
-  if (effectivePosition) {
-    const duplicate = await boardMemberRepo.findActiveByEffectivePositionInOrg(org._id, effectivePosition);
-    if (duplicate) {
-      throw new AppError(
-        `A responsible person with the position "${effectivePosition}" already exists`,
-        400,
-        'DUPLICATE_POSITION'
-      );
-    }
   }
 
   const boardMember = await boardMemberRepo.create({
@@ -255,51 +227,6 @@ export const createBoardMember = asyncHandler(async (req, res) => {
       });
       // Don't fail the request if email fails - board member is still created
     }
-  }
-
-  // Send all existing active policies to the new volunteer so they can acknowledge them
-  if (is_volunteer && boardMemberData.email) {
-    (async () => {
-      try {
-        const policyRepo = new PolicyRepository(tenantDb);
-        const activePolicies = await policyRepo.findByOrgId(org._id, { status: 'active' });
-        if (activePolicies && activePolicies.length > 0) {
-          const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-          const policiesWithLinks = await Promise.all(
-            activePolicies.map(async (p) => {
-              const tokenDoc = await createVolunteerActionToken({
-                orgId,
-                boardMemberId: boardMember._id,
-                actionType: 'policy_ack',
-                email: boardMemberData.email,
-                metadata: { policy_id: String(p._id) },
-              });
-              return {
-                title: p.title || 'Policy',
-                acknowledgeUrl: `${frontendUrl}/public/volunteer/policy_ack/${tokenDoc.token}`,
-              };
-            })
-          );
-          const recipientName = `${boardMemberData.given_names} ${boardMemberData.family_name}`.trim() || 'Volunteer';
-          await emailService.sendVolunteerAllPoliciesEmail({
-            to: boardMemberData.email,
-            recipientName,
-            organizationName: org.name || 'Your Organization',
-            policies: policiesWithLinks,
-          });
-          logInfo('Volunteer all-policies digest email sent', {
-            boardMemberId: boardMember._id,
-            policyCount: policiesWithLinks.length,
-            orgId,
-          });
-        }
-      } catch (err) {
-        logError('Failed to send volunteer all-policies digest email', err, {
-          boardMemberId: boardMember._id,
-          orgId,
-        });
-      }
-    })();
   }
 
   // Manual mode: create user with password directly (no invite email)
@@ -401,74 +328,10 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
   const { boardMemberId } = req.params;
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
-  const userRepo = new UserRepository(tenantDb);
-  const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
-
-  const org = await orgRepo.findOne();
-  if (!org) {
-    throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
-  }
-
-  const existingMember = await boardMemberRepo.findById(boardMemberId);
-  if (!existingMember) {
-    throw new AppError('Board member not found', 404, 'NOT_FOUND');
-  }
-
-  const incomingEmail = Object.prototype.hasOwnProperty.call(req.body, 'email')
-    ? String(req.body.email || '').trim().toLowerCase()
-    : null;
-  const currentEmail = String(existingMember.email || '').trim().toLowerCase();
-  const isEmailChange = incomingEmail !== null && incomingEmail !== currentEmail;
-  if (incomingEmail !== null && incomingEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(incomingEmail)) {
-    throw new AppError('Valid email is required', 400, 'VALIDATION_ERROR');
-  }
-  if (isEmailChange && incomingEmail) {
-    // Only block cross-tenant collisions when this person can access the system.
-    if (existingMember?.has_system_access !== false) {
-      await ensureEmailNotInOtherTenants(incomingEmail, orgId);
-    }
-    const duplicateMember = await boardMemberRepo.findActiveByEmailInOrg(
-      incomingEmail,
-      org._id,
-      boardMemberId
-    );
-    if (duplicateMember) {
-      throw new AppError('Another responsible person already uses this email', 409, 'EMAIL_ALREADY_IN_USE');
-    }
-    const userByEmail = await userRepo.findByEmail(incomingEmail);
-    if (userByEmail && String(userByEmail._id) !== String(existingMember.user_id || '')) {
-      throw new AppError('Another user already uses this email', 409, 'EMAIL_ALREADY_IN_USE');
-    }
-  }
-
-  const effectivePosition = getEffectivePositionLabel({
-    position: req.body?.position ?? existingMember.position,
-    custom_position_title: req.body?.custom_position_title ?? existingMember.custom_position_title,
-    is_volunteer: req.body?.is_volunteer ?? existingMember.is_volunteer,
-  });
-  if (effectivePosition) {
-    const duplicate = await boardMemberRepo.findActiveByEffectivePositionInOrg(
-      org._id,
-      effectivePosition,
-      boardMemberId
-    );
-    if (duplicate) {
-      throw new AppError(
-        `A responsible person with the position "${effectivePosition}" already exists`,
-        400,
-        'DUPLICATE_POSITION'
-      );
-    }
-  }
 
   const boardMember = await boardMemberRepo.update(boardMemberId, req.body);
   if (!boardMember) {
     throw new AppError('Board member not found', 404, 'NOT_FOUND');
-  }
-
-  // Keep login credentials in sync when this person has a linked user account.
-  if (isEmailChange && incomingEmail && existingMember.user_id) {
-    await userRepo.update(existingMember.user_id, { email: incomingEmail });
   }
 
   const obj = boardMember.toObject ? boardMember.toObject() : { ...boardMember };
@@ -508,12 +371,61 @@ export const deleteBoardMember = asyncHandler(async (req, res) => {
   const { boardMemberId } = req.params;
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const userRepo = new UserRepository(tenantDb);
+  const boardMember = await boardMemberRepo.findById(boardMemberId);
+  if (!boardMember) {
+    throw new AppError('Board member not found', 404, 'NOT_FOUND');
+  }
 
-  await boardMemberRepo.delete(boardMemberId);
+  const now = new Date();
+  const userId = boardMember.user_id?.toString?.() || null;
+  let offboardedUser = null;
+  if (userId) {
+    const user = await userRepo.findById(userId);
+    if (user) {
+      const originalEmail = String(user.email || '').trim();
+      // Free up the original email for reuse while retaining a unique offboarded address on the user record.
+      const safeLocal = originalEmail.includes('@') ? originalEmail.split('@')[0] : 'user';
+      const offboardedEmail = `offboarded+${Date.now()}-${safeLocal}@offboarded.local`;
+      offboardedUser = await userRepo.update(userId, {
+        status: 'inactive',
+        locked: true,
+        locked_until: null,
+        mfa_enabled: false,
+        mfa_secret: null,
+        email: offboardedEmail
+      });
+    }
+  }
+
+  await boardMemberRepo.delete(boardMemberId, {
+    has_system_access: false,
+    invitation_status: 'expired',
+    user_id: null,
+    position_id: null,
+    status: 'removed',
+    offboarded_at: now
+  });
+
+  const actorId = req.user?.userId ? String(req.user.userId) : null;
+  await tenantDb.collection('access_change_logs').insertOne({
+    org_id: boardMember.org_id,
+    user_id: userId,
+    board_member_id: boardMember._id,
+    changed_by: actorId,
+    action: 'user_offboarded',
+    module: 'offboarding',
+    details: {
+      reason: 'Responsible person removed/offboarded',
+      access_revoked: true,
+      email_reassigned: !!offboardedUser
+    },
+    created_at: now
+  });
 
   res.json({
     success: true,
-    message: 'Board member deleted successfully'
+    message: 'Responsible person offboarded successfully'
   });
 });
 

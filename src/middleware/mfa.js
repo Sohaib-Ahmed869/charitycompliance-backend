@@ -14,7 +14,7 @@ export function requireMfa(scope) {
   return (req, res, next) => {
     const token = req.headers['x-mfa-token'] || req.headers['x-mfa'] || null;
     if (!token) {
-      return res.status(401).json({
+      return res.status(403).json({
         success: false,
         error: { code: 'MFA_REQUIRED', message: 'MFA verification required' }
       });
@@ -22,20 +22,20 @@ export function requireMfa(scope) {
     try {
       const decoded = jwt.verify(token, MFA_JWT_SECRET);
       if (decoded?.typ !== 'mfa' || decoded?.scope !== scope) {
-        return res.status(401).json({
+        return res.status(403).json({
           success: false,
           error: { code: 'MFA_INVALID', message: 'Invalid MFA token' }
         });
       }
       if (req.user?.userId && decoded.userId !== req.user.userId) {
-        return res.status(401).json({
+        return res.status(403).json({
           success: false,
           error: { code: 'MFA_INVALID', message: 'Invalid MFA token' }
         });
       }
       next();
     } catch (e) {
-      return res.status(401).json({
+      return res.status(403).json({
         success: false,
         error: { code: 'MFA_EXPIRED', message: 'MFA token expired' }
       });
