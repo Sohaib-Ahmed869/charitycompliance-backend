@@ -11,6 +11,7 @@ import { DepartmentRepository } from '../repositories/departmentRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import { ApprovalWorkflowService } from './approvalWorkflowService.js';
+import { ChecklistService } from './checklistService.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logInfo } from '../utils/logger.js';
 import { getMasterKeyHex } from '../config/encryption.js';
@@ -107,9 +108,11 @@ export class RiskService {
 
     logInfo('Risk created', { riskId: risk._id, submittedBy });
 
+    let approvalRequestId = null;
     try {
       const workflowService = new ApprovalWorkflowService(this.orgId);
-      await workflowService.createRiskApprovalRequest(risk._id, submittedBy);
+      const workflowReq = await workflowService.createRiskApprovalRequest(risk._id, submittedBy);
+      approvalRequestId = workflowReq?._id || workflowReq?.id || null;
     } catch (err) {
       // If there's no approval workflow for risk management, auto-approve the risk.
       // This keeps risk creation working even when approval matrices are not configured.
@@ -138,6 +141,22 @@ export class RiskService {
         status: 'approved',
         approval_matrix_id: null,
         approval_request_id: null
+      });
+    }
+
+    // Ensure risk workflow checklist is created even when approvals are auto-approved.
+    try {
+      const checklistService = new ChecklistService(this.orgId);
+      await checklistService.ensureWorkflowChecklistForApproval({
+        entityType: 'risk',
+        entityId: String(risk._id),
+        approvalRequestId: approvalRequestId ? String(approvalRequestId) : null,
+        createdBy: submittedBy
+      });
+    } catch (checklistErr) {
+      logInfo('Risk created but checklist could not be initialized', {
+        riskId: risk._id,
+        error: checklistErr?.message
       });
     }
 
