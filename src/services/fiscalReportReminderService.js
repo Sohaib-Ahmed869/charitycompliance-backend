@@ -212,6 +212,12 @@ export async function runFiscalReportRemindersOnce() {
 }
 
 export function startFiscalReportReminderScheduler() {
+  const enabled = String(process.env.FISCAL_REPORT_REMINDERS_ENABLED || 'true').toLowerCase() !== 'false';
+  if (!enabled) {
+    logInfo('Fiscal report reminder scheduler disabled');
+    return;
+  }
+
   setInterval(() => {
     runFiscalReportRemindersOnce().catch((err) => logError('Fiscal report reminder tick failed', err));
   }, TICK_MS);

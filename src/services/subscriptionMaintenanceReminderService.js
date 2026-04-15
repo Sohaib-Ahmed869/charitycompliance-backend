@@ -97,6 +97,13 @@ export async function runSubscriptionMaintenanceRemindersOnce() {
 }
 
 export function startSubscriptionMaintenanceReminderScheduler() {
+  const enabled =
+    String(process.env.SUBSCRIPTION_MAINTENANCE_REMINDERS_ENABLED || 'true').toLowerCase() !== 'false';
+  if (!enabled) {
+    logInfo('Subscription maintenance reminder scheduler disabled');
+    return;
+  }
+
   setInterval(() => {
     runSubscriptionMaintenanceRemindersOnce().catch((err) => {
       logError('Subscription maintenance reminder tick failed', err);

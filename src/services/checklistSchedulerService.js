@@ -89,6 +89,12 @@ export async function runFinanceCloseSchedulerOnce() {
 }
 
 export function startFinanceCloseScheduler() {
+  const enabled = String(process.env.FINANCE_CLOSE_SCHEDULER_ENABLED || 'true').toLowerCase() !== 'false';
+  if (!enabled) {
+    logInfo('Finance close scheduler disabled');
+    return;
+  }
+
   const tick = async () => {
     try {
       await runFinanceCloseSchedulerOnce();
