@@ -10,7 +10,7 @@ import dotenv from 'dotenv';
 import rateLimit from 'express-rate-limit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { connectRouterDB } from './config/database.js';
-import { logDebug } from './utils/logger.js';
+import { logDebug, logInfo, logWarn } from './utils/logger.js';
 
 dotenv.config();
 
@@ -39,10 +39,34 @@ const isAllowedOrigin = (origin) => {
   if (/^https?:\/\/localhost(?::\d+)?$/i.test(normalized)) return true;
   return false;
 };
+
+logInfo('CORS allowlist loaded', {
+  count: allowedOrigins.length,
+  origins: allowedOrigins
+});
+
+// Optional: set CORS_DEBUG=true on Render to log every request's Origin (preflight + API).
+if (String(process.env.CORS_DEBUG || '').toLowerCase() === 'true') {
+  app.use((req, _res, next) => {
+    logInfo('CORS debug', {
+      method: req.method,
+      path: req.path,
+      origin: req.headers.origin || '(none)'
+    });
+    next();
+  });
+}
+
 const corsOptions = {
   origin: (origin, callback) => {
     if (isAllowedOrigin(origin)) return callback(null, true);
-    return callback(new Error(`CORS blocked for origin: ${origin}`));
+    // Do not pass Error here: next(err) can skip CORS headers on the response and the browser
+    // reports a generic "CORS" failure. Reject with false and log instead.
+    logWarn('CORS origin rejected', {
+      origin: origin || '(missing)',
+      hint: 'Add exact scheme+host+port to CORS_ORIGIN or FRONTEND_URL on the server, then redeploy.'
+    });
+    return callback(null, false);
   },
   credentials: true,
   optionsSuccessStatus: 200
@@ -63,7 +87,9 @@ const limiter = rateLimit({
     error: 'Too many requests from this IP, please try again later.'
   },
   standardHeaders: true,
-  legacyHeaders: false
+  legacyHeaders: false,
+  // OPTIONS preflight must not be throttled or the browser often shows a misleading CORS error.
+  skip: (req) => req.method === 'OPTIONS'
 });
 app.use('/api/', limiter);
 
