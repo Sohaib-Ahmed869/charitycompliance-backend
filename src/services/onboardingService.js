@@ -313,6 +313,11 @@ export class OnboardingService {
     await orgRepo.update({
       name: stepData.name,
       employee_count: sizeMapping[stepData.size] || 0,
+      website: stepData.website || undefined,
+      address_street: stepData.address_street || undefined,
+      address_city: stepData.address_city || undefined,
+      address_state: stepData.address_state || undefined,
+      address_postcode: stepData.address_postcode || undefined,
       metadata
     });
 
