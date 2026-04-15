@@ -22,6 +22,10 @@ import { startSubscriptionMaintenanceReminderScheduler, runSubscriptionMaintenan
 dotenv.config();
 
 const PORT = process.env.PORT || 5000;
+const isDevelopment = String(process.env.NODE_ENV || '').toLowerCase() === 'development';
+const backgroundJobsEnabled =
+  String(process.env.BACKGROUND_JOBS_ENABLED || '').toLowerCase() === 'true' ||
+  (!isDevelopment && String(process.env.BACKGROUND_JOBS_ENABLED || '').toLowerCase() !== 'false');
 
 // Initialize and start server
 const startServer = async () => {
@@ -33,27 +37,35 @@ const startServer = async () => {
       logInfo('Server started', { port: PORT, environment: process.env.NODE_ENV || 'development' });
       // Verify SMTP on startup and log result (non-blocking)
       emailService.initialize().catch(() => {});
-      // Start scheduled reminders (registration/license expiries)
-      startRegistrationLicenseReminderScheduler();
-      // Meeting reminders (~1h / ~15m before start, with catch-up if ticks were missed). Tick: MEETING_REMINDER_TICK_MS (default 3m). SMTP required for email.
-      startMeetingReminderScheduler();
-      // Finance close: auto-generate month-end / quarter-end checklist workflows.
-      startFinanceCloseScheduler();
-      startFiscalReportReminderScheduler();
-      startSuitabilityRenewalScheduler();
-      startSubscriptionMaintenanceReminderScheduler();
+      if (backgroundJobsEnabled) {
+        // Start scheduled reminders (registration/license expiries)
+        startRegistrationLicenseReminderScheduler();
+        // Meeting reminders (~1h / ~15m before start, with catch-up if ticks were missed). Tick: MEETING_REMINDER_TICK_MS (default 3m). SMTP required for email.
+        startMeetingReminderScheduler();
+        // Finance close: auto-generate month-end / quarter-end checklist workflows.
+        startFinanceCloseScheduler();
+        startFiscalReportReminderScheduler();
+        startSuitabilityRenewalScheduler();
+        startSubscriptionMaintenanceReminderScheduler();
 
-      // Optional: run catch-up reminders immediately on boot (useful after downtime).
-      // These are deduped (notifications) and phase-tracked (meetings), so safe on restarts.
-      const runOnBoot = String(process.env.REMINDERS_RUN_ON_BOOT || 'true').toLowerCase() !== 'false';
-      if (runOnBoot) {
-        setTimeout(() => {
-          runMeetingRemindersOnce().catch((err) => logError('Meeting reminders run-on-boot failed', err));
-          runRegistrationLicenseRemindersOnce().catch((err) => logError('Reg/license reminders run-on-boot failed', err));
-          runFiscalReportRemindersOnce().catch((err) => logError('Fiscal report reminders run-on-boot failed', err));
-          runSuitabilityRenewalsOnce().catch((err) => logError('Suitability renewals run-on-boot failed', err));
-          runSubscriptionMaintenanceRemindersOnce().catch((err) => logError('Subscription maintenance reminders run-on-boot failed', err));
-        }, Number(process.env.REMINDERS_RUN_ON_BOOT_DELAY_MS) || 8000);
+        // Optional: run catch-up reminders immediately on boot (useful after downtime).
+        // These are deduped (notifications) and phase-tracked (meetings), so safe on restarts.
+        const runOnBoot = String(process.env.REMINDERS_RUN_ON_BOOT || 'true').toLowerCase() !== 'false';
+        if (runOnBoot) {
+          setTimeout(() => {
+            runMeetingRemindersOnce().catch((err) => logError('Meeting reminders run-on-boot failed', err));
+            runRegistrationLicenseRemindersOnce().catch((err) => logError('Reg/license reminders run-on-boot failed', err));
+            runFiscalReportRemindersOnce().catch((err) => logError('Fiscal report reminders run-on-boot failed', err));
+            runSuitabilityRenewalsOnce().catch((err) => logError('Suitability renewals run-on-boot failed', err));
+            runSubscriptionMaintenanceRemindersOnce().catch((err) => logError('Subscription maintenance reminders run-on-boot failed', err));
+          }, Number(process.env.REMINDERS_RUN_ON_BOOT_DELAY_MS) || 8000);
+        }
+      } else {
+        logWarn('Background jobs disabled for this runtime', {
+          backgroundJobsEnabled,
+          nodeEnv: process.env.NODE_ENV || 'development',
+          hint: 'Set BACKGROUND_JOBS_ENABLED=true to enable schedulers in this environment.'
+        });
       }
     });
 
