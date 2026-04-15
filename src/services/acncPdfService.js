@@ -323,6 +323,7 @@ export async function generateAcncFinancialPdf({ prefill, overrides }) {
     <table class="info-table">
       <tr><td>Charity name</td><td>${esc(charity.name)}</td></tr>
       <tr><td>ABN</td><td>${esc(charity.abn)}</td></tr>
+      <tr><td>Website</td><td>${esc(charity.website)}</td></tr>
       <tr><td>Address</td><td>${esc(charity.address)}</td></tr>
     </table>
 
