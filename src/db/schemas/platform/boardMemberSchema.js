@@ -219,6 +219,35 @@ const boardMemberSchema = new mongoose.Schema({
     type: String,
     trim: true,
     default: ''
+  },
+  /** Director ID verification metadata */
+  director_id: {
+    number: { type: String, trim: true, default: '' },
+    document_key: { type: String, default: null },
+    document_name: { type: String, default: null },
+    document_type: { type: String, default: null },
+    uploaded_at: { type: Date, default: null },
+    verified_at: { type: Date, default: null }
+  },
+  /** Suitability checks for responsible people */
+  suitability_check: {
+    status: {
+      type: String,
+      enum: ['pending', 'verified', 'expired'],
+      default: 'pending'
+    },
+    next_review_date: { type: Date, default: null },
+    items: [{
+      type: { type: String, required: true, trim: true },
+      completed: { type: Boolean, default: false },
+      completed_at: { type: Date, default: null },
+      expires_at: { type: Date, default: null },
+      comments: { type: String, default: '', trim: true },
+      document_key: { type: String, default: null },
+      document_name: { type: String, default: null },
+      document_type: { type: String, default: null },
+      uploaded_at: { type: Date, default: null }
+    }]
   }
 }, {
   timestamps: true,

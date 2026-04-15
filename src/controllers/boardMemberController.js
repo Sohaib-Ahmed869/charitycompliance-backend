@@ -20,6 +20,24 @@ import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
 
+const NORMALIZED_SUITABILITY_TYPES = new Set([
+  'criminal_history_declaration',
+  'bankruptcy_check',
+  'disqualification_status',
+  'conflict_of_interest',
+  'fit_and_proper_check'
+]);
+
+const computeSuitabilityStatus = (suitability = {}) => {
+  const items = Array.isArray(suitability?.items) ? suitability.items : [];
+  const now = new Date();
+  const hasExpiredItem = items.some((item) => item?.expires_at && new Date(item.expires_at) < now);
+  if (hasExpiredItem) return 'expired';
+  if (suitability?.next_review_date && new Date(suitability.next_review_date) < now) return 'expired';
+  if (items.length > 0 && items.every((item) => item?.completed)) return 'verified';
+  return 'pending';
+};
+
 export const getBoardMembers = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const tenantDb = await getTenantConnection(orgId);
@@ -663,6 +681,167 @@ export const updatePosition = asyncHandler(async (req, res) => {
       granted_permissions: updated.granted_permissions || []
     }
   });
+});
+
+export const updateSuitability = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+
+  const member = await boardMemberRepo.findById(boardMemberId);
+  if (!member) throw new AppError('Board member not found', 404, 'NOT_FOUND');
+
+  const existingSuitability = member.suitability_check || {};
+  const existingItems = Array.isArray(existingSuitability.items) ? existingSuitability.items : [];
+  const itemsByType = new Map(existingItems.map((item) => [item.type, { ...(item?.toObject ? item.toObject() : item) }]));
+
+  if (Array.isArray(req.body?.items)) {
+    req.body.items.forEach((incoming) => {
+      const type = String(incoming?.type || '').trim();
+      if (!NORMALIZED_SUITABILITY_TYPES.has(type)) return;
+      const prev = itemsByType.get(type) || { type };
+      const next = { ...prev };
+      if (typeof incoming.completed === 'boolean') next.completed = incoming.completed;
+      if (Object.prototype.hasOwnProperty.call(incoming, 'completed_at')) {
+        next.completed_at = incoming.completed_at ? new Date(incoming.completed_at) : null;
+      }
+      if (Object.prototype.hasOwnProperty.call(incoming, 'expires_at')) {
+        next.expires_at = incoming.expires_at ? new Date(incoming.expires_at) : null;
+      }
+      if (Object.prototype.hasOwnProperty.call(incoming, 'comments')) {
+        next.comments = String(incoming.comments || '').trim();
+      }
+      if (next.completed && !next.completed_at) next.completed_at = new Date();
+      if (!next.completed) next.completed_at = null;
+      itemsByType.set(type, next);
+    });
+  }
+
+  let directorId = member.director_id ? (member.director_id.toObject ? member.director_id.toObject() : { ...member.director_id }) : {};
+  if (req.body?.director_id && typeof req.body.director_id === 'object') {
+    directorId = {
+      ...directorId,
+      number: Object.prototype.hasOwnProperty.call(req.body.director_id, 'number')
+        ? String(req.body.director_id.number || '').trim()
+        : (directorId.number || '')
+    };
+  }
+
+  const mergedItems = Array.from(itemsByType.values());
+  const nextReviewDate = mergedItems
+    .map((item) => (item?.expires_at ? new Date(item.expires_at) : null))
+    .filter((d) => d && !Number.isNaN(d.getTime()))
+    .sort((a, b) => a - b)[0] || null;
+
+  const suitability_check = {
+    ...existingSuitability,
+    items: mergedItems,
+    next_review_date: nextReviewDate
+  };
+  suitability_check.status = computeSuitabilityStatus(suitability_check);
+
+  const updated = await boardMemberRepo.update(boardMemberId, {
+    suitability_check,
+    director_id: directorId
+  });
+
+  res.json({ success: true, data: updated });
+});
+
+export const uploadSuitabilityDocument = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boardMemberId } = req.params;
+  if (!req.file) throw new AppError('No file uploaded', 400, 'NO_FILE');
+
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const member = await boardMemberRepo.findById(boardMemberId);
+  if (!member) throw new AppError('Board member not found', 404, 'NOT_FOUND');
+
+  const itemType = String(req.body?.item_type || '').trim();
+  if (!itemType) throw new AppError('item_type is required', 400, 'VALIDATION_ERROR');
+
+  const { buffer, originalname, mimetype } = req.file;
+  const { key } = await uploadToS3(buffer, originalname, mimetype, orgId, 'suitability');
+  const uploadedAt = new Date();
+
+  if (itemType === 'director_id') {
+    const existingDirectorId = member.director_id ? (member.director_id.toObject ? member.director_id.toObject() : { ...member.director_id }) : {};
+    const director_id = {
+      ...existingDirectorId,
+      number: String(req.body?.director_id_number || existingDirectorId.number || '').trim(),
+      document_key: key,
+      document_name: originalname,
+      document_type: mimetype,
+      uploaded_at: uploadedAt,
+      verified_at: uploadedAt
+    };
+    const updated = await boardMemberRepo.update(boardMemberId, { director_id });
+    return res.json({ success: true, data: updated });
+  }
+
+  if (!NORMALIZED_SUITABILITY_TYPES.has(itemType)) {
+    throw new AppError('Unsupported suitability item type', 400, 'VALIDATION_ERROR');
+  }
+
+  const existingSuitability = member.suitability_check || {};
+  const existingItems = Array.isArray(existingSuitability.items) ? existingSuitability.items : [];
+  const itemsByType = new Map(existingItems.map((item) => [item.type, { ...(item?.toObject ? item.toObject() : item) }]));
+
+  const current = itemsByType.get(itemType) || { type: itemType };
+  const nextItem = {
+    ...current,
+    type: itemType,
+    document_key: key,
+    document_name: originalname,
+    document_type: mimetype,
+    uploaded_at: uploadedAt,
+    comments: Object.prototype.hasOwnProperty.call(req.body, 'comments')
+      ? String(req.body.comments || '').trim()
+      : (current.comments || ''),
+    expires_at: req.body?.expires_at ? new Date(req.body.expires_at) : (current.expires_at || null),
+    completed: current.completed ?? false,
+    completed_at: current.completed_at || null
+  };
+  itemsByType.set(itemType, nextItem);
+
+  const mergedItems = Array.from(itemsByType.values());
+  const nextReviewDate = mergedItems
+    .map((item) => (item?.expires_at ? new Date(item.expires_at) : null))
+    .filter((d) => d && !Number.isNaN(d.getTime()))
+    .sort((a, b) => a - b)[0] || null;
+
+  const suitability_check = {
+    ...existingSuitability,
+    items: mergedItems,
+    next_review_date: nextReviewDate
+  };
+  suitability_check.status = computeSuitabilityStatus(suitability_check);
+
+  const updated = await boardMemberRepo.update(boardMemberId, { suitability_check });
+  return res.json({ success: true, data: updated });
+});
+
+export const getSuitabilityBulkStatus = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+
+  const rows = await boardMemberRepo.BoardMember.find({
+    is_active: true
+  }).select('_id suitability_check').lean();
+
+  const data = rows.map((row) => {
+    const suitability = row?.suitability_check || {};
+    return {
+      board_member_id: row?._id,
+      status: suitability?.status || computeSuitabilityStatus(suitability),
+      next_review_date: suitability?.next_review_date || null
+    };
+  });
+
+  res.json({ success: true, data });
 });
 
 // ─── WWCC Certificate ───────────────────────────────────────────────

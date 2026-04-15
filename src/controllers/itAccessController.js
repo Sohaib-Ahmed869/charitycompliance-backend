@@ -237,8 +237,15 @@ export const updateOffboardingStep = asyncHandler(async (req, res) => {
     const user = await userRepo.findById(request.user_id);
     if (user) {
       const originalEmail = String(user.email || '').trim();
+      const originalName = `${user.first_name || ''} ${user.last_name || ''}`.trim();
       const safeLocal = originalEmail.includes('@') ? originalEmail.split('@')[0] : 'user';
       const offboardedEmail = `offboarded+${Date.now()}-${safeLocal}@offboarded.local`;
+      request.metadata = {
+        ...(request.metadata || {}),
+        original_email: originalEmail || null,
+        original_name: originalName || null
+      };
+      request.markModified('metadata');
       await userRepo.update(user._id, {
         status: 'inactive',
         locked: true,
@@ -297,6 +304,7 @@ export const listOffboardingRequests = asyncHandler(async (req, res) => {
   const rows = await OffboardingRequest.find({ org_id: org._id })
     .populate('user_id', 'first_name last_name email status mfa_enabled')
     .populate('initiated_by', 'first_name last_name email')
+    .populate('steps.completed_by', 'first_name last_name email')
     .sort({ createdAt: -1 })
     .lean();
 

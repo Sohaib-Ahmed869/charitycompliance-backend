@@ -111,6 +111,8 @@ const approvalRequestSchema = new mongoose.Schema({
       'project_delivery',
       'project_delivery_changes',
       'sweep_funds',
+      'financial_reporting',
+      'bas_lodgement',
       // legacy
       'policy_approval',
       'document_approval',
