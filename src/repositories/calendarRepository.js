@@ -272,7 +272,7 @@ export class CalendarRepository {
       org_id: orgIdObj,
       status: { $in: ['submitted', 'approved'] },
       expiry_date: { $exists: true, $ne: null },
-      category: { $in: ['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'registration_license', 'licences_permits'] }
+      category: { $in: ['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'registration_license'] }
     };
 
     if (options.start_date || options.end_date) {

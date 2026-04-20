@@ -17,12 +17,12 @@ export class ChecklistInstanceRepository {
   }
 
   async create(data) {
-    const doc = new this.Instance(data);
+    const doc = new this.Instance({ ...data, entity_type: 'instance' });
     return await doc.save();
   }
 
   async findById(id) {
-    return await this.Instance.findById(id)
+    return await this.Instance.findOne({ _id: id, entity_type: 'instance' })
       .populate('approval_request_id')
       .populate('items.checked_by', 'first_name last_name email')
       .populate('items.evidence.uploaded_by', 'first_name last_name email')
@@ -30,7 +30,7 @@ export class ChecklistInstanceRepository {
   }
 
   async findByPeriod(orgId, type, period) {
-    const q = { org_id: orgId, type };
+    const q = { org_id: orgId, type, entity_type: 'instance' };
     if (period?.year) q['period.year'] = period.year;
     if (period?.month) q['period.month'] = period.month;
     if (period?.quarter) q['period.quarter'] = period.quarter;
@@ -38,7 +38,7 @@ export class ChecklistInstanceRepository {
   }
 
   async list(orgId, { type, year, month, quarter, status } = {}) {
-    const q = { org_id: orgId };
+    const q = { org_id: orgId, entity_type: 'instance' };
     if (type) q.type = type;
     if (status) q.status = status;
     if (year) q['period.year'] = Number(year);
@@ -52,6 +52,7 @@ export class ChecklistInstanceRepository {
   async findByContext(orgId, { type, entityType, entityId }) {
     const q = {
       org_id: orgId,
+      entity_type: 'instance',
       'context.entityType': String(entityType),
       'context.entityId': String(entityId)
     };
@@ -59,8 +60,23 @@ export class ChecklistInstanceRepository {
     return await this.Instance.findOne(q).sort({ createdAt: -1 });
   }
 
+  async findByApprovalRequest(orgId, approvalRequestId, { type } = {}) {
+    if (!approvalRequestId) return null;
+    const q = {
+      org_id: orgId,
+      entity_type: 'instance',
+      approval_request_id: approvalRequestId
+    };
+    if (type) q.type = type;
+    return await this.Instance.findOne(q).sort({ createdAt: -1 });
+  }
+
   async update(id, update) {
-    return await this.Instance.findByIdAndUpdate(id, { $set: update }, { new: true, runValidators: true });
+    return await this.Instance.findOneAndUpdate(
+      { _id: id, entity_type: 'instance' },
+      { $set: update },
+      { new: true, runValidators: true }
+    );
   }
 
   async close(id, userId) {

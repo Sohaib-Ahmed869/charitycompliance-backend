@@ -73,7 +73,7 @@ const GOVERNANCE_LABELS = {
  * Refresh all S3 file URLs in approval request to ensure they are not expired
  * Presigned URLs expire after 7 days, so we regenerate them at PDF export time
  */
-async function refreshApprovalFileUrls(approvalRequest) {
+async function refreshApprovalFileUrls(approvalRequest, checklistInstance = null) {
   try {
     // Process approval steps
     if (Array.isArray(approvalRequest.approval_steps)) {
@@ -127,11 +127,21 @@ async function refreshApprovalFileUrls(approvalRequest) {
       }
     }
 
-    return approvalRequest;
+    if (checklistInstance?.items?.length) {
+      for (const item of checklistInstance.items) {
+        if (!Array.isArray(item?.evidence)) continue;
+        for (const ev of item.evidence) {
+          if (ev?.file_key) {
+            ev.file_url = await getFileUrl(ev.file_key, 604800);
+          }
+        }
+      }
+    }
+    return { approvalRequest, checklistInstance };
   } catch (error) {
     // Log error but don't fail PDF generation if URL refresh fails
     console.error('Warning: Could not refresh some S3 URLs for PDF:', error.message);
-    return approvalRequest;
+    return { approvalRequest, checklistInstance };
   }
 }
 
@@ -140,10 +150,11 @@ async function refreshApprovalFileUrls(approvalRequest) {
  * @param {Object} expense         – Expense entity (or null)
  * @param {Object} risk            – Risk entity (or null)
  * @param {string} logoUrl
+ * @param {Object|null} checklistInstance
  */
-export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUrl) => {
+export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUrl, checklistInstance = null) => {
   // Refresh all S3 file URLs to ensure they are not expired
-  approvalRequest = await refreshApprovalFileUrls(approvalRequest);
+  ({ approvalRequest, checklistInstance } = await refreshApprovalFileUrls(approvalRequest, checklistInstance));
 
   const logoSrc = await resolveLogoSrcForPdf(logoUrl);
 
@@ -234,10 +245,10 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
 
       let notes = '';
       if (step.comments) {
-        notes += `<div style="margin-top:3px;font-size:9px;color:#4A5568;">💬 ${esc(step.comments)}</div>`;
+        notes += `<div style="margin-top:3px;font-size:9px;color:#4A5568;">Comments: ${esc(step.comments)}</div>`;
       }
       if (step.acknowledgement_note) {
-        notes += `<div style="margin-top:3px;font-size:9px;color:#3B82F6;">📝 ${esc(step.acknowledgement_note)}</div>`;
+        notes += `<div style="margin-top:3px;font-size:9px;color:#3B82F6;">Acknowledgement: ${esc(step.acknowledgement_note)}</div>`;
       }
       if (step.acknowledgement_files?.length) {
         const filesHTML = step.acknowledgement_files
@@ -249,7 +260,7 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
               : name;
           })
           .join(', ');
-        notes += `<div style="margin-top:3px;font-size:9px;color:#6366F1;">📎 ${step.acknowledgement_files.length} file${step.acknowledgement_files.length !== 1 ? 's' : ''}: ${filesHTML}</div>`;
+        notes += `<div style="margin-top:3px;font-size:9px;color:#6366F1;">Attachments: ${step.acknowledgement_files.length} file${step.acknowledgement_files.length !== 1 ? 's' : ''}: ${filesHTML}</div>`;
       }
 
       stepRows += `<tr>
@@ -296,6 +307,60 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
         <table>
           <thead><tr><th>Approver</th><th>Position</th><th>Note</th><th>Files</th></tr></thead>
           <tbody>${ackRows}</tbody>
+        </table>
+      `;
+    }
+
+    // ── Workflow checklist log ──
+    let checklistHTML = '';
+    if (checklistInstance?.items?.length) {
+      const checklistRows = checklistInstance.items.map((item, idx) => {
+        const checkedBy = item?.checked_by
+          ? `${item.checked_by.first_name || ''} ${item.checked_by.last_name || ''}`.trim() || item.checked_by.email || '—'
+          : '—';
+        const checkedAt = item?.checked_at
+          ? `${formatDate(item.checked_at)} ${formatTime(item.checked_at)}`
+          : '—';
+        const stateLabel = toTitleCase(item?.state || (item?.checked ? 'satisfied' : 'pending'));
+        const evidenceList = Array.isArray(item?.evidence) ? item.evidence : [];
+        const evidenceHTML = evidenceList.length
+          ? evidenceList.map((ev) => {
+            const uploader = ev?.uploaded_by
+              ? `${ev.uploaded_by.first_name || ''} ${ev.uploaded_by.last_name || ''}`.trim() || ev.uploaded_by.email || '—'
+              : '—';
+            const at = ev?.uploaded_at ? `${formatDate(ev.uploaded_at)} ${formatTime(ev.uploaded_at)}` : '—';
+            const fileName = esc(ev?.file_name || 'attachment');
+            const link = ev?.file_url
+              ? `<a href="${esc(ev.file_url)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${fileName}</a>`
+              : fileName;
+            return `<div style="margin-top:2px;">• ${link} <span style="color:#64748B;">(by ${esc(uploader)} at ${esc(at)})</span></div>`;
+          }).join('')
+          : '—';
+
+        return `<tr>
+          <td style="vertical-align:top;">${idx + 1}</td>
+          <td style="vertical-align:top;">${esc(item?.title_snapshot || 'Checklist item')}</td>
+          <td style="vertical-align:top;"><span class="status-badge ${item?.checked ? 'status-approved' : 'status-pending'}">${esc(stateLabel)}</span></td>
+          <td style="vertical-align:top;font-size:9px;">${esc(checkedBy)}</td>
+          <td style="vertical-align:top;font-size:9px;">${esc(checkedAt)}</td>
+          <td style="vertical-align:top;font-size:9px;">${esc(item?.notes || '—')}</td>
+          <td style="vertical-align:top;font-size:9px;">${evidenceHTML}</td>
+        </tr>`;
+      }).join('');
+
+      checklistHTML = `
+        <h2>Checklist Audit Log</h2>
+        <table>
+          <thead><tr>
+            <th style="width:36px;">#</th>
+            <th>Checklist Item</th>
+            <th>Status</th>
+            <th>Completed By</th>
+            <th>Completed At</th>
+            <th>Notes</th>
+            <th>Evidence / Attachments</th>
+          </tr></thead>
+          <tbody>${checklistRows}</tbody>
         </table>
       `;
     }
@@ -570,11 +635,12 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
 
     ${attemptsHTML}
     ${ackHTML}
+    ${checklistHTML}
     ${finalSignatureHTML}
 
     <div class="footer">
       <p><strong>Generated on:</strong> ${formatDate(new Date())} at ${formatTime(new Date())}</p>
-      <p>This approval workflow report contains a comprehensive log of all steps, decisions, and acknowledgements related to this request.</p>
+      <p>This approval workflow report contains a comprehensive log of all steps, decisions, acknowledgements, and checklist progress related to this request.</p>
       <p>Charity Compliance Management System | Confidential Document</p>
     </div>
   </div>

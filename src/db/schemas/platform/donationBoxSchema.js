@@ -1,7 +1,11 @@
 /**
- * Donation Box Schema (Tenant DB)
- * - Donation boxes are physical collection boxes with a chosen map location.
- * - Each box contains an embedded list of collection entries (tips/amount received).
+ * Cash Handling / Donation Box Schema (Tenant DB)
+ * - Collection points live under the "cash handling" module.
+ * - Two categories:
+ *     donation_box  — a physical box with a map location
+ *     miscellaneous — fundraising events, online appeals, other one-off sources
+ * - Each record contains an embedded list of collection entries (tips/amount received).
+ * - The counting / acknowledgement / deposit workflow is identical for both categories.
  */
 
 import mongoose from 'mongoose';
@@ -28,6 +32,23 @@ const donationBoxEntrySchema = new mongoose.Schema(
       default: '',
       trim: true,
     },
+    /**
+     * Miscellaneous-entry fields — only populated when the parent record is
+     * category=miscellaneous (fundraising events, online appeals, etc.).
+     * For donation_box entries these stay null/undefined and the existing
+     * amount/tips_count fields are used instead.
+     */
+    gross_amount: { type: Number, min: 0 },
+    expenses: { type: Number, min: 0, default: 0 },
+    net_amount: { type: Number, min: 0 },
+    participant_count: { type: Number, min: 0 },
+    payment_method: {
+      type: String,
+      enum: ['cash', 'card', 'online', 'mixed', 'other'],
+    },
+    platform: { type: String, trim: true, default: '' },
+    period_start: { type: Date },
+    period_end: { type: Date },
     /** Cash handling workflow (per collection entry). */
     workflow_status: {
       type: String,
@@ -154,9 +175,39 @@ const donationBoxSchema = new mongoose.Schema(
       default: 'active',
       index: true,
     },
+    /**
+     * Cash-handling category.
+     *   donation_box  — physical box with a map location
+     *   miscellaneous — fundraising event, online appeal, etc.
+     * Defaults to donation_box so existing records keep their current behaviour.
+     */
+    category: {
+      type: String,
+      enum: ['donation_box', 'miscellaneous'],
+      default: 'donation_box',
+      index: true,
+    },
+    /**
+     * For miscellaneous items — the kind of collection (e.g. a fundraising event or an online appeal).
+     * Ignored / null for donation_box records.
+     */
+    source_type: {
+      type: String,
+      enum: ['fundraising_event', 'online_fundraise', 'in_person_appeal', 'workplace_giving', 'other'],
+    },
+    /** Optional free-text context, used mainly by miscellaneous items. */
+    description: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    /**
+     * Location is only required for donation_box records.
+     * For miscellaneous items lat/lng are optional and can be omitted.
+     */
     location: {
-      lat: { type: Number, required: true },
-      lng: { type: Number, required: true },
+      lat: { type: Number },
+      lng: { type: Number },
       address: { type: String, default: '' },
     },
     entries: {
@@ -187,6 +238,7 @@ donationBoxSchema.pre('save', function donationBoxPreSave(next) {
 
 // Basic indexes to keep common queries fast
 donationBoxSchema.index({ org_id: 1, status: 1 });
+donationBoxSchema.index({ org_id: 1, category: 1, status: 1 });
 donationBoxSchema.index({ org_id: 1, name: 'text' });
 donationBoxSchema.index({ org_id: 1, 'entries.entry_date': -1 });
 

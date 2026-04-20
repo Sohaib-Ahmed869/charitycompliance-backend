@@ -21,8 +21,6 @@ import legalDocumentSchema from '../db/schemas/platform/legalDocumentSchema.js';
 import boardMemberSchema from '../db/schemas/platform/boardMemberSchema.js';
 import approvalMatrixSchema from '../db/schemas/platform/approvalMatrixSchema.js';
 import policyAcknowledgementSchema from '../db/schemas/platform/policyAcknowledgementSchema.js';
-import trainingCompletionSchema from '../db/schemas/platform/trainingCompletionSchema.js';
-import trainingEnrollmentSchema from '../db/schemas/platform/trainingEnrollmentSchema.js';
 import trainingProgramSchema from '../db/schemas/platform/trainingProgramSchema.js';
 import donorSchema from '../db/schemas/platform/donorSchema.js';
 import fundingAgreementSchema from '../db/schemas/platform/fundingAgreementSchema.js';
@@ -139,8 +137,6 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
   const BoardMember = tenantDb.models.BoardMember || tenantDb.model('BoardMember', boardMemberSchema);
   const ApprovalMatrix = tenantDb.models.ApprovalMatrix || tenantDb.model('ApprovalMatrix', approvalMatrixSchema);
   const PolicyAcknowledgement = tenantDb.models.PolicyAcknowledgement || tenantDb.model('PolicyAcknowledgement', policyAcknowledgementSchema);
-  const TrainingCompletion = tenantDb.models.TrainingCompletion || tenantDb.model('TrainingCompletion', trainingCompletionSchema);
-  const TrainingEnrollment = tenantDb.models.TrainingEnrollment || tenantDb.model('TrainingEnrollment', trainingEnrollmentSchema);
   const TrainingProgram = tenantDb.models.TrainingProgram || tenantDb.model('TrainingProgram', trainingProgramSchema);
   const Donor = tenantDb.models.Donor || tenantDb.model('Donor', donorSchema);
   const FundingAgreement = tenantDb.models.FundingAgreement || tenantDb.model('FundingAgreement', fundingAgreementSchema);
@@ -597,7 +593,7 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
   });
 
   // Additional immutable-style operational events for weekly compliance reporting.
-  const [governingDocs, legalDocs, boardMembers, workflows, thresholds, users, standaloneRisks, policyAcknowledgements, completedTrainingCompletions, allPolicies, allTrainings, allExpenses, allDonors, allFundingAgreements, allProjects, allAssets, allSupportTickets] = await Promise.all([
+  const [governingDocs, legalDocs, boardMembers, workflows, thresholds, users, standaloneRisks, policyAcknowledgements, completedTrainingPrograms, allPolicies, allTrainings, allExpenses, allDonors, allFundingAgreements, allProjects, allAssets, allSupportTickets] = await Promise.all([
     Document.find({ org_id: org._id, category: 'governing_document' })
       .populate('uploaded_by', 'first_name last_name email is_org_owner role position')
       .select('title document_type status createdAt updatedAt uploaded_by')
@@ -632,8 +628,12 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
     PolicyAcknowledgement.find({})
       .select('policy_id user_id user_name user_title acknowledged_at')
       .lean(),
-    TrainingCompletion.find({ status: 'completed' })
-      .select('enrollment_id completed_at createdAt updatedAt status')
+    TrainingProgram.find({
+      org_id: org._id,
+      'enrollments.enrollment_type': 'internal',
+      'enrollments.completions.status': 'completed'
+    })
+      .select('title category enrollments')
       .lean(),
     Policy.find({ org_id: org._id })
       .populate('uploaded_by', 'first_name last_name email is_org_owner role position')
@@ -675,25 +675,13 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
   const policyAcknowledgementPolicyIds = policyAcknowledgements
     .map((item) => item.policy_id?.toString())
     .filter(Boolean);
-  const trainingEnrollmentIds = completedTrainingCompletions
-    .map((item) => item.enrollment_id?.toString())
-    .filter(Boolean);
-
-  const [ackPolicies, trainingEnrollments] = await Promise.all([
+  const [ackPolicies] = await Promise.all([
     policyAcknowledgementPolicyIds.length
       ? Policy.find({ _id: { $in: policyAcknowledgementPolicyIds } }).select('title category').lean()
-      : Promise.resolve([]),
-    trainingEnrollmentIds.length
-      ? TrainingEnrollment.find({ _id: { $in: trainingEnrollmentIds } })
-          .populate('training_program_id', 'title category')
-          .populate('board_member_id', 'given_names family_name user_id')
-          .select('training_program_id board_member_id')
-          .lean()
       : Promise.resolve([])
   ]);
 
   const ackPolicyMap = new Map(ackPolicies.map((item) => [item._id?.toString(), item]));
-  const enrollmentMap = new Map(trainingEnrollments.map((item) => [item._id?.toString(), item]));
 
   governingDocs.forEach((doc) => {
     const actorUser = doc.uploaded_by || null;
@@ -942,31 +930,34 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
     }));
   });
 
-  completedTrainingCompletions.forEach((completion) => {
-    const enrollment = enrollmentMap.get(completion.enrollment_id?.toString());
-    const boardMember = enrollment?.board_member_id;
-    const actorName = boardMember
-      ? `${boardMember.given_names || ''} ${boardMember.family_name || ''}`.trim() || 'Training participant'
-      : 'Training participant';
-    events.push(normalizeEvent({
-      id: `training-completed-${completion._id}`,
-      timestamp: completion.completed_at || completion.updatedAt || completion.createdAt,
-      actor: {
-        id: boardMember?.user_id?.toString() || null,
-        name: actorName,
-        role: null
-      },
-      action: 'Training completed',
-      module: 'training',
-      request_type: 'training_completion',
-      request_id: completion._id?.toString(),
-      details: {
-        title: enrollment?.training_program_id?.title || null,
-        category: enrollment?.training_program_id?.category || null,
-        status: completion.status || null
-      },
-      source: 'training_completion'
-    }));
+  completedTrainingPrograms.forEach((program) => {
+    (program.enrollments || [])
+      .filter((enr) => enr?.enrollment_type === 'internal')
+      .forEach((enrollment) => {
+        const actorName = enrollment?.name || 'Training participant';
+        const completedItems = (enrollment.completions || []).filter((item) => item?.status === 'completed');
+        completedItems.forEach((completion, idx) => {
+          events.push(normalizeEvent({
+            id: `training-completed-${program._id}-${enrollment._id}-${idx}`,
+            timestamp: completion.completed_at || program.updatedAt || program.createdAt,
+            actor: {
+              id: null,
+              name: actorName,
+              role: null
+            },
+            action: 'Training completed',
+            module: 'training',
+            request_type: 'training_completion',
+            request_id: String(enrollment._id),
+            details: {
+              title: program?.title || null,
+              category: program?.category || null,
+              status: completion.status || null
+            },
+            source: 'training_completion'
+          }));
+        });
+      });
   });
 
   allPolicies.forEach((policy) => {

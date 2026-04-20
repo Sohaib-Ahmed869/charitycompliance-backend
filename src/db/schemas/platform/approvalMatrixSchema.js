@@ -34,8 +34,6 @@ const approvalRuleSchema = new mongoose.Schema({
       'project',
       'emergency',
       'sweep_funds',
-      'financial_reporting',
-      'bas_lodgement',
       // legacy
       'policy_approval',
       'document_approval',
@@ -117,8 +115,6 @@ const approvalMatrixSchema = new mongoose.Schema({
       'social_media_campaign_workflow',
       'emergency',
       'sweep_funds_approval',
-      'fiscal_reports_workflow',
-      'financial_reports_workflow',
       'other'
     ],
     description: 'Categorizes workflow by module/purpose for validation'
@@ -226,8 +222,6 @@ const getCategoryDisplayName = (category) => {
     social_media_campaign_workflow: 'Social Media Campaigns',
     hr_approval: 'HR Approval',
     sweep_funds_approval: 'Sweep Funds',
-    fiscal_reports_workflow: 'Fiscal Reports',
-    financial_reports_workflow: 'Financial Reports',
     emergency: 'Emergency Response'
   };
   return categoryNames[category] || category;
@@ -291,7 +285,7 @@ approvalMatrixSchema.pre('save', async function(next) {
   }
   
   // Financial workflows: must have workflow_type matching threshold tiers
-  const financialCategories = ['funding_agreement', 'expense_approval', 'project_approval', 'sweep_funds_approval', 'fiscal_reports_workflow', 'financial_reports_workflow'];
+  const financialCategories = ['funding_agreement', 'expense_approval', 'project_approval', 'sweep_funds_approval'];
   if (financialCategories.includes(doc.workflow_category)) {
     if (!doc.workflow_type || !['petty_cash', 'low_cash', 'moderate_cash', 'high_cash'].includes(doc.workflow_type)) {
       return next(new Error('Financial workflows must have workflow_type: petty_cash, low_cash, moderate_cash, or high_cash'));

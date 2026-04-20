@@ -108,6 +108,8 @@ export const COMPLIANCE_CHECKLIST_CATALOG = [
 
 export const CHECKLIST_CATALOG_STATS = {
   total: 94,
+  supersededBy: 'checklistLibraryV3.js',
+  note: 'v1 catalog kept for backward compatibility. Use POST /templates/bootstrap-v3 for the optimised 50-checklist library.',
   modules: {
     Finance: 18,
     Operations: 17,

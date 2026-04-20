@@ -15,6 +15,8 @@ import { DepartmentRepository } from '../repositories/departmentRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
 import { CoiRequestRepository } from '../repositories/coiRequestRepository.js';
 import { RiskRepository } from '../repositories/riskRepository.js';
+import checklistInstanceSchema from '../db/schemas/platform/checklistInstanceSchema.js';
+import { ChecklistService } from '../services/checklistService.js';
 import { logInfo } from '../utils/logger.js';
 
 // Helper function to convert workflow_category to display name
@@ -1680,6 +1682,7 @@ export const downloadApprovalPDF = asyncHandler(async (req, res) => {
   // Fetch related entity
   let expense = null;
   let risk = null;
+  let checklistInstance = null;
   const entityId = approvalRequest.entity_id?.toString();
 
   if (entityId) {
@@ -1693,8 +1696,42 @@ export const downloadApprovalPDF = asyncHandler(async (req, res) => {
     }
   }
 
+  // Resolve checklist instance for this workflow export:
+  // 1) by approval_request_id (authoritative link), then
+  // 2) best-effort ensure by workflow context for older requests.
+  const ChecklistInstance = tenantDb.models.ChecklistInstance || tenantDb.model('ChecklistInstance', checklistInstanceSchema);
+  checklistInstance = await ChecklistInstance.findOne({
+    org_id: orgId,
+    entity_type: 'instance',
+    approval_request_id: approvalRequestId
+  })
+    .sort({ createdAt: -1 })
+    .populate('items.checked_by', 'first_name last_name email')
+    .populate('items.evidence.uploaded_by', 'first_name last_name email')
+    .lean();
+
+  if (!checklistInstance) {
+    try {
+      const checklistService = new ChecklistService(orgId);
+      const ensured = await checklistService.ensureWorkflowChecklistForApproval({
+        entityType: approvalRequest.entity_type || approvalRequest.request_type,
+        entityId: approvalRequest.entity_id,
+        approvalRequestId: approvalRequestId,
+        createdBy: req.user?.userId || null
+      });
+      if (ensured?._id) {
+        checklistInstance = await ChecklistInstance.findById(ensured._id)
+          .populate('items.checked_by', 'first_name last_name email')
+          .populate('items.evidence.uploaded_by', 'first_name last_name email')
+          .lean();
+      }
+    } catch {
+      // non-blocking for export
+    }
+  }
+
   const { generateApprovalPDF } = await import('../services/approvalPdfService.js');
-  const pdfBuffer = await generateApprovalPDF(approvalRequest, expense, risk, logoUrl);
+  const pdfBuffer = await generateApprovalPDF(approvalRequest, expense, risk, logoUrl, checklistInstance);
 
   const fileName = `approval_${approvalRequest.request_type || 'request'}_${approvalRequestId}_${Date.now()}.pdf`;
   res.setHeader('Content-Type', 'application/pdf');

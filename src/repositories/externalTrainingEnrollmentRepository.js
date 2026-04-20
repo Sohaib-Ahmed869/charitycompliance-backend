@@ -1,19 +1,23 @@
 import crypto from 'crypto';
-import externalTrainingEnrollmentSchema from '../db/schemas/platform/externalTrainingEnrollmentSchema.js';
+import trainingProgramSchema from '../db/schemas/platform/trainingProgramSchema.js';
 
 export class ExternalTrainingEnrollmentRepository {
   constructor(tenantDb) {
-    this.ExternalTrainingEnrollment =
-      tenantDb.models.ExternalTrainingEnrollment ||
-      tenantDb.model('ExternalTrainingEnrollment', externalTrainingEnrollmentSchema);
+    this.TrainingProgram =
+      tenantDb.models.TrainingProgram ||
+      tenantDb.model('TrainingProgram', trainingProgramSchema);
   }
 
   async findByToken(token) {
-    return this.ExternalTrainingEnrollment.findOne({ token }).lean();
+    const program = await this.TrainingProgram.findOne({ 'enrollments.token': token }, { enrollments: 1 }).lean();
+    const enr = (program?.enrollments || []).find((e) => e.enrollment_type === 'external' && e.token === token);
+    return enr ? { ...enr, training_program_id: program._id } : null;
   }
 
   async findById(id) {
-    return this.ExternalTrainingEnrollment.findById(id).lean();
+    const program = await this.TrainingProgram.findOne({ 'enrollments._id': id }, { enrollments: 1 }).lean();
+    const enr = (program?.enrollments || []).find((e) => String(e._id) === String(id));
+    return enr ? { ...enr, training_program_id: program._id } : null;
   }
 
   async upsertMany({ orgKey, orgObjectId, programId, invitees = [], invitedByUserId }) {
@@ -35,50 +39,64 @@ export class ExternalTrainingEnrollmentRepository {
         donor_id: donorId
       };
 
-      const doc = await this.ExternalTrainingEnrollment.findOneAndUpdate(
-        { training_program_id: programId, email },
-        {
-          $setOnInsert: {
-            org_key: orgKey,
-            org_id: orgObjectId,
-            training_program_id: programId,
-            email,
-            token,
-            status: 'not_started',
-            enrolled_at: new Date(),
-            progress: []
-          },
-          $set: {
-            name,
-            metadata
-          }
-        },
-        { upsert: true, new: true }
-      ).lean();
-      results.push(doc);
+      const program = await this.TrainingProgram.findById(programId);
+      if (!program) continue;
+      let doc = (program.enrollments || []).find(
+        (e) => e.enrollment_type === 'external' && String(e.email || '').toLowerCase() === email
+      );
+      if (!doc) {
+        doc = {
+          _id: undefined,
+          enrollment_type: 'external',
+          org_key: orgKey,
+          org_id: orgObjectId,
+          email,
+          name,
+          token,
+          status: 'not_started',
+          enrolled_at: new Date(),
+          progress: [],
+          metadata
+        };
+        program.enrollments.push(doc);
+      } else {
+        doc.name = name;
+        doc.metadata = metadata;
+      }
+      await program.save();
+      doc = (program.enrollments || []).find((e) => e.enrollment_type === 'external' && String(e.email || '').toLowerCase() === email);
+      results.push({ ...(doc?.toObject ? doc.toObject() : doc), training_program_id: program._id });
     }
     return results;
   }
 
   async updateProgressByToken(token, updates) {
-    return this.ExternalTrainingEnrollment.findOneAndUpdate(
-      { token },
-      { $set: updates },
-      { new: true }
-    ).lean();
+    const program = await this.TrainingProgram.findOne({ 'enrollments.token': token });
+    if (!program) return null;
+    const enr = (program.enrollments || []).find((e) => e.enrollment_type === 'external' && e.token === token);
+    if (!enr) return null;
+    Object.entries(updates || {}).forEach(([k, v]) => { enr[k] = v; });
+    await program.save();
+    const plain = enr.toObject ? enr.toObject() : enr;
+    return { ...plain, training_program_id: program._id };
   }
 
   async listByOrg(orgObjectId, options = {}) {
     const { search } = options;
-    const q = { org_id: orgObjectId };
+    const programs = await this.TrainingProgram.find({ _id: { $exists: true } }, { enrollments: 1 }).lean();
+    const rows = [];
+    programs.forEach((p) => {
+      (p.enrollments || []).forEach((e) => {
+        if (e.enrollment_type !== 'external') return;
+        if (String(e.org_id) !== String(orgObjectId)) return;
+        rows.push({ ...e, training_program_id: p._id });
+      });
+    });
     if (search && String(search).trim()) {
       const s = String(search).trim().toLowerCase();
-      q.$or = [
-        { email: { $regex: s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } },
-        { name: { $regex: s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' } }
-      ];
+      return rows.filter((e) => String(e.email || '').toLowerCase().includes(s) || String(e.name || '').toLowerCase().includes(s));
     }
-    return this.ExternalTrainingEnrollment.find(q).sort({ updatedAt: -1 }).lean();
+    return rows.sort((a, b) => new Date(b.updatedAt || b.enrolled_at || 0) - new Date(a.updatedAt || a.enrolled_at || 0));
   }
 }
 

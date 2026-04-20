@@ -7,6 +7,8 @@ import { ComplaintRepository } from '../repositories/complaintRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { PolicyRepository } from '../repositories/policyRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
+import { FundingAgreementRepository } from '../repositories/fundingAgreementRepository.js';
+import { ExpenseRepository } from '../repositories/expenseRepository.js';
 
 export class DashboardService {
   constructor(orgId) {
@@ -43,6 +45,8 @@ export class DashboardService {
     const orgRepo = new OrganizationRepository(tenantDb);
     const policyRepo = new PolicyRepository(tenantDb);
     const approvalRepo = new ApprovalRequestRepository(tenantDb);
+    const fundingAgreementRepo = new FundingAgreementRepository(tenantDb);
+    const expenseRepo = new ExpenseRepository(tenantDb);
 
     const org = await orgRepo.findOne();
     const orgId = org?._id || this.orgId;
@@ -51,7 +55,7 @@ export class DashboardService {
     const hasComplaintAccess = this.hasModulePermission(userPermissions, 'complaints');
     const complaintUserId = hasComplaintAccess ? userId : null;
 
-    const [risks, assets, tickets, legalDocs, complaints, policies, enhancedRisks, approvalTurnaround] = await Promise.allSettled([
+    const [risks, assets, tickets, legalDocs, complaints, policies, enhancedRisks, approvalTurnaround, income, expenses] = await Promise.allSettled([
       riskRepo.getCountsByOrg(this.orgId),
       assetRepo.getAssetStats(this.orgId),
       ticketRepo.getStats(this.orgId),
@@ -60,6 +64,8 @@ export class DashboardService {
       policyRepo.getCounts(this.orgId),
       this._getEnhancedRiskStats(tenantDb),
       this._getApprovalTurnaround(approvalRepo),
+      fundingAgreementRepo.getCountsByOrg(this.orgId),
+      expenseRepo.getExpenseStats(this.orgId),
     ]);
 
     const rawComplaints = (complaints.status === 'fulfilled' && hasComplaintAccess) ? complaints.value : {};
@@ -92,6 +98,8 @@ export class DashboardService {
       complaints: normalizedComplaints,
       policies: policies.status === 'fulfilled' ? policies.value : { total: 0, draft: 0, active: 0, underReview: 0, expired: 0 },
       approvals: approvalTurnaround.status === 'fulfilled' ? approvalTurnaround.value : { avgTurnaroundDays: 0, completedCount: 0, thisMonthCount: 0 },
+      income: income.status === 'fulfilled' ? income.value : { committed: 0, approved: 0, total: 0 },
+      expenses: expenses.status === 'fulfilled' ? expenses.value : { paidAmount: 0, approvedAmount: 0, paidCount: 0, approvedCount: 0 },
     };
   }
 

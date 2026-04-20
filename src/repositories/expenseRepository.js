@@ -175,4 +175,39 @@ export class ExpenseRepository {
 
     return result.length > 0 ? result[0].total : 0;
   }
+
+  async getExpenseStats(orgId) {
+    const results = await this.Expense.aggregate([
+      { $match: { org_id: orgId } },
+      {
+        $group: {
+          _id: null,
+          paidAmount: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'paid'] }, { $ifNull: ['$amount', 0] }, 0]
+            }
+          },
+          approvedAmount: {
+            $sum: {
+              $cond: [{ $eq: ['$status', 'approved'] }, { $ifNull: ['$amount', 0] }, 0]
+            }
+          },
+          paidCount: {
+            $sum: { $cond: [{ $eq: ['$status', 'paid'] }, 1, 0] }
+          },
+          approvedCount: {
+            $sum: { $cond: [{ $eq: ['$status', 'approved'] }, 1, 0] }
+          }
+        }
+      }
+    ]);
+
+    const row = results?.[0] || {};
+    return {
+      paidAmount: row.paidAmount || 0,
+      approvedAmount: row.approvedAmount || 0,
+      paidCount: row.paidCount || 0,
+      approvedCount: row.approvedCount || 0
+    };
+  }
 }

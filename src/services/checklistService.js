@@ -9,6 +9,7 @@ import { UserRepository } from '../repositories/userRepository.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
 import { COMPLIANCE_CHECKLIST_CATALOG } from '../config/complianceChecklistCatalog.js';
+import { CHECKLIST_LIBRARY_V3 } from '../config/checklistLibraryV3.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -217,35 +218,168 @@ function computeDueDateForPeriod({ type, year, month, quarter }, offsetDays = 0)
 }
 
 const ENTITY_MODULE_MAP = {
-  expense: 'Finance',
-  purchase: 'Finance',
-  donation: 'Donations',
-  donation_milestone: 'Donations',
-  donor: 'Donor Care',
-  grant: 'Operations',
-  project: 'Operations',
-  funding_agreement: 'Operations',
-  partner: 'International',
-  partner_vetting: 'International',
-  policy: 'Policies & Procedures',
-  risk: 'Compliance',
-  registration_license: 'Governance',
-  governing_document: 'Governance',
-  licence_document: 'Governance',
-  permit_document: 'Governance',
-  approval_thresholds: 'Governance',
-  yearly_statements: 'Governance',
-  financial_controls: 'Finance',
-  responsible_person: 'Governance',
-  volunteer_person: 'Operations',
-  hr_employee: 'Operations',
-  hr_training: 'Operations',
-  complaint: 'Operations',
-  authority_transfer: 'IT',
+  expense: 'Finances',
+  purchase: 'Finances',
+  donation: 'Grants & Donors',
+  donation_milestone: 'Grants & Donors',
+  donor: 'Grants & Donors',
+  grant: 'Grants & Donors',
+  project: 'Grants & Donors',
+  funding_agreement: 'Grants & Donors',
+  partner: 'Grants & Donors',
+  funding_partner: 'Grants & Donors',
+  partner_vetting: 'Grants & Donors',
+  project_register: 'Grants & Donors',
+  project_monitoring: 'Grants & Donors',
+  refund: 'Grants & Donors',
+  donor_refund: 'Grants & Donors',
+  policy: 'Policies',
+  risk: 'Risk',
+  registration_license: 'Charity Administration',
+  governing_document: 'Charity Administration',
+  licence_document: 'Charity Administration',
+  permit_document: 'Charity Administration',
+  approval_thresholds: 'Charity Administration',
+  yearly_statements: 'Charity Administration',
+  financial_controls: 'Finances',
+  responsible_person: 'Charity Administration',
+  volunteer_person: 'Volunteers',
+  hr_employee: 'People & HR',
+  hr_training: 'People & HR',
+  disciplinary_record: 'People & HR',
+  donation_box: 'Finances',
+  sweep_funds: 'Finances',
+  bas_lodgement: 'Reporting',
+  financial_report: 'Reporting',
+  fiscal_report: 'Reporting',
+  complaint: 'Complaint',
+  authority_transfer: 'System & Legal',
   social_media_campaign: 'Marketing',
   social_media_campaigns: 'Marketing',
-  emergency: 'IT'
+  emergency: 'System & Legal'
 };
+
+const ENTITY_TEMPLATE_TARGETS = {
+  expense: { module: 'Finances', submodule: 'Expenses' },
+  purchase: { module: 'Finances', submodule: 'Expenses' },
+  policy: { module: 'Policies' },
+  risk: { module: 'Risk', submodule: 'Risk Management' },
+  donor: { module: 'Grants & Donors', submodule: 'Donor Register' },
+  project: { module: 'Grants & Donors', submodule: 'Programs' },
+  project_register: { module: 'Grants & Donors', submodule: 'Project Register' },
+  project_monitoring: { module: 'Grants & Donors', submodule: 'Project Monitoring' },
+  partner_vetting: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
+  partner: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
+  funding_partner: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
+  funding_agreement: { module: 'Grants & Donors', submodule: 'Funding Agreements' },
+  refund: { module: 'Grants & Donors', submodule: 'Refunds' },
+  donor_refund: { module: 'Grants & Donors', submodule: 'Refunds' },
+  registration_license: { module: 'Charity Administration', submodule: 'Registrations & Licenses' },
+  governing_document: { module: 'Charity Administration', submodule: 'Governing Doc' },
+  licence_document: { module: 'Charity Administration', submodule: 'Registrations & Licenses' },
+  permit_document: { module: 'Charity Administration', submodule: 'Registrations & Licenses' },
+  approval_thresholds: { module: 'Charity Administration', submodule: 'Approval Thresholds' },
+  yearly_statements: { module: 'Charity Administration', submodule: 'Yearly Statements' },
+  financial_controls: { module: 'Finances', submodule: 'Financial Controls' },
+  responsible_person: { module: 'Charity Administration', submodule: 'Responsible People' },
+  volunteer_person: { module: 'Volunteers', submodule: 'Volunteer Register' },
+  hr_employee: { module: 'People & HR', submodule: 'Employees' },
+  hr_training: { module: 'People & HR', submodule: 'Trainings' },
+  disciplinary_record: { module: 'People & HR', submodule: 'Disciplinary Records' },
+  donation_box: { module: 'Finances', submodule: 'Donation Boxes' },
+  sweep_funds: { module: 'Finances', submodule: 'Sweep Funds' },
+  bas_lodgement: { module: 'Reporting', submodule: 'Financial Reports' },
+  financial_report: { module: 'Reporting', submodule: 'Financial Reports' },
+  fiscal_report: { module: 'Reporting', submodule: 'Fiscal Reports' },
+  complaint: { module: 'Complaint', submodule: 'Complaint Register' }
+};
+
+function findBestTemplateForTarget(moduleTemplates = [], target = {}) {
+  const requestedModule = normalizeModuleName(target?.module || '');
+  const requestedSubmodule = normalizeModuleName(target?.submodule || '');
+  const requestedUseCase = String(target?.useCase || '').trim().toLowerCase();
+  let best = null;
+  let bestScore = -1;
+  for (const tpl of moduleTemplates || []) {
+    let score = 0;
+    const moduleName = normalizeModuleName(tpl?.metadata?.module);
+    const submoduleName = normalizeModuleName(tpl?.metadata?.submodule);
+    const useCase = String(tpl?.metadata?.useCase || '').trim().toLowerCase();
+
+    // Prevent cross-submodule bleed (e.g. Programs checklist showing on Funding Agreements).
+    // If caller asks for a specific module/submodule, enforce exact match.
+    if (requestedModule && moduleName !== requestedModule) continue;
+    if (requestedSubmodule && submoduleName !== requestedSubmodule) continue;
+
+    if (requestedUseCase && useCase === requestedUseCase) score += 6;
+    if (requestedModule && moduleName === requestedModule) score += 4;
+    if (requestedSubmodule && submoduleName === requestedSubmodule) score += 3;
+    if (tpl?.is_active !== false) score += 1;
+    if (score > bestScore) {
+      best = tpl;
+      bestScore = score;
+    }
+  }
+  return bestScore > 0 ? best : null;
+}
+
+function doesTemplateMatchTarget(template, target = {}) {
+  if (!template) return false;
+  const requestedModule = normalizeModuleName(target?.module || '');
+  const requestedSubmodule = normalizeModuleName(target?.submodule || '');
+  const requestedUseCase = String(target?.useCase || '').trim().toLowerCase();
+  const templateModule = normalizeModuleName(template?.metadata?.module);
+  const templateSubmodule = normalizeModuleName(template?.metadata?.submodule);
+  const templateUseCase = String(template?.metadata?.useCase || '').trim().toLowerCase();
+  if (requestedUseCase && templateUseCase !== requestedUseCase) return false;
+  if (requestedModule && templateModule !== requestedModule) return false;
+  if (requestedSubmodule && templateSubmodule !== requestedSubmodule) return false;
+  return true;
+}
+
+function canonicalizeEntityType(value) {
+  const raw = String(value || '').trim().toLowerCase();
+  const aliases = {
+    sweep_funds_approval: 'sweep_funds',
+    expense_approval: 'expense',
+    fiscal_reports_workflow: 'fiscal_report',
+    fiscal_report_workflow: 'fiscal_report',
+    financial_reports_workflow: 'financial_report',
+    financial_report_workflow: 'financial_report',
+    risk_management: 'risk',
+    financial_controls: 'expense',
+    donation_boxes: 'donation_box',
+    project_delivery: 'project_monitoring',
+    refunds: 'refund',
+    partner: 'partner_vetting',
+    funding_partner: 'partner_vetting',
+    partner_vetting_record: 'partner_vetting',
+    fundingagreement: 'funding_agreement',
+    funding_agreements: 'funding_agreement',
+    agreement: 'funding_agreement',
+    project_register_entry: 'project_register',
+    projectmonitoring: 'project_monitoring',
+    project_refund: 'refund'
+    ,
+    bas: 'bas_lodgement',
+    financial_reports: 'financial_report',
+    financial_reporting: 'financial_report',
+    fiscal_reports: 'fiscal_report',
+    fiscal_report_monthly: 'fiscal_report',
+    fiscal_report_yearly: 'fiscal_report'
+  };
+  return aliases[raw] || raw;
+}
+
+function isGenericEntityType(value) {
+  const t = String(value || '').trim().toLowerCase();
+  return !t || t === 'other' || t === 'unknown' || t === 'generic';
+}
+
+function isApprovalScopedChecklistType(entityType) {
+  const t = String(entityType || '').trim().toLowerCase();
+  return t === 'sweep_funds';
+}
 
 export class ChecklistService {
   constructor(orgId) {
@@ -616,70 +750,293 @@ export class ChecklistService {
     return summary;
   }
 
-  async ensureWorkflowChecklistForApproval({ entityType, entityId, approvalRequestId, createdBy }) {
-    const normalizedEntityType = String(entityType || '').trim().toLowerCase();
-    const normalizedEntityId = String(entityId || '').trim();
-    if (!normalizedEntityType || !normalizedEntityId) {
-      throw new AppError('entityType and entityId are required', 400, 'INVALID_WORKFLOW_CONTEXT');
+  /**
+   * Bootstrap v3 Optimised Checklist Library (50 checklists from xlsx).
+   *
+   * Idempotent: uses metadata.v3_checklist_id (G01–G10, I01–I40) as the
+   * dedup key. Re-running updates items and metadata without duplicating.
+   *
+   * Global checklists (G01–G10) are stored as type='module' with
+   * metadata.v3Type='global'. They apply across all modules as governance
+   * overlays.
+   *
+   * Item-wise checklists (I01–I40) are stored as type='module' (or the
+   * period type for I06/I07) with metadata.v3Type='item_wise' and are
+   * bound to specific entity targets.
+   */
+  async bootstrapV3Library() {
+    const tenantDb = await this.getTenantDb();
+    const templateRepo = new ChecklistTemplateRepository(tenantDb);
+    const summary = [];
+
+    // Pre-fetch all existing module templates for this org once
+    const allExisting = await templateRepo.list(this.orgId, {});
+
+    for (const cl of CHECKLIST_LIBRARY_V3) {
+      const v3Id = cl.v3Id;
+      const templateName = `[${v3Id}] ${cl.name}`;
+
+      // Determine template type: I06→month_end, I07→year_end, rest→module
+      const templateType = cl.periodType || 'module';
+
+      // Build items array with standard shape
+      const templateItems = (cl.items || []).map((it) => ({
+        title: it.title,
+        description: `${cl.category} compliance check — ${cl.name}.`,
+        category: cl.category,
+        type: 'manual',
+        requiredEvidence: 'optional',
+        assigneeRole: 'Compliance Officer',
+        sortOrder: it.sortOrder
+      }));
+
+      if (templateItems.length === 0) continue;
+
+      // Build metadata
+      const metadata = {
+        module: cl.module,
+        ...(cl.submodule ? { submodule: cl.submodule } : {}),
+        v3_checklist_id: v3Id,
+        v3Type: cl.checklistType,
+        v3Category: cl.category,
+        v3Version: '3.0',
+        entityTargets: cl.entityTargets || [],
+        source: 'checklist_library_v3'
+      };
+
+      // Find existing by v3_checklist_id (idempotent key)
+      const existing = allExisting.find(
+        (t) => t?.metadata?.v3_checklist_id === v3Id
+      );
+
+      if (existing) {
+        await templateRepo.update(existing._id, {
+          name: templateName,
+          type: templateType,
+          description: cl.description,
+          metadata: { ...(existing.metadata || {}), ...metadata },
+          items: templateItems
+        });
+        summary.push({
+          v3Id,
+          action: 'updated',
+          templateId: existing._id,
+          name: templateName,
+          itemCount: templateItems.length,
+          type: cl.checklistType
+        });
+      } else {
+        const created = await templateRepo.create({
+          org_id: this.orgId,
+          name: templateName,
+          type: templateType,
+          description: cl.description,
+          metadata,
+          items: templateItems
+        });
+        summary.push({
+          v3Id,
+          action: 'created',
+          templateId: created._id,
+          name: templateName,
+          itemCount: templateItems.length,
+          type: cl.checklistType
+        });
+      }
     }
 
-    if (normalizedEntityType === 'expense' || normalizedEntityType === 'purchase') {
-      return await this.ensureExpenseWorkflowChecklist({
-        expenseId: normalizedEntityId,
-        approvalRequestId,
-        createdBy
-      });
-    }
+    logInfo('Bootstrapped v3 checklist library', {
+      orgId: this.orgId,
+      total: summary.length,
+      created: summary.filter((s) => s.action === 'created').length,
+      updated: summary.filter((s) => s.action === 'updated').length
+    });
+    return summary;
+  }
+
+  async ensureWorkflowChecklistForApproval({ entityType, entityId, approvalRequestId, createdBy }) {
+    const rawEntityType = String(entityType || '').trim().toLowerCase();
+    let normalizedEntityType = canonicalizeEntityType(rawEntityType);
+    let normalizedEntityId = String(entityId || '').trim();
 
     const tenantDb = await this.getTenantDb();
     const templateRepo = new ChecklistTemplateRepository(tenantDb);
     const instanceRepo = new ChecklistInstanceRepository(tenantDb);
+    const approvalRepo = new ApprovalRequestRepository(tenantDb);
 
-    // Risk checklist definitions are dictionary-driven and volatile.
-    // Refresh template from dictionary on every resolve call.
-    if (normalizedEntityType === 'risk') {
-      await this.ensureDefaultRiskWorkflowTemplate();
+    // Some workflow pages only have approvalRequestId or use entity type aliases.
+    // Derive canonical context from approval request when needed so one instance is reused.
+    if (approvalRequestId) {
+      const approval = await approvalRepo.findById(approvalRequestId);
+      if (approval) {
+        const approvalEntityTypeRaw = String(approval?.entity_type || '').trim().toLowerCase();
+        const approvalRequestTypeRaw = String(approval?.request_type || '').trim().toLowerCase();
+        const derivedFromApproval = canonicalizeEntityType(
+          isGenericEntityType(approvalEntityTypeRaw)
+            ? (approvalRequestTypeRaw || normalizedEntityType)
+            : (approvalEntityTypeRaw || approvalRequestTypeRaw || normalizedEntityType)
+        );
+        const derivedEntityId = String(approval?.entity_id || '').trim();
+
+        // If caller sends generic/incorrect type (e.g. "other"), prefer approval context.
+        if (isGenericEntityType(normalizedEntityType) || !normalizedEntityType) {
+          normalizedEntityType = derivedFromApproval;
+        }
+        if (!normalizedEntityId || isGenericEntityType(rawEntityType)) {
+          normalizedEntityId = derivedEntityId || normalizedEntityId;
+        }
+
+        // Special case: some workflows use request_type as the true domain type.
+        if (
+          approval?.request_type &&
+          (normalizedEntityType === 'other' || isGenericEntityType(normalizedEntityType))
+        ) {
+          normalizedEntityType = canonicalizeEntityType(approval.request_type);
+        }
+
+        // Some workflows are approval-scoped rather than entity-scoped. For those,
+        // the approval request id is the only stable identifier across create/view/workflow.
+        if (
+          approvalRequestId &&
+          isGenericEntityType(approvalEntityTypeRaw) &&
+          isApprovalScopedChecklistType(normalizedEntityType)
+        ) {
+          normalizedEntityId = String(approval?._id || approvalRequestId);
+        }
+      }
     }
-    if (
-      normalizedEntityType === 'registration_license' ||
-      normalizedEntityType === 'approval_thresholds' ||
-      normalizedEntityType === 'yearly_statements' ||
-      normalizedEntityType === 'financial_controls' ||
-      normalizedEntityType === 'governing_document' ||
-      normalizedEntityType === 'licence_document' ||
-      normalizedEntityType === 'permit_document' ||
-      normalizedEntityType === 'responsible_person' ||
-      normalizedEntityType === 'volunteer_person' ||
-      normalizedEntityType === 'hr_employee' ||
-      normalizedEntityType === 'hr_training'
-    ) {
-      await this.syncSidebarDictionaryTemplates();
+    if (!normalizedEntityType || !normalizedEntityId) {
+      throw new AppError('entityType and entityId are required', 400, 'INVALID_WORKFLOW_CONTEXT');
     }
 
-    const existing = await instanceRepo.findByContext(this.orgId, {
+    const allModuleTemplates = await templateRepo.list(this.orgId, { type: 'module' });
+    const target = ENTITY_TEMPLATE_TARGETS[normalizedEntityType] || {
+      module: ENTITY_MODULE_MAP[normalizedEntityType]
+    };
+    const selectedTemplate = findBestTemplateForTarget(allModuleTemplates, target);
+
+    let existing = await instanceRepo.findByContext(this.orgId, {
       type: 'module',
       entityType: normalizedEntityType,
       entityId: normalizedEntityId
     });
-    if (existing) {
-      if (normalizedEntityType === 'risk') {
-        let riskTemplate = (await templateRepo.list(this.orgId, { type: 'module', module: 'Compliance' }))
-          .find((t) => t?.metadata?.useCase === 'risk_workflow');
-        if (!riskTemplate) {
-          riskTemplate = await this.ensureDefaultRiskWorkflowTemplate();
+    // Backward compatibility: if an older alias context was used while creating,
+    // recover by raw type before considering creation.
+    const existingFromAlias =
+      rawEntityType && rawEntityType !== normalizedEntityType
+        ? await instanceRepo.findByContext(this.orgId, {
+            type: 'module',
+            entityType: rawEntityType,
+            entityId: normalizedEntityId
+          })
+        : null;
+    if (existingFromAlias) {
+      if (
+        String(existingFromAlias?.context?.entityType || '') !== normalizedEntityType ||
+        String(existingFromAlias?.context?.entityId || '') !== normalizedEntityId
+      ) {
+        await instanceRepo.update(existingFromAlias._id, {
+          context: {
+            ...(existingFromAlias?.context || {}),
+            entityType: normalizedEntityType,
+            entityId: normalizedEntityId
+          }
+        });
+      }
+      if (approvalRequestId && !existingFromAlias.approval_request_id) {
+        await instanceRepo.update(existingFromAlias._id, { approval_request_id: approvalRequestId });
+      }
+      return await instanceRepo.findById(existingFromAlias._id);
+    }
+
+    // If context lookup failed, bind by approvalRequestId to prevent instance splitting
+    // between create/view/workflow pages for the same underlying approval.
+    if (approvalRequestId) {
+      const byApproval = await instanceRepo.findByApprovalRequest(this.orgId, approvalRequestId, { type: 'module' });
+      if (byApproval) {
+        // If we have multiple checklist instances for the same entity, ensure the
+        // instance linked to this approval carries forward any checked state.
+        if (existing && String(existing._id) !== String(byApproval._id)) {
+          const doneCount = (inst) => (inst?.items || []).filter((i) => i?.checked || i?.state === 'satisfied').length;
+          const existingDone = doneCount(existing);
+          const byApprovalDone = doneCount(byApproval);
+
+          if (existingDone > byApprovalDone) {
+            const sourceByTitle = new Map(
+              (existing?.items || []).map((i) => [String(i?.title_snapshot || '').trim().toLowerCase(), i])
+            );
+
+            let changed = false;
+            byApproval.items = (byApproval.items || []).map((ti) => {
+              const key = String(ti?.title_snapshot || '').trim().toLowerCase();
+              const prev = sourceByTitle.get(key);
+              if (!prev) return ti;
+
+              const prevChecked = !!prev?.checked || prev?.state === 'satisfied';
+              const prevHasEvidence = Array.isArray(prev?.evidence) && prev.evidence.length > 0;
+              const prevHasNotes = typeof prev?.notes === 'string' && prev.notes.trim().length > 0;
+
+              if (!prevChecked && !prevHasEvidence && !prevHasNotes) return ti;
+
+              // Never wipe a "more complete" target item; only copy in checked/evidence/notes from the source.
+              if (prevChecked) {
+                if (ti.checked !== true) changed = true;
+                if (ti.state !== 'satisfied') changed = true;
+                return {
+                  ...ti,
+                  checked: true,
+                  state: prev?.state || 'satisfied',
+                  checked_by: prev?.checked_by || ti.checked_by || null,
+                  checked_at: prev?.checked_at || ti.checked_at || null,
+                  notes: prevHasNotes ? prev.notes : (ti.notes || ''),
+                  evidence: prevHasEvidence ? prev.evidence : (ti.evidence || [])
+                };
+              }
+
+              // If it wasn't checked, still carry evidence/notes (but don't change checked/state).
+              if (prevHasEvidence || prevHasNotes) changed = true;
+              return {
+                ...ti,
+                notes: prevHasNotes ? prev.notes : (ti.notes || ''),
+                evidence: prevHasEvidence ? prev.evidence : (ti.evidence || [])
+              };
+            });
+
+            if (changed) {
+              await byApproval.save();
+            }
+          }
         }
-        const templateItems = (riskTemplate?.items || [])
+
+        await instanceRepo.update(byApproval._id, {
+          context: {
+            ...(byApproval?.context || {}),
+            entityType: normalizedEntityType,
+            entityId: normalizedEntityId
+          }
+        });
+        existing = byApproval;
+      }
+    }
+    if (existing) {
+      const existingTemplate = allModuleTemplates.find((t) => String(t?._id) === String(existing.template_id));
+      const existingMatchesTarget = doesTemplateMatchTarget(existingTemplate, target);
+      if (!existingMatchesTarget) {
+        // For expense/purchase workflows, template metadata can drift over time.
+        // In that case we must not hide the checklist if an instance already exists.
+        if (!selectedTemplate) {
+          if (normalizedEntityType === 'expense' || normalizedEntityType === 'purchase') {
+            // Keep existing instance as-is (still attach approval_request_id below).
+          } else {
+            return null;
+          }
+        } else {
+        const byTitle = new Map((existing.items || []).map((i) => [String(i.title_snapshot || '').trim().toLowerCase(), i]));
+        existing.template_id = selectedTemplate._id;
+        existing.items = (selectedTemplate.items || [])
           .slice()
-          .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
-        const existingTitleSet = new Set((existing.items || []).map((i) => String(i.title_snapshot || '').trim().toLowerCase()));
-        const templateTitleSet = new Set(templateItems.map((i) => String(i.title || '').trim().toLowerCase()));
-        const mismatch = String(existing.template_id) !== String(riskTemplate?._id)
-          || existingTitleSet.size !== templateTitleSet.size
-          || [...templateTitleSet].some((t) => !existingTitleSet.has(t));
-        if (mismatch && existing.status !== 'closed') {
-          const byTitle = new Map((existing.items || []).map((i) => [String(i.title_snapshot || '').trim().toLowerCase(), i]));
-          existing.template_id = riskTemplate._id;
-          existing.items = templateItems.map((ti) => {
+          .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
+          .map((ti) => {
             const prev = byTitle.get(String(ti.title || '').trim().toLowerCase());
             return {
               template_item_id: ti._id,
@@ -697,49 +1054,7 @@ export class ChecklistService {
               evidence: prev?.evidence || []
             };
           });
-          await existing.save();
-        }
-      }
-      if (normalizedEntityType === 'approval_thresholds' && existing.status !== 'closed') {
-        const governanceTemplates = await templateRepo.list(this.orgId, { type: 'module', module: 'Governance' });
-        const thresholdTemplate = governanceTemplates.find((t) => {
-          if (t?.metadata?.source !== 'sidebar_dictionary') return false;
-          const moduleName = String(t?.metadata?.sidebarModule || '').trim().toLowerCase();
-          const submoduleName = String(t?.metadata?.sidebarSubmodule || '').trim().toLowerCase();
-          return moduleName === 'charity administration' && submoduleName.includes('approval threshold');
-        });
-        if (thresholdTemplate) {
-          const templateItems = (thresholdTemplate.items || [])
-            .slice()
-            .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0));
-          const existingTitleSet = new Set((existing.items || []).map((i) => String(i.title_snapshot || '').trim().toLowerCase()));
-          const templateTitleSet = new Set(templateItems.map((i) => String(i.title || '').trim().toLowerCase()));
-          const mismatch = String(existing.template_id) !== String(thresholdTemplate._id)
-            || existingTitleSet.size !== templateTitleSet.size
-            || [...templateTitleSet].some((t) => !existingTitleSet.has(t));
-          if (mismatch) {
-            const byTitle = new Map((existing.items || []).map((i) => [String(i.title_snapshot || '').trim().toLowerCase(), i]));
-            existing.template_id = thresholdTemplate._id;
-            existing.items = templateItems.map((ti) => {
-              const prev = byTitle.get(String(ti.title || '').trim().toLowerCase());
-              return {
-                template_item_id: ti._id,
-                title_snapshot: ti.title,
-                description_snapshot: ti.description,
-                category_snapshot: ti.category,
-                type_snapshot: ti.type,
-                auto_rule_key_snapshot: ti.autoRuleKey,
-                required_evidence_snapshot: ti.requiredEvidence,
-                state: prev?.state || 'pending',
-                checked: !!prev?.checked,
-                checked_by: prev?.checked_by || null,
-                checked_at: prev?.checked_at || null,
-                notes: prev?.notes || '',
-                evidence: prev?.evidence || []
-              };
-            });
-            await existing.save();
-          }
+        await existing.save();
         }
       }
       if (approvalRequestId && !existing.approval_request_id) {
@@ -747,191 +1062,6 @@ export class ChecklistService {
         return await instanceRepo.findById(existing._id);
       }
       return await instanceRepo.findById(existing._id);
-    }
-
-    const moduleName = ENTITY_MODULE_MAP[normalizedEntityType];
-    if (!moduleName) return null;
-
-    let moduleTemplates = await templateRepo.list(this.orgId, { type: 'module', module: moduleName });
-    if (normalizedEntityType === 'financial_controls' && (!moduleTemplates || moduleTemplates.length === 0)) {
-      const alternates = await Promise.all([
-        templateRepo.list(this.orgId, { type: 'module', module: 'Finance' }),
-        templateRepo.list(this.orgId, { type: 'module', module: 'Finances' })
-      ]);
-      moduleTemplates = [...(alternates[0] || []), ...(alternates[1] || [])];
-    }
-    let selectedTemplate =
-      normalizedEntityType === 'risk'
-        ? moduleTemplates.find((t) => t?.metadata?.useCase === 'risk_workflow')
-        : normalizedEntityType === 'registration_license'
-          ? moduleTemplates.find((t) =>
-            t?.metadata?.source === 'sidebar_dictionary' &&
-            String(t?.metadata?.sidebarModule || '') === 'Charity Administration' &&
-            String(t?.metadata?.sidebarSubmodule || '') === 'Registrations & Licenses'
-          )
-          : normalizedEntityType === 'policy'
-            ? moduleTemplates.find((t) =>
-              t?.metadata?.source === 'sidebar_dictionary' &&
-              (
-                String(t?.metadata?.sidebarModule || '').trim().toLowerCase() === 'policies & procedures' ||
-                String(t?.metadata?.sidebarSection || '').trim().toLowerCase() === 'policies & procedures'
-              )
-            )
-          : normalizedEntityType === 'governing_document'
-            ? moduleTemplates.find((t) =>
-              t?.metadata?.source === 'sidebar_dictionary' &&
-              String(t?.metadata?.sidebarModule || '') === 'Charity Administration' &&
-              (
-                String(t?.metadata?.sidebarSubmodule || '') === 'Governing Doc' ||
-                String(t?.metadata?.sidebarSubmodule || '') === 'Governing Documents'
-              )
-            )
-            : normalizedEntityType === 'licence_document' || normalizedEntityType === 'permit_document'
-              ? moduleTemplates.find((t) =>
-                t?.metadata?.source === 'sidebar_dictionary' &&
-                String(t?.metadata?.sidebarModule || '') === 'Charity Administration' &&
-                String(t?.metadata?.sidebarSubmodule || '') === 'Registrations & Licenses'
-              )
-              : normalizedEntityType === 'approval_thresholds'
-                ? moduleTemplates.find((t) =>
-                  t?.metadata?.source === 'sidebar_dictionary' &&
-                  String(t?.metadata?.sidebarModule || '').trim().toLowerCase() === 'charity administration' &&
-                  String(t?.metadata?.sidebarSubmodule || '').trim().toLowerCase().includes('approval threshold')
-                )
-                : normalizedEntityType === 'yearly_statements'
-                  ? moduleTemplates.find((t) =>
-                    t?.metadata?.source === 'sidebar_dictionary' &&
-                    String(t?.metadata?.sidebarModule || '').trim().toLowerCase() === 'charity administration' &&
-                    String(t?.metadata?.sidebarSubmodule || '').trim().toLowerCase().includes('yearly statement')
-                  )
-                  : normalizedEntityType === 'financial_controls'
-                    ? moduleTemplates.find((t) =>
-                      t?.metadata?.source === 'sidebar_dictionary' &&
-                      (
-                        String(t?.metadata?.sidebarSubmodule || '').trim().toLowerCase() === 'financial controls' ||
-                        String(t?.metadata?.sidebarModule || '').trim().toLowerCase() === 'finances'
-                      )
-                    )
-          : normalizedEntityType === 'responsible_person'
-            ? moduleTemplates.find((t) =>
-              t?.metadata?.source === 'sidebar_dictionary' &&
-              String(t?.metadata?.sidebarModule || '') === 'Charity Administration' &&
-              String(t?.metadata?.sidebarSubmodule || '') === 'Responsible People'
-            )
-            : normalizedEntityType === 'volunteer_person'
-              ? moduleTemplates.find((t) =>
-                t?.metadata?.source === 'sidebar_dictionary' &&
-                String(t?.metadata?.sidebarModule || '') === 'Volunteers'
-              )
-              : normalizedEntityType === 'hr_employee'
-                ? moduleTemplates.find((t) =>
-                  t?.metadata?.source === 'sidebar_dictionary' &&
-                  String(t?.metadata?.sidebarModule || '') === 'People & HR' &&
-                  String(t?.metadata?.sidebarSubmodule || '') === 'Employees'
-                )
-                : normalizedEntityType === 'hr_training'
-                  ? moduleTemplates.find((t) =>
-                    t?.metadata?.source === 'sidebar_dictionary' &&
-                    String(t?.metadata?.sidebarModule || '') === 'People & HR' &&
-                    (
-                      String(t?.metadata?.sidebarSubmodule || '') === 'Trainings' ||
-                      String(t?.metadata?.sidebarSubmodule || '') === 'Training Register'
-                    )
-                  )
-          : moduleTemplates.find((t) => t?.metadata?.useCase !== 'expense_workflow');
-    if (!selectedTemplate) {
-      if (normalizedEntityType === 'risk') {
-        await this.ensureDefaultRiskWorkflowTemplate();
-      } else {
-        await this.bootstrapComplianceCatalogTemplates();
-      }
-      moduleTemplates = await templateRepo.list(this.orgId, { type: 'module', module: moduleName });
-      if (normalizedEntityType === 'financial_controls' && (!moduleTemplates || moduleTemplates.length === 0)) {
-        const alternates = await Promise.all([
-          templateRepo.list(this.orgId, { type: 'module', module: 'Finance' }),
-          templateRepo.list(this.orgId, { type: 'module', module: 'Finances' })
-        ]);
-        moduleTemplates = [...(alternates[0] || []), ...(alternates[1] || [])];
-      }
-      selectedTemplate =
-        normalizedEntityType === 'risk'
-          ? moduleTemplates.find((t) => t?.metadata?.useCase === 'risk_workflow')
-          : normalizedEntityType === 'registration_license'
-            ? moduleTemplates.find((t) =>
-              t?.metadata?.source === 'sidebar_dictionary' &&
-              String(t?.metadata?.sidebarModule || '') === 'Charity Administration' &&
-              String(t?.metadata?.sidebarSubmodule || '') === 'Registrations & Licenses'
-            )
-            : normalizedEntityType === 'policy'
-              ? moduleTemplates.find((t) =>
-                t?.metadata?.source === 'sidebar_dictionary' &&
-                (
-                  String(t?.metadata?.sidebarModule || '').trim().toLowerCase() === 'policies & procedures' ||
-                  String(t?.metadata?.sidebarSection || '').trim().toLowerCase() === 'policies & procedures'
-                )
-              )
-            : normalizedEntityType === 'governing_document'
-              ? moduleTemplates.find((t) =>
-                t?.metadata?.source === 'sidebar_dictionary' &&
-                String(t?.metadata?.sidebarModule || '') === 'Charity Administration' &&
-                (
-                  String(t?.metadata?.sidebarSubmodule || '') === 'Governing Doc' ||
-                  String(t?.metadata?.sidebarSubmodule || '') === 'Governing Documents'
-                )
-              )
-              : normalizedEntityType === 'licence_document' || normalizedEntityType === 'permit_document'
-                ? moduleTemplates.find((t) =>
-                  t?.metadata?.source === 'sidebar_dictionary' &&
-                  String(t?.metadata?.sidebarModule || '') === 'Charity Administration' &&
-                  String(t?.metadata?.sidebarSubmodule || '') === 'Registrations & Licenses'
-                )
-                : normalizedEntityType === 'approval_thresholds'
-                  ? moduleTemplates.find((t) =>
-                    t?.metadata?.source === 'sidebar_dictionary' &&
-                    String(t?.metadata?.sidebarModule || '').trim().toLowerCase() === 'charity administration' &&
-                    String(t?.metadata?.sidebarSubmodule || '').trim().toLowerCase().includes('approval threshold')
-                  )
-                  : normalizedEntityType === 'yearly_statements'
-                    ? moduleTemplates.find((t) =>
-                      t?.metadata?.source === 'sidebar_dictionary' &&
-                      String(t?.metadata?.sidebarModule || '').trim().toLowerCase() === 'charity administration' &&
-                      String(t?.metadata?.sidebarSubmodule || '').trim().toLowerCase().includes('yearly statement')
-                    )
-                    : normalizedEntityType === 'financial_controls'
-                      ? moduleTemplates.find((t) =>
-                        t?.metadata?.source === 'sidebar_dictionary' &&
-                        (
-                          String(t?.metadata?.sidebarSubmodule || '').trim().toLowerCase() === 'financial controls' ||
-                          String(t?.metadata?.sidebarModule || '').trim().toLowerCase() === 'finances'
-                        )
-                      )
-            : normalizedEntityType === 'responsible_person'
-              ? moduleTemplates.find((t) =>
-                t?.metadata?.source === 'sidebar_dictionary' &&
-                String(t?.metadata?.sidebarModule || '') === 'Charity Administration' &&
-                String(t?.metadata?.sidebarSubmodule || '') === 'Responsible People'
-              )
-              : normalizedEntityType === 'volunteer_person'
-                ? moduleTemplates.find((t) =>
-                  t?.metadata?.source === 'sidebar_dictionary' &&
-                  String(t?.metadata?.sidebarModule || '') === 'Volunteers'
-                )
-                : normalizedEntityType === 'hr_employee'
-                  ? moduleTemplates.find((t) =>
-                    t?.metadata?.source === 'sidebar_dictionary' &&
-                    String(t?.metadata?.sidebarModule || '') === 'People & HR' &&
-                    String(t?.metadata?.sidebarSubmodule || '') === 'Employees'
-                  )
-                  : normalizedEntityType === 'hr_training'
-                    ? moduleTemplates.find((t) =>
-                      t?.metadata?.source === 'sidebar_dictionary' &&
-                      String(t?.metadata?.sidebarModule || '') === 'People & HR' &&
-                      (
-                        String(t?.metadata?.sidebarSubmodule || '') === 'Trainings' ||
-                        String(t?.metadata?.sidebarSubmodule || '') === 'Training Register'
-                      )
-                    )
-            : moduleTemplates.find((t) => t?.metadata?.useCase !== 'expense_workflow');
     }
     if (!selectedTemplate) return null;
 
@@ -965,15 +1095,6 @@ export class ChecklistService {
   async listTemplates({ type, module } = {}) {
     const tenantDb = await this.getTenantDb();
     const repo = new ChecklistTemplateRepository(tenantDb);
-    // Dictionary is source-of-truth for module checklists.
-    if (!type || type === 'module') {
-      await this.syncSidebarDictionaryTemplates();
-    }
-    // Keep risk workflow template in sync with checklist dictionary
-    // so direct dictionary edits are reflected in UI/API reads.
-    if (!module || module === 'Compliance') {
-      await this.ensureDefaultRiskWorkflowTemplate();
-    }
     const primary = await repo.list(this.orgId, { type, module });
     if (!module || primary.length > 0) return primary;
 
@@ -1069,8 +1190,13 @@ export class ChecklistService {
       return existing;
     }
 
-    let template = await templateRepo.findActiveByType(this.orgId, 'module');
-    if (!template) template = await this.ensureDefaultExpenseWorkflowTemplate();
+    const moduleTemplates = await templateRepo.list(this.orgId, { type: 'module' });
+    let template = findBestTemplateForTarget(moduleTemplates, ENTITY_TEMPLATE_TARGETS.expense);
+    if (!template) {
+      template = findBestTemplateForTarget(moduleTemplates, { module: 'Finances' })
+        || findBestTemplateForTarget(moduleTemplates, { module: 'Finance' });
+    }
+    if (!template) return null;
 
     const items = (template.items || [])
       .slice()
@@ -1351,10 +1477,18 @@ export class ChecklistService {
     const normalizeRule = (r) => String(r || '').trim().toUpperCase();
 
     const applyAutoState = (item, satisfied, detail) => {
-      if (item.type_snapshot !== 'auto') {
-        item.type_snapshot = 'auto';
-        changed = true;
+      // Only auto-evaluate items that are truly auto-driven.
+      // If a user already explicitly checked the item, never override it on evaluation.
+      if (item.type_snapshot !== 'auto') return;
+      if (item.checked_by) {
+        if (item.evaluation_detail !== detail) {
+          item.evaluation_detail = detail;
+          changed = true;
+        }
+        item.last_evaluated_at = now;
+        return;
       }
+
       const nextState = satisfied ? 'satisfied' : 'pending';
       if (item.state !== nextState) {
         item.state = nextState;
@@ -1370,10 +1504,6 @@ export class ChecklistService {
       }
       if (!satisfied && item.checked_at) {
         item.checked_at = null;
-        changed = true;
-      }
-      if (item.checked_by) {
-        item.checked_by = null; // system-derived for auto checks
         changed = true;
       }
       if (item.evaluation_detail !== detail) {

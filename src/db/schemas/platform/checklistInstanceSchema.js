@@ -52,6 +52,7 @@ const instanceItemSchema = new mongoose.Schema(
 
 const checklistInstanceSchema = new mongoose.Schema(
   {
+    entity_type: { type: String, enum: ['instance'], default: 'instance', immutable: true, index: true },
     org_id: { type: String, required: true, index: true },
     template_id: { type: mongoose.Schema.Types.ObjectId, ref: 'ChecklistTemplate', required: true, index: true },
     type: { type: String, required: true, trim: true, index: true }, // month_end | quarter_end | year_end | module
@@ -69,7 +70,7 @@ const checklistInstanceSchema = new mongoose.Schema(
 
     items: { type: [instanceItemSchema], default: [] }
   },
-  { timestamps: true, collection: 'checklist_instances' }
+  { timestamps: true, collection: 'checklists' }
 );
 
 checklistInstanceSchema.index({ org_id: 1, type: 1, 'period.year': 1, 'period.month': 1 });

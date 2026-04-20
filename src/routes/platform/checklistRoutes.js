@@ -20,6 +20,7 @@ router.get('/file-url', checklistController.getEvidenceFileUrl);
 // Templates
 router.get('/templates', checklistController.listTemplates);
 router.post('/templates/bootstrap-module-catalog', checklistController.bootstrapModuleCatalogTemplates);
+router.post('/templates/bootstrap-v3', checklistController.bootstrapV3Library);
 router.post(
   '/templates',
   [

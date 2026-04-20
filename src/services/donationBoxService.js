@@ -23,31 +23,46 @@ export class DonationBoxService {
   }
 
   async createBox(payload, userId) {
-    const { name, location } = payload || {};
-    const lat = location?.lat;
-    const lng = location?.lng;
+    const { name, location, category, source_type, description } = payload || {};
 
     if (!name || typeof name !== 'string' || !name.trim()) {
-      throw new AppError('Donation box name is required', 400, 'VALIDATION_ERROR');
-    }
-    const latNum = toNumber(lat);
-    const lngNum = toNumber(lng);
-    if (latNum === null || lngNum === null) {
-      throw new AppError('Donation box location lat/lng are required', 400, 'VALIDATION_ERROR');
+      throw new AppError('Collection point name is required', 400, 'VALIDATION_ERROR');
     }
 
-    const box = await this.repo.create({
+    // Category — defaults to donation_box to keep existing clients working
+    const VALID_CATEGORIES = ['donation_box', 'miscellaneous'];
+    const categoryValue = VALID_CATEGORIES.includes(category) ? category : 'donation_box';
+
+    // Location — required only for physical donation boxes
+    const latNum = toNumber(location?.lat);
+    const lngNum = toNumber(location?.lng);
+    const locationBlock = {};
+    if (latNum !== null) locationBlock.lat = latNum;
+    if (lngNum !== null) locationBlock.lng = lngNum;
+    locationBlock.address = typeof location?.address === 'string' ? location.address : '';
+
+    if (categoryValue === 'donation_box') {
+      if (latNum === null || lngNum === null) {
+        throw new AppError('Donation box location lat/lng are required', 400, 'VALIDATION_ERROR');
+      }
+    }
+
+    // Miscellaneous metadata
+    const VALID_SOURCE_TYPES = ['fundraising_event', 'online_fundraise', 'in_person_appeal', 'workplace_giving', 'other'];
+    const doc = {
       org_id: this.orgId,
       name: name.trim(),
       status: 'active',
-      location: {
-        lat: latNum,
-        lng: lngNum,
-        address: typeof location?.address === 'string' ? location.address : '',
-      },
+      category: categoryValue,
+      description: typeof description === 'string' ? description.trim() : '',
+      location: locationBlock,
       created_by: userId,
-    });
+    };
+    if (categoryValue === 'miscellaneous' && VALID_SOURCE_TYPES.includes(source_type)) {
+      doc.source_type = source_type;
+    }
 
+    const box = await this.repo.create(doc);
     return box;
   }
 
@@ -66,18 +81,49 @@ export class DonationBoxService {
    * Optional second counter → extra acknowledgement step before office.
    */
   async addEntry({ boxId, payload, userId }) {
-    const entry_date = payload?.entry_date;
-    const amountNum = toNumber(payload?.amount);
-    const tipsNum = toNumber(payload?.tips_count ?? 0);
+    // We need the parent record's category to decide which rules apply.
+    const parent = await this.repo.findById({ orgId: this.orgId, boxId });
+    if (!parent) throw new AppError('Cash-handling record not found', 404, 'NOT_FOUND');
+    const parentCategory = parent.category || 'donation_box';
+    const isBox = parentCategory === 'donation_box';
 
+    const entry_date = payload?.entry_date;
     if (!entry_date || Number.isNaN(new Date(entry_date).getTime())) {
       throw new AppError('entry_date is required', 400, 'VALIDATION_ERROR');
     }
-    if (amountNum === null || amountNum < 0) {
-      throw new AppError('amount must be a non-negative number', 400, 'VALIDATION_ERROR');
-    }
-    if (tipsNum === null || tipsNum < 0) {
-      throw new AppError('tips_count must be a non-negative number', 400, 'VALIDATION_ERROR');
+
+    // Amount resolution:
+    //   donation_box  → `amount` is authoritative (existing behaviour)
+    //   miscellaneous → `gross_amount` is authoritative; falls back to `amount` if the caller
+    //                   still sends the old field. `amount` on the stored entry always carries
+    //                   the net figure so downstream totals keep working.
+    const amountNum = toNumber(payload?.amount);
+    const grossNum = toNumber(payload?.gross_amount);
+    const expensesNum = toNumber(payload?.expenses);
+    const netPayloadNum = toNumber(payload?.net_amount);
+    const tipsNum = toNumber(payload?.tips_count ?? 0);
+
+    let effectiveGross = null;
+    let effectiveExpenses = 0;
+    let effectiveNet = null;
+
+    if (isBox) {
+      if (amountNum === null || amountNum < 0) {
+        throw new AppError('amount must be a non-negative number', 400, 'VALIDATION_ERROR');
+      }
+      if (tipsNum === null || tipsNum < 0) {
+        throw new AppError('tips_count must be a non-negative number', 400, 'VALIDATION_ERROR');
+      }
+      effectiveNet = amountNum;
+    } else {
+      effectiveGross = grossNum !== null ? grossNum : amountNum;
+      if (effectiveGross === null || effectiveGross < 0) {
+        throw new AppError('gross_amount is required for miscellaneous entries', 400, 'VALIDATION_ERROR');
+      }
+      effectiveExpenses = expensesNum !== null && expensesNum >= 0 ? expensesNum : 0;
+      effectiveNet = netPayloadNum !== null
+        ? netPayloadNum
+        : Math.max(0, effectiveGross - effectiveExpenses);
     }
 
     const ack = payload?.collector_acknowledgement;
@@ -89,6 +135,8 @@ export class DonationBoxService {
       );
     }
 
+    // box_still_at_location only applies to physical boxes. Miscellaneous records default
+    // to `true` — the collection source continues to exist unless manually retired.
     const boxStillRaw = payload?.box_still_at_location;
     const boxStillBool =
       boxStillRaw === true || boxStillRaw === false
@@ -98,9 +146,10 @@ export class DonationBoxService {
           : boxStillRaw === 'false'
             ? false
             : null;
-    if (boxStillBool === null) {
+    if (isBox && boxStillBool === null) {
       throw new AppError('box_still_at_location is required (true or false).', 400, 'VALIDATION_ERROR');
     }
+    const boxStillFinal = isBox ? boxStillBool : true;
 
     const secondCounted =
       payload?.second_person_counted === true ||
@@ -124,6 +173,21 @@ export class DonationBoxService {
       }
     }
 
+    // Miscellaneous-only metadata — carried through only when the parent is miscellaneous.
+    const VALID_PAYMENT_METHODS = ['cash', 'card', 'online', 'mixed', 'other'];
+    const miscMeta = {};
+    if (!isBox) {
+      miscMeta.gross_amount = effectiveGross;
+      miscMeta.expenses = effectiveExpenses;
+      miscMeta.net_amount = effectiveNet;
+      const partNum = toNumber(payload?.participant_count);
+      if (partNum !== null && partNum >= 0) miscMeta.participant_count = partNum;
+      if (VALID_PAYMENT_METHODS.includes(payload?.payment_method)) miscMeta.payment_method = payload.payment_method;
+      if (typeof payload?.platform === 'string' && payload.platform.trim()) miscMeta.platform = payload.platform.trim();
+      if (payload?.period_start && !Number.isNaN(new Date(payload.period_start).getTime())) miscMeta.period_start = new Date(payload.period_start);
+      if (payload?.period_end && !Number.isNaN(new Date(payload.period_end).getTime())) miscMeta.period_end = new Date(payload.period_end);
+    }
+
     const collectorId = userId;
     const now = new Date();
     let workflowStatus = 'awaiting_office_ack';
@@ -132,11 +196,13 @@ export class DonationBoxService {
     }
 
     const entry = {
-      tips_count: tipsNum,
-      amount: amountNum,
+      tips_count: isBox ? tipsNum : 0,
+      // `amount` stays the authoritative "money in" figure regardless of category so that
+      // downstream reports/totals (list cards, CSV export, CSV reporting, etc.) keep working.
+      amount: isBox ? amountNum : effectiveNet,
       entry_date: new Date(entry_date),
       notes: typeof payload?.notes === 'string' ? payload.notes : '',
-      box_still_at_location: boxStillBool,
+      box_still_at_location: boxStillFinal,
       collector_id: collectorId,
       collector_acknowledged_at: now,
       collector_acknowledged_by: userId,
@@ -154,11 +220,12 @@ export class DonationBoxService {
           action: 'collector_acknowledged',
           at: now,
           actor_id: userId,
-          note: 'Collection recorded by collector.',
+          note: isBox ? 'Collection recorded by collector.' : 'Miscellaneous collection recorded.',
         },
       ],
       created_by: userId,
       created_at: now,
+      ...miscMeta,
     };
     if (secondCounted && secondCounterId) {
       entry.workflow_events.push({
