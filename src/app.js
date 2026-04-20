@@ -16,6 +16,14 @@ dotenv.config();
 
 const app = express();
 
+const disabledModules = new Set(
+  String(process.env.DISABLED_MODULES || '')
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean)
+);
+const isModuleEnabled = (moduleKey) => !disabledModules.has(String(moduleKey || '').toLowerCase());
+
 // ============================================
 // MIDDLEWARE
 // ============================================
@@ -169,49 +177,49 @@ import sweepFundsRoutes from './routes/platform/sweepFundsRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
-app.use('/api/v1/platform/expenses', expenseRoutes);
-app.use('/api/v1/platform/approvals', approvalRoutes);
-app.use('/api/v1/platform/checklists', checklistRoutes);
-app.use('/api/v1/platform/approval-thresholds', approvalThresholdRoutes);
+if (isModuleEnabled('expenses')) app.use('/api/v1/platform/expenses', expenseRoutes);
+if (isModuleEnabled('approvals')) app.use('/api/v1/platform/approvals', approvalRoutes);
+if (isModuleEnabled('checklists')) app.use('/api/v1/platform/checklists', checklistRoutes);
+if (isModuleEnabled('approval-thresholds')) app.use('/api/v1/platform/approval-thresholds', approvalThresholdRoutes);
 app.use('/api/v1/platform/users', userRoutes);
-app.use('/api/v1/platform/board-members', boardMemberRoutes);
-app.use('/api/v1/platform/documents', documentRoutes);
-app.use('/api/v1/platform/activities', activityRoutes);
-app.use('/api/v1/platform/calendar', calendarRoutes);
-app.use('/api/v1/platform/financial-controls', financialControlsRoutes);
-app.use('/api/v1/platform/governance-structure', governanceStructureRoutes);
-app.use('/api/v1/platform/training', trainingRoutes);
-app.use('/api/v1/platform/risks', riskRoutes);
-app.use('/api/v1/platform/policies', policyRoutes);
+if (isModuleEnabled('board-members')) app.use('/api/v1/platform/board-members', boardMemberRoutes);
+if (isModuleEnabled('documents')) app.use('/api/v1/platform/documents', documentRoutes);
+if (isModuleEnabled('activities')) app.use('/api/v1/platform/activities', activityRoutes);
+if (isModuleEnabled('calendar')) app.use('/api/v1/platform/calendar', calendarRoutes);
+if (isModuleEnabled('financial-controls')) app.use('/api/v1/platform/financial-controls', financialControlsRoutes);
+if (isModuleEnabled('governance-structure')) app.use('/api/v1/platform/governance-structure', governanceStructureRoutes);
+if (isModuleEnabled('training')) app.use('/api/v1/platform/training', trainingRoutes);
+if (isModuleEnabled('risks')) app.use('/api/v1/platform/risks', riskRoutes);
+if (isModuleEnabled('policies')) app.use('/api/v1/platform/policies', policyRoutes);
 app.use('/api/v1/platform/me', meRoutes);
-app.use('/api/v1/platform/position-permissions', positionPermissionsRoutes);
-app.use('/api/v1/platform/notifications', notificationRoutes);
-app.use('/api/v1/platform/partner-vetting', partnerVettingRoutes);
-app.use('/api/v1/platform/donors', donorRoutes);
-app.use('/api/v1/platform/funding-programs', fundingProgramRoutes);
-app.use('/api/v1/platform/donations', donationRoutes);
-app.use('/api/v1/platform/donation-milestones', donationMilestoneRoutes);
-app.use('/api/v1/platform/donation-boxes', donationBoxRoutes);
-app.use('/api/v1/platform/social-media-campaigns', socialMediaCampaignRoutes);
-app.use('/api/v1/platform/disciplinary-records', disciplinaryRoutes);
-app.use('/api/v1/platform/project-register', projectRegisterRoutes);
-app.use('/api/v1/platform/funding-agreements', fundingAgreementRoutes);
-app.use('/api/v1/platform/assets', assetRoutes);
-app.use('/api/v1/platform/coi', coiRoutes);
-app.use('/api/v1/platform/audit-trail', auditTrailRoutes);
-app.use('/api/v1/platform/reporting', reportingRoutes);
-app.use('/api/v1/platform/complaints', complaintRoutes);
-app.use('/api/v1/platform/meetings', meetingRoutes);
-app.use('/api/v1/platform/support-tickets', supportTicketRoutes);
-app.use('/api/v1/platform/bcp', bcpRoutes);
-app.use('/api/v1/platform/legal-documents', legalDocumentRoutes);
-app.use('/api/v1/platform/dashboard', dashboardRoutes);
-app.use('/api/v1/platform/chatbot', chatbotRoutes);
-app.use('/api/v1/platform/volunteers', volunteerRoutes);
-app.use('/api/v1/platform/project-delivery', projectDeliveryRoutes);
-app.use('/api/v1/platform/it-register', itRegisterRoutes);
-app.use('/api/v1/platform/offboarding', offboardingRoutes);
-app.use('/api/v1/platform/sweep-funds', sweepFundsRoutes);
+if (isModuleEnabled('position-permissions')) app.use('/api/v1/platform/position-permissions', positionPermissionsRoutes);
+if (isModuleEnabled('notifications')) app.use('/api/v1/platform/notifications', notificationRoutes);
+if (isModuleEnabled('partner-vetting')) app.use('/api/v1/platform/partner-vetting', partnerVettingRoutes);
+if (isModuleEnabled('donors')) app.use('/api/v1/platform/donors', donorRoutes);
+if (isModuleEnabled('funding-programs')) app.use('/api/v1/platform/funding-programs', fundingProgramRoutes);
+if (isModuleEnabled('donations')) app.use('/api/v1/platform/donations', donationRoutes);
+if (isModuleEnabled('donation-milestones')) app.use('/api/v1/platform/donation-milestones', donationMilestoneRoutes);
+if (isModuleEnabled('donation-boxes')) app.use('/api/v1/platform/donation-boxes', donationBoxRoutes);
+if (isModuleEnabled('social-media-campaigns')) app.use('/api/v1/platform/social-media-campaigns', socialMediaCampaignRoutes);
+if (isModuleEnabled('disciplinary-records')) app.use('/api/v1/platform/disciplinary-records', disciplinaryRoutes);
+if (isModuleEnabled('project-register')) app.use('/api/v1/platform/project-register', projectRegisterRoutes);
+if (isModuleEnabled('funding-agreements')) app.use('/api/v1/platform/funding-agreements', fundingAgreementRoutes);
+if (isModuleEnabled('assets')) app.use('/api/v1/platform/assets', assetRoutes);
+if (isModuleEnabled('coi')) app.use('/api/v1/platform/coi', coiRoutes);
+if (isModuleEnabled('audit-trail')) app.use('/api/v1/platform/audit-trail', auditTrailRoutes);
+if (isModuleEnabled('reporting')) app.use('/api/v1/platform/reporting', reportingRoutes);
+if (isModuleEnabled('complaints')) app.use('/api/v1/platform/complaints', complaintRoutes);
+if (isModuleEnabled('meetings')) app.use('/api/v1/platform/meetings', meetingRoutes);
+if (isModuleEnabled('support-tickets')) app.use('/api/v1/platform/support-tickets', supportTicketRoutes);
+if (isModuleEnabled('bcp')) app.use('/api/v1/platform/bcp', bcpRoutes);
+if (isModuleEnabled('legal-documents')) app.use('/api/v1/platform/legal-documents', legalDocumentRoutes);
+if (isModuleEnabled('dashboard')) app.use('/api/v1/platform/dashboard', dashboardRoutes);
+if (isModuleEnabled('chatbot')) app.use('/api/v1/platform/chatbot', chatbotRoutes);
+if (isModuleEnabled('volunteers')) app.use('/api/v1/platform/volunteers', volunteerRoutes);
+if (isModuleEnabled('project-delivery')) app.use('/api/v1/platform/project-delivery', projectDeliveryRoutes);
+if (isModuleEnabled('it-register')) app.use('/api/v1/platform/it-register', itRegisterRoutes);
+if (isModuleEnabled('offboarding')) app.use('/api/v1/platform/offboarding', offboardingRoutes);
+if (isModuleEnabled('sweep-funds')) app.use('/api/v1/platform/sweep-funds', sweepFundsRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

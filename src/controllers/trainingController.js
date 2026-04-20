@@ -991,7 +991,7 @@ export const getRegisterMetrics = asyncHandler(async (req, res) => {
  * GET /platform/training/activity/heatmap?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD
  */
 export const getTrainingActivityHeatmap = asyncHandler(async (req, res) => {
-  const { trainingRepo, org, tenantDb } = await getTenantAndRepos(req);
+  const { trainingRepo, org } = await getTenantAndRepos(req);
 
   const end = req.query.end_date ? new Date(String(req.query.end_date)) : new Date();
   end.setHours(23, 59, 59, 999);
@@ -1003,32 +1003,29 @@ export const getTrainingActivityHeatmap = asyncHandler(async (req, res) => {
   const programs = await trainingRepo.findProgramsByOrg(org._id, { includeDraft: true });
   const programIds = (programs || []).map((p) => p?._id).filter(Boolean);
 
-  const TrainingCompletion = tenantDb.models.TrainingCompletion;
-  const TrainingEnrollment = tenantDb.models.TrainingEnrollment;
+  const TrainingProgram = trainingRepo.TrainingProgram;
 
   let internalBuckets = [];
   if (programIds.length > 0) {
-    internalBuckets = await TrainingCompletion.aggregate([
+    internalBuckets = await TrainingProgram.aggregate([
       {
         $match: {
-          status: 'completed',
-          completed_at: { $gte: start, $lte: end }
+          _id: { $in: programIds }
         }
       },
+      { $unwind: '$enrollments' },
+      { $match: { 'enrollments.enrollment_type': 'internal' } },
+      { $unwind: '$enrollments.completions' },
       {
-        $lookup: {
-          from: TrainingEnrollment.collection.name,
-          localField: 'enrollment_id',
-          foreignField: '_id',
-          as: 'enr'
+        $match: {
+          'enrollments.completions.status': 'completed',
+          'enrollments.completions.completed_at': { $gte: start, $lte: end }
         }
       },
-      { $unwind: '$enr' },
-      { $match: { 'enr.training_program_id': { $in: programIds } } },
       {
         $group: {
           _id: {
-            $dateToString: { format: '%Y-%m-%d', date: '$completed_at' }
+            $dateToString: { format: '%Y-%m-%d', date: '$enrollments.completions.completed_at' }
           },
           count: { $sum: 1 }
         }
@@ -1038,25 +1035,24 @@ export const getTrainingActivityHeatmap = asyncHandler(async (req, res) => {
   }
 
   // External completions (token-based)
-  const ExternalTrainingEnrollment =
-    tenantDb.models.ExternalTrainingEnrollment ||
-    tenantDb.model(
-      'ExternalTrainingEnrollment',
-      (await import('../db/schemas/platform/externalTrainingEnrollmentSchema.js')).default
-    );
-
-  const externalBuckets = await ExternalTrainingEnrollment.aggregate([
+  const externalBuckets = await TrainingProgram.aggregate([
     {
       $match: {
         org_id: org._id,
-        status: 'completed',
-        completed_at: { $gte: start, $lte: end }
+      }
+    },
+    { $unwind: '$enrollments' },
+    {
+      $match: {
+        'enrollments.enrollment_type': 'external',
+        'enrollments.status': 'completed',
+        'enrollments.completed_at': { $gte: start, $lte: end }
       }
     },
     {
       $group: {
         _id: {
-          $dateToString: { format: '%Y-%m-%d', date: '$completed_at' }
+          $dateToString: { format: '%Y-%m-%d', date: '$enrollments.completed_at' }
         },
         count: { $sum: 1 }
       }

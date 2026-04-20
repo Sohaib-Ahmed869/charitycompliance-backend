@@ -24,6 +24,7 @@ const templateItemSchema = new mongoose.Schema(
 
 const checklistTemplateSchema = new mongoose.Schema(
   {
+    entity_type: { type: String, enum: ['template'], default: 'template', immutable: true, index: true },
     org_id: { type: String, required: true, index: true },
     name: { type: String, required: true, trim: true },
     type: { type: String, required: true, trim: true }, // month_end | quarter_end | year_end | module
@@ -32,7 +33,7 @@ const checklistTemplateSchema = new mongoose.Schema(
     is_active: { type: Boolean, default: true, index: true },
     metadata: { type: mongoose.Schema.Types.Mixed }
   },
-  { timestamps: true, collection: 'checklist_templates' }
+  { timestamps: true, collection: 'checklists' }
 );
 
 checklistTemplateSchema.index({ org_id: 1, type: 1, is_active: 1 });

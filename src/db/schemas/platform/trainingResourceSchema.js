@@ -6,6 +6,13 @@
 import mongoose from 'mongoose';
 
 const trainingResourceSchema = new mongoose.Schema({
+  entity_type: {
+    type: String,
+    enum: ['resource'],
+    default: 'resource',
+    immutable: true,
+    index: true
+  },
   module_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'TrainingModule',
@@ -35,7 +42,7 @@ const trainingResourceSchema = new mongoose.Schema({
   }
 }, {
   timestamps: true,
-  collection: 'training_resources'
+  collection: 'trainings'
 });
 
 trainingResourceSchema.index({ module_id: 1, order: 1 });

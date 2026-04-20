@@ -54,8 +54,6 @@ router.put(
   boardMemberController.updatePosition
 );
 
-router.get('/suitability/bulk-status', boardMemberController.getSuitabilityBulkStatus);
-
 // Get all board members
 router.get(
   '/',
@@ -195,22 +193,6 @@ router.delete(
   validate,
   requireMfa('offboarding_access'),
   boardMemberController.deleteBoardMember
-);
-
-router.patch(
-  '/:boardMemberId/suitability',
-  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
-  validate,
-  boardMemberController.updateSuitability
-);
-
-router.post(
-  '/:boardMemberId/suitability/documents',
-  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
-  validate,
-  uploadSingle,
-  handleUploadError,
-  boardMemberController.uploadSuitabilityDocument
 );
 
 // ── WWCC upload / view / delete ──

@@ -28,20 +28,61 @@ router.get(
   donationBoxController.listDonationBoxes
 );
 
-// Create donation box
+// Create cash-handling collection point (donation box OR miscellaneous)
 router.post(
   '/',
   [
-    body('name').trim().notEmpty().withMessage('Donation box name is required'),
+    body('name').trim().notEmpty().withMessage('Name is required'),
+    body('category')
+      .optional()
+      .isIn(['donation_box', 'miscellaneous'])
+      .withMessage('category must be donation_box or miscellaneous'),
+    body('source_type')
+      .optional({ checkFalsy: true })
+      .isIn(['fundraising_event', 'online_fundraise', 'in_person_appeal', 'workplace_giving', 'other'])
+      .withMessage('source_type is not valid'),
+    body('description').optional().isString().trim(),
+    // location is required only for donation_box records; for miscellaneous it's optional
     body('location')
-      .notEmpty()
-      .withMessage('location is required'),
+      .custom((value, { req }) => {
+        const category = req.body?.category || 'donation_box';
+        if (category === 'donation_box' && !value) {
+          throw new Error('location is required for donation boxes');
+        }
+        return true;
+      }),
     body('location.lat')
-      .isFloat({ min: -90, max: 90 })
-      .withMessage('location.lat must be a valid latitude'),
+      .custom((value, { req }) => {
+        const category = req.body?.category || 'donation_box';
+        if (category === 'donation_box') {
+          const n = typeof value === 'string' ? Number(value) : value;
+          if (typeof n !== 'number' || Number.isNaN(n) || n < -90 || n > 90) {
+            throw new Error('location.lat must be a valid latitude');
+          }
+        } else if (value !== undefined && value !== null && value !== '') {
+          const n = typeof value === 'string' ? Number(value) : value;
+          if (typeof n !== 'number' || Number.isNaN(n) || n < -90 || n > 90) {
+            throw new Error('location.lat must be a valid latitude');
+          }
+        }
+        return true;
+      }),
     body('location.lng')
-      .isFloat({ min: -180, max: 180 })
-      .withMessage('location.lng must be a valid longitude'),
+      .custom((value, { req }) => {
+        const category = req.body?.category || 'donation_box';
+        if (category === 'donation_box') {
+          const n = typeof value === 'string' ? Number(value) : value;
+          if (typeof n !== 'number' || Number.isNaN(n) || n < -180 || n > 180) {
+            throw new Error('location.lng must be a valid longitude');
+          }
+        } else if (value !== undefined && value !== null && value !== '') {
+          const n = typeof value === 'string' ? Number(value) : value;
+          if (typeof n !== 'number' || Number.isNaN(n) || n < -180 || n > 180) {
+            throw new Error('location.lng must be a valid longitude');
+          }
+        }
+        return true;
+      }),
     body('location.address').optional().trim(),
   ],
   validate,
@@ -60,7 +101,10 @@ router.get(
   donationBoxController.getDonationBoxById
 );
 
-// Add entry against donation box
+// Add entry against donation box / miscellaneous collection
+// Category-specific requirements (e.g. box_still_at_location for donation boxes,
+// gross_amount for miscellaneous) are enforced in the service layer once the
+// parent record's category is known.
 router.post(
   '/:boxId/entries',
   [
@@ -75,20 +119,28 @@ router.post(
       .isInt({ min: 0 })
       .withMessage('tips_count must be a non-negative integer'),
     body('amount')
-      .notEmpty()
-      .withMessage('amount is required')
+      .optional({ nullable: true, checkFalsy: true })
       .isFloat({ min: 0 })
       .withMessage('amount must be a non-negative number'),
     body('notes').optional().trim(),
     body('box_still_at_location')
+      .optional({ nullable: true })
       .custom((v) => v === true || v === false || v === 'true' || v === 'false')
       .withMessage('box_still_at_location must be true or false'),
     body('collector_acknowledgement')
       .custom((v) => v === true || v === 'true')
       .withMessage('The collector must acknowledge this collection'),
     body('second_person_counted').optional().custom((v) => v === undefined || v === true || v === false || v === 'true' || v === 'false'),
-    // Empty string must skip isMongoId (e.g. placeholder before user picks someone)
     body('second_counter_user_id').optional({ checkFalsy: true }).isMongoId().withMessage('second_counter_user_id must be a valid user id'),
+    // Miscellaneous-entry fields (all optional — enforced per-category in the service)
+    body('gross_amount').optional({ nullable: true, checkFalsy: true }).isFloat({ min: 0 }).withMessage('gross_amount must be a non-negative number'),
+    body('expenses').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('expenses must be a non-negative number'),
+    body('net_amount').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('net_amount must be a non-negative number'),
+    body('participant_count').optional({ nullable: true }).isInt({ min: 0 }).withMessage('participant_count must be a non-negative integer'),
+    body('payment_method').optional({ checkFalsy: true }).isIn(['cash', 'card', 'online', 'mixed', 'other']).withMessage('payment_method is not valid'),
+    body('platform').optional().isString().trim(),
+    body('period_start').optional({ checkFalsy: true }).isISO8601().withMessage('period_start must be an ISO date'),
+    body('period_end').optional({ checkFalsy: true }).isISO8601().withMessage('period_end must be an ISO date'),
   ],
   validate,
   requirePermission('module:donation_boxes:edit'),

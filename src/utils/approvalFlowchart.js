@@ -61,7 +61,7 @@ export function generateApprovalFlowchart(approvalRequest) {
 
   // ═══ Complete Approval Trail (All Decisions, Notes & Attachments) ════════
   html += `<div style="margin-top: 20px; border-top: 2px solid #cbd5e1; padding-top: 16px;">
-    <h3 style="font-size: 12px; font-weight: bold; color: #1f2937; margin-bottom: 12px;">📋 Complete Approval Trail</h3>`;
+    <h3 style="font-size: 12px; font-weight: bold; color: #1f2937; margin-bottom: 12px;">Complete Approval Trail</h3>`;
 
   // Show all approval steps in chronological order
   steps.forEach((step, stepIdx) => {
@@ -77,7 +77,7 @@ export function generateApprovalFlowchart(approvalRequest) {
       html += `
         <div style="background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-            <span style="display: inline-block; width: 20px; height: 20px; border-radius: 50%; background: #10b981; color: white; text-align: center; line-height: 20px; font-size: 11px; font-weight: bold;">✓</span>
+            <!-- Approved icon removed -->
             <strong style="color: #047857;">Approved by ${escapeHtml(approverName)}</strong>
             <span style="color: #059669; font-size: 11px; margin-left: auto;">${formatDate(step.approved_at)}</span>
           </div>
@@ -93,7 +93,7 @@ export function generateApprovalFlowchart(approvalRequest) {
       html += `
         <div style="background: #fee2e2; border: 1px solid #fecaca; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-            <span style="display: inline-block; width: 20px; height: 20px; border-radius: 50%; background: #ef4444; color: white; text-align: center; line-height: 20px; font-size: 12px; font-weight: bold;">✕</span>
+            <!-- Declined icon removed -->
             <strong style="color: #991b1b;">Declined by ${escapeHtml(approverName)}</strong>
             <span style="color: #7f1d1d; font-size: 11px; margin-left: auto;">${formatDate(step.rejected_at)}</span>
           </div>
@@ -103,7 +103,7 @@ export function generateApprovalFlowchart(approvalRequest) {
           ${step.acknowledgement_files && step.acknowledgement_files.length > 0 ? renderAttachmentsList(step.acknowledgement_files, '#991b1b', 'rgba(239, 68, 68, 0.05)') : ''}
           ${Array.isArray(step.rejection_reviews) && step.rejection_reviews.length > 0 ? `
             <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #fecaca;">
-              <div style="color: #991b1b; font-size: 10px; font-weight: bold; margin-bottom: 6px;">📤 Rejection Review Trail:</div>
+              <div style="color: #991b1b; font-size: 10px; font-weight: bold; margin-bottom: 6px;">Rejection Review Trail:</div>
               ${renderRejectionReviews(step.rejection_reviews)}
             </div>
           ` : ''}
@@ -115,7 +115,7 @@ export function generateApprovalFlowchart(approvalRequest) {
   // ESCALATIONS (grouped separately for visibility)
   if (escalations.length > 0 || rejectionReviews.length > 0) {
     html += `<div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #fcd34d;">
-      <h4 style="font-size: 11px; font-weight: bold; color: #b45309; margin-bottom: 8px;">⚠️ Escalations & Reviews</h4>`;
+      <h4 style="font-size: 11px; font-weight: bold; color: #b45309; margin-bottom: 8px;">Escalations & Reviews</h4>`;
     
     // Show request-level escalations
     escalations.forEach((esc, escIdx) => {
@@ -130,7 +130,7 @@ export function generateApprovalFlowchart(approvalRequest) {
       html += `
         <div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
-            <span style="display: inline-block; width: 20px; height: 20px; border-radius: 50%; background: #f59e0b; color: white; text-align: center; line-height: 20px; font-size: 12px; font-weight: bold;">!</span>
+            <!-- Escalation icon removed -->
             <strong style="color: #b45309;">Escalated for Further Review</strong>
             <span style="color: #92400e; font-size: 11px; margin-left: auto;">${formatDate(esc.escalated_at)}</span>
           </div>
@@ -149,7 +149,7 @@ export function generateApprovalFlowchart(approvalRequest) {
     // Show request-level rejection reviews
     if (rejectionReviews.length > 0) {
       html += `<div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
-        <div style="color: #b45309; font-size: 11px; font-weight: bold; margin-bottom: 8px;">📋 Rejection Review</div>`;
+        <div style="color: #b45309; font-size: 11px; font-weight: bold; margin-bottom: 8px;">Rejection Review</div>`;
       
       rejectionReviews.forEach(rr => {
         const rejectedByName = rr.rejected_by?.first_name
@@ -449,7 +449,7 @@ function renderAttachmentsList(files, textColor = '#6b7280', bgColor = 'rgba(0,0
   if (!Array.isArray(files) || files.length === 0) return '';
   
   let html = `<div style="margin-top: 6px; padding: 6px; background: ${bgColor}; border-radius: 3px;">
-    <div style="color: ${textColor}; font-size: 9px; font-weight: bold; margin-bottom: 4px;">📎 Attachments:</div>`;
+    <div style="color: ${textColor}; font-size: 9px; font-weight: bold; margin-bottom: 4px;">Attachments:</div>`;
   
   files.forEach(file => {
     const filename = file.name || file.key?.split('/').pop() || 'Document';

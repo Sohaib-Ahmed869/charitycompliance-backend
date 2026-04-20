@@ -24,6 +24,13 @@ export const bootstrapModuleCatalogTemplates = asyncHandler(async (req, res) => 
   res.json({ success: true, data: summary });
 });
 
+export const bootstrapV3Library = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const service = new ChecklistService(orgId);
+  const summary = await service.bootstrapV3Library();
+  res.json({ success: true, data: summary });
+});
+
 export const createTemplate = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
