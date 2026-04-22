@@ -16,14 +16,7 @@ dotenv.config();
 
 const app = express();
 
-const disabledModules = new Set(
-  String(process.env.DISABLED_MODULES || '')
-    .split(',')
-    .map((v) => v.trim().toLowerCase())
-    .filter(Boolean)
-);
-const isModuleEnabled = (moduleKey) => !disabledModules.has(String(moduleKey || '').toLowerCase());
-
+app.set('trust proxy', 1)
 // ============================================
 // MIDDLEWARE
 // ============================================
