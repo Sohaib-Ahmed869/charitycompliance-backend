@@ -80,10 +80,17 @@ export class RiskService {
       risk_owner_id = submittedBy;
     }
 
-    const likelihood = riskData.likelihood ?? 1;
-    const consequence = riskData.consequence ?? 1;
-    const inherent_risk_score = likelihood * consequence;
-    const inherent_risk_level = getInherentLevel(inherent_risk_score);
+    // Severity is intentionally NOT defaulted at create time. The department
+    // head sets likelihood + severity during the first-step approval, and only
+    // then is the risk's priority (low / moderate / high) computed.
+    const likelihood = Number.isFinite(riskData.likelihood) && riskData.likelihood > 0
+      ? riskData.likelihood
+      : null;
+    const consequence = Number.isFinite(riskData.consequence) && riskData.consequence > 0
+      ? riskData.consequence
+      : null;
+    const inherent_risk_score = likelihood != null && consequence != null ? likelihood * consequence : null;
+    const inherent_risk_level = inherent_risk_score != null ? getInherentLevel(inherent_risk_score) : null;
 
     const risk = await riskRepo.create({
       org_id: orgId,
@@ -95,43 +102,44 @@ export class RiskService {
       risk_owner_id,
       risk_owner_board_member_id,
       next_review_date: riskData.next_review_date,
-      likelihood,
-      consequence,
-      inherent_risk_score,
-      inherent_risk_level,
+      ...(likelihood != null ? { likelihood } : {}),
+      ...(consequence != null ? { consequence } : {}),
+      ...(inherent_risk_score != null ? { inherent_risk_score } : {}),
+      ...(inherent_risk_level != null ? { inherent_risk_level } : {}),
       existing_controls: riskData.existing_controls || '',
       trend: riskData.trend || 'stable',
       status: 'draft',
       submitted_by: submittedBy,
-      metadata: riskData.metadata || {}
+      metadata: { ...(riskData.metadata || {}), awaiting_hod_assessment: true }
     });
 
     logInfo('Risk created', { riskId: risk._id, submittedBy });
 
     let approvalRequestId = null;
     try {
+      // Two-phase risk approval: a single-step request asking the department
+      // head to assess severity. The severity-matched workflow is attached
+      // AFTER the HoD approves (see approveRiskWithPriority in approvalController).
       const workflowService = new ApprovalWorkflowService(this.orgId);
-      const workflowReq = await workflowService.createRiskApprovalRequest(risk._id, submittedBy);
+      const workflowReq = await workflowService.createRiskHodAssessmentRequest(risk._id, submittedBy);
       approvalRequestId = workflowReq?._id || workflowReq?.id || null;
     } catch (err) {
-      // If there's no approval workflow for risk management, auto-approve the risk.
-      // This keeps risk creation working even when approval matrices are not configured.
+      // Expected "no setup" cases → auto-approve the risk so creation still works.
       const errCode = err?.code;
-      const isNoWorkflow =
+      const isNoSetup =
         err?.name === 'CastError' ||
         errCode === 'INVALID_ID' ||
         errCode === 'NO_APPROVAL_MATRIX' ||
-        errCode === 'NO_MATCHING_RULE';
-        // IMPORTANT: we intentionally do NOT treat NO_APPROVERS_FOUND as "no workflow".
-        // If a risk workflow is configured (action_type: "risk") but no approvers can
-        // be resolved, the request should fail so the user fixes their setup.
+        errCode === 'NO_MATCHING_RULE' ||
+        errCode === 'RISK_NO_DEPARTMENT' ||
+        errCode === 'NO_DEPARTMENT_HEAD';
 
-      if (!isNoWorkflow) {
+      if (!isNoSetup) {
         await riskRepo.delete(risk._id);
         throw err;
       }
 
-      logInfo('No approval workflow for risk_management; auto-approving risk', {
+      logInfo('Risk auto-approved (no HoD / no matrix configured)', {
         riskId: risk._id,
         submittedBy,
         errCode: errCode || err?.name

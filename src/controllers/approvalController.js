@@ -1168,21 +1168,10 @@ export const approveRiskWithPriority = asyncHandler(async (req, res) => {
   const userAgent = req.get('user-agent');
 
   const workflowService = new ApprovalWorkflowService(orgId);
-  const approvalRequest = await workflowService.processApproval(
-    approvalRequestId,
-    deptHeadStepIndex,
-    userId,
-    'approved',
-    comments || '',
-    ipAddress,
-    userAgent,
-    acknowledgement,
-    e_signature || null
-  );
-
-  // Update risk with likelihood, severity, and calculated priority
   const riskRepo = new RiskRepository(tenantDb);
   const risk = await riskRepo.findById(request.entity_id);
+
+  // Apply the HoD's severity assessment to the risk BEFORE advancing the approval.
   if (risk) {
     await riskRepo.update(request.entity_id, {
       likelihood,
@@ -1193,33 +1182,32 @@ export const approveRiskWithPriority = asyncHandler(async (req, res) => {
       'metadata.department_head_likelihood': likelihood,
       'metadata.department_head_severity': severity,
       'metadata.department_head_risk_score': riskScore,
-      'metadata.risk_assessment_date': new Date()
+      'metadata.risk_assessment_date': new Date(),
+      'metadata.awaiting_hod_assessment': false
     });
   }
 
-  // If the department head's assessment changes the priority, we must switch the workflow
-  // to the correct matrix/rule for that priority. Otherwise the request stays on the
-  // default (low) rule chosen at creation time.
+  // Before calling processApproval, attach the severity-matched workflow steps
+  // so the request can continue on the correct chain once HoD is marked approved.
+  // This covers both:
+  //   (a) new two-phase risks (approval_matrix_id == null at creation), and
+  //   (b) legacy risks that came in on a default matrix and now need to switch.
   try {
-    const priorityAmount =
-      riskPriority === 'high' ? 3 :
-      riskPriority === 'moderate' ? 2 :
-      1; // low/default
-
     const orgObjectId = await workflowService._getOrgObjectId();
-    const { matrix: newMatrix, rule: newRule } = await workflowService.findMatchingRule('risk', priorityAmount, orgObjectId);
+    const { matrix: newMatrix, rule: newRule } =
+      await workflowService.findRiskMatrixByPriority(riskPriority, orgObjectId);
 
     const existingMatrixId = request.approval_matrix_id?._id || request.approval_matrix_id;
-    const shouldSwitchMatrix = newMatrix?._id && String(newMatrix._id) !== String(existingMatrixId);
+    const needsAttach =
+      !existingMatrixId ||
+      String(newMatrix._id) !== String(existingMatrixId);
 
-    if (shouldSwitchMatrix) {
-      // Reload the request AFTER processApproval so we keep the approved dept head step.
-      const updatedReq = await approvalRequestRepo.findById(approvalRequestId);
-      if (updatedReq) {
-        const stepsNow = updatedReq.approval_steps || [];
+    if (needsAttach) {
+      const fresh = await approvalRequestRepo.findById(approvalRequestId);
+      if (fresh) {
+        const stepsNow = fresh.approval_steps || [];
         const deptHeadStep = stepsNow.find((s) => s.is_department_head) || null;
 
-        // Build approvers from the selected rule WITHOUT failing when positions have no users.
         const { UserPositionRepository } = await import('../repositories/userPositionRepository.js');
         const userPositionRepo = new UserPositionRepository(tenantDb);
         const approvers = [];
@@ -1229,7 +1217,6 @@ export const approveRiskWithPriority = asyncHandler(async (req, res) => {
           else if (approverConfig.position_id) {
             userIds = await userPositionRepo.findUsersByPositionId(approverConfig.position_id);
           }
-
           if (userIds.length > 0) {
             userIds.forEach((uid) => {
               approvers.push({
@@ -1251,7 +1238,7 @@ export const approveRiskWithPriority = asyncHandler(async (req, res) => {
         approvers.sort((a, b) => (a.level || 0) - (b.level || 0));
 
         const matrixSteps = approvers.map((a) => ({
-          level: (a.level || 0) + 1, // shift because dept head is level 1
+          level: (a.level || 0) + 1, // HoD stays at level 1
           approver_user_id: a.user_id || undefined,
           approver_position_id: a.position_id,
           approver_department_id: a.department_id,
@@ -1259,56 +1246,76 @@ export const approveRiskWithPriority = asyncHandler(async (req, res) => {
         }));
 
         const nextSteps = deptHeadStep ? [deptHeadStep, ...matrixSteps] : matrixSteps;
-        const firstPendingIndex = nextSteps.findIndex((s) => s.status === 'pending');
-
-        updatedReq.approval_matrix_id = newMatrix._id;
-        updatedReq.approval_type = newRule.approval_type;
-        updatedReq.amount = priorityAmount;
-        updatedReq.approval_steps = nextSteps;
-        if (updatedReq.approval_type === 'sequential') {
-          updatedReq.current_step = firstPendingIndex >= 0 ? firstPendingIndex : 0;
+        fresh.approval_matrix_id = newMatrix._id;
+        fresh.approval_type = newRule.approval_type;
+        fresh.approval_steps = nextSteps;
+        if (fresh.metadata) {
+          fresh.metadata.risk_hod_assessment_only = false;
+          fresh.markModified('metadata');
         }
-        updatedReq.markModified('approval_steps');
-        await updatedReq.save();
+        fresh.markModified('approval_steps');
+        await fresh.save();
 
-        // Keep the risk pointing at the active workflow matrix.
         if (risk) {
           await riskRepo.update(request.entity_id, { approval_matrix_id: newMatrix._id });
         }
-
-        // Notify new approvers (best-effort)
-        try {
-          const { UserRepository } = await import('../repositories/userRepository.js');
-          const emailService = (await import('../services/emailService.js')).default;
-          const userRepo = new UserRepository(tenantDb);
-          const submitter = updatedReq.submitted_by ? await userRepo.findById(updatedReq.submitted_by) : null;
-          const submitterName = submitter ? `${submitter.first_name} ${submitter.last_name}` : 'A user';
-          const riskTitle = risk?.title || 'Risk';
-          for (const step of updatedReq.approval_steps || []) {
-            if (!step?.approver_user_id) continue;
-            if (step?.is_department_head) continue; // already acted
-            const approverUser = await userRepo.findById(step.approver_user_id);
-            if (!approverUser?.email) continue;
-            const approverName = `${approverUser.first_name} ${approverUser.last_name}`;
-            await emailService.sendApprovalRequestEmail({
-              to: approverUser.email,
-              recipientName: approverName,
-              approvalRequestId: updatedReq._id.toString(),
-              requestType: 'risk',
-              entityTitle: `Risk: ${riskTitle}`,
-              approvalLevel: step.level,
-              submitterName,
-              approvalType: newRule.approval_type
-            });
-          }
-        } catch {
-          // ignore email failures
-        }
       }
     }
+  } catch (attachErr) {
+    // If there's no matching priority matrix, the HoD approval will auto-complete
+    // the request (single-step). That's an acceptable fallback — the HoD has
+    // already recorded severity on the risk.
+    if (attachErr?.code !== 'NO_APPROVAL_MATRIX' && attachErr?.code !== 'NO_MATCHING_RULE') {
+      throw attachErr;
+    }
+  }
+
+  // Re-index the pending HoD step in case save() restructured the steps array.
+  const reloaded = await approvalRequestRepo.findById(approvalRequestId);
+  const freshSteps = reloaded?.approval_steps || steps;
+  const resolvedDeptHeadIndex = freshSteps.findIndex((s) => s.status === 'pending' && s.is_department_head);
+  const stepIndexForProcess = resolvedDeptHeadIndex >= 0 ? resolvedDeptHeadIndex : deptHeadStepIndex;
+
+  const approvalRequest = await workflowService.processApproval(
+    approvalRequestId,
+    stepIndexForProcess,
+    userId,
+    'approved',
+    comments || '',
+    ipAddress,
+    userAgent,
+    acknowledgement,
+    e_signature || null
+  );
+
+  // Notify the next tier of approvers now that the workflow is attached.
+  try {
+    const { UserRepository } = await import('../repositories/userRepository.js');
+    const emailService = (await import('../services/emailService.js')).default;
+    const userRepo = new UserRepository(tenantDb);
+    const finalReq = await approvalRequestRepo.findById(approvalRequestId);
+    const submitter = finalReq?.submitted_by ? await userRepo.findById(finalReq.submitted_by) : null;
+    const submitterName = submitter ? `${submitter.first_name} ${submitter.last_name}` : 'A user';
+    const riskTitle = risk?.title || 'Risk';
+    for (const step of finalReq?.approval_steps || []) {
+      if (!step?.approver_user_id) continue;
+      if (step?.is_department_head) continue;
+      if (step?.status !== 'pending') continue;
+      const approverUser = await userRepo.findById(step.approver_user_id);
+      if (!approverUser?.email) continue;
+      await emailService.sendApprovalRequestEmail({
+        to: approverUser.email,
+        recipientName: `${approverUser.first_name} ${approverUser.last_name}`.trim(),
+        approvalRequestId: finalReq._id.toString(),
+        requestType: 'risk',
+        entityTitle: `Risk: ${riskTitle}`,
+        approvalLevel: step.level,
+        submitterName,
+        approvalType: finalReq.approval_type
+      });
+    }
   } catch {
-    // If workflow switching fails, don't block the approval; UI will still show
-    // the current workflow and admins can adjust. We already updated the risk values.
+    // ignore email failures
   }
 
   res.json({

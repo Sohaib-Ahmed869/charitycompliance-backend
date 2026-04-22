@@ -52,28 +52,26 @@ const riskSchema = new mongoose.Schema({
     type: Date,
     index: true
   },
+  // Severity fields are set by the department head during first-step approval,
+  // so they're optional at create time (two-phase risk approval).
   likelihood: {
     type: Number,
     min: 1,
-    max: 5,
-    required: true
+    max: 5
   },
   consequence: {
     type: Number,
     min: 1,
-    max: 5,
-    required: true
+    max: 5
   },
   inherent_risk_score: {
     type: Number,
-    required: true,
     min: 1,
     max: 25
   },
   inherent_risk_level: {
     type: String,
-    enum: ['low', 'moderate', 'high', 'extreme', 'critical'],
-    required: true
+    enum: ['low', 'moderate', 'high', 'extreme', 'critical']
   },
   residual_risk_score: {
     type: Number,

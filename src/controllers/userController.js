@@ -85,7 +85,9 @@ export const listTeamMembers = asyncHandler(async (req, res) => {
       position,
       avatar,
       isAuditor: user?.is_auditor === true,
-      isVolunteer: boardMember?.is_volunteer === true
+      isVolunteer: boardMember?.is_volunteer === true,
+      isBoardMember: boardMember?.is_board_member === true,
+      department: boardMember?.department || ''
     };
   }));
   const data = mapped.filter((u) => !u.isAuditor && !u.isVolunteer);

@@ -9,6 +9,7 @@ import * as governanceStructureController from '../../controllers/governanceStru
 import { body } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireAdminOrOwner } from '../../middleware/rbac.js';
 
 const router = express.Router();
 
@@ -25,6 +26,7 @@ router.get(
 // Update governance structure
 router.put(
   '/',
+  requireAdminOrOwner,
   governanceStructureController.uploadFiles,
   [
     body('conflict_of_interest_clause')

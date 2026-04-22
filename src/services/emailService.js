@@ -92,7 +92,8 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
                                 </tr>
                             </table>
                             
-                            <!-- CTA Button -->
+                            <!-- CTA Button (only when buttonText + buttonLink provided) -->
+                            ${(buttonText && buttonLink) ? `
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
                                     <td align="center" style="padding-bottom: 36px;">
@@ -108,6 +109,7 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
                                     </td>
                                 </tr>
                             </table>
+                            ` : ''}
                             ${rsvpButtonsHtml || ''}
                             <!-- Info Box -->
                             ${infoBoxContent ? `
@@ -315,11 +317,14 @@ class EmailService {
    */
   async sendBoardMemberInvitation({ to, recipientName, organizationName, position, invitationToken, inviterName, volunteerActionLinks = null }) {
     const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const inviteLink = `${baseUrl}/invitation/${invitationToken}`;
+    const isVolunteer = !!volunteerActionLinks;
+    const inviteLink = isVolunteer ? null : `${baseUrl}/invitation/${invitationToken}`;
 
-    const subject = `You've been invited to join ${organizationName}`;
+    const subject = isVolunteer
+      ? `Welcome as a volunteer at ${organizationName}`
+      : `You've been invited to join ${organizationName}`;
 
-    const volunteerLinksHtml = volunteerActionLinks
+    const volunteerLinksHtml = isVolunteer
       ? `
       <div style="margin-top: 16px; text-align: left; max-width: 500px; margin-left: auto; margin-right: auto; background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 10px; padding: 12px;">
         <p style="margin: 0 0 8px 0; font-size: 12px; color: #0F172A; font-weight: 600;">Volunteer quick actions</p>
@@ -329,23 +334,31 @@ class EmailService {
       </div>`
       : '';
 
-    const roleText = position 
+    const roleText = position
       ? `as a <strong>${position}</strong>`
       : `as a <strong>volunteer</strong>`;
 
-    const bodyHtml = `
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${recipientName},</p>
-      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">${inviterName ? `${inviterName} has invited you` : 'You have been invited'} to join <strong>${organizationName}</strong> ${roleText}.</p>
-      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">To accept this invitation and set up your account, please click the button below:</p>
-      ${volunteerLinksHtml}
-    `;
+    const bodyHtml = isVolunteer
+      ? `
+        <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${recipientName},</p>
+        <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">${inviterName ? `${inviterName} has added you` : 'You have been added'} to <strong>${organizationName}</strong> ${roleText}.</p>
+        <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Volunteers don't need to log in. Use the public links below whenever you need to raise something with the organisation.</p>
+        ${volunteerLinksHtml}
+      `
+      : `
+        <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${recipientName},</p>
+        <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">${inviterName ? `${inviterName} has invited you` : 'You have been invited'} to join <strong>${organizationName}</strong> ${roleText}.</p>
+        <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">To accept this invitation and set up your account, please click the button below:</p>
+      `;
 
     const html = buildEmailTemplate({
-      heading: "You're Invited",
+      heading: isVolunteer ? 'Welcome, Volunteer' : "You're Invited",
       bodyHtml,
-      buttonText: 'Accept Invitation',
+      buttonText: isVolunteer ? null : 'Accept Invitation',
       buttonLink: inviteLink,
-      infoBoxLines: ["If you didn't expect this invitation, you can ignore this email.", "This link expires in 7 days."]
+      infoBoxLines: isVolunteer
+        ? ['Volunteers do not need an account to help. Save this email so you can come back to the quick links above.']
+        : ["If you didn't expect this invitation, you can ignore this email.", 'This link expires in 7 days.']
     });
 
     return this.sendEmail({ to, subject, html });
@@ -655,20 +668,23 @@ class EmailService {
     return this.sendEmail({ to, subject, html });
   }
 
-  async sendVolunteerPolicyNotification({ to, recipientName, policyTitle, policyId }) {
+  async sendVolunteerPolicyNotification({ to, recipientName, policyTitle, policyId, acknowledgeUrl }) {
     const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const subject = `Policy update for acknowledgement: ${policyTitle}`;
+    // Volunteers have no login. Prefer the public token link when provided so they
+    // can acknowledge without authenticating; fall back to the internal route.
+    const buttonLink = acknowledgeUrl || `${baseUrl}/policies/acknowledge/${policyId}`;
+    const subject = `Policy for your acknowledgement: ${policyTitle}`;
     const bodyHtml = `
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName || 'Volunteer'},</p>
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">A policy relevant to you has been added or updated: <strong>${policyTitle}</strong>.</p>
-      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Please review and acknowledge it in the platform.</p>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Please review it and confirm your acknowledgement using the link below. No login required.</p>
     `;
     const html = buildEmailTemplate({
       heading: 'Policy Acknowledgement Required',
       bodyHtml,
-      buttonText: 'Review Policy',
-      buttonLink: `${baseUrl}/policies/acknowledge/${policyId}`,
-      infoBoxLines: ['Your acknowledgement is tracked for compliance reporting.'],
+      buttonText: 'Review & acknowledge',
+      buttonLink,
+      infoBoxLines: ['Your acknowledgement is tracked for compliance reporting.']
     });
     return this.sendEmail({ to, subject, html });
   }

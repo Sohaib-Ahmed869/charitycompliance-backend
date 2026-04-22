@@ -159,7 +159,11 @@ const approvalRequestSchema = new mongoose.Schema({
   approval_matrix_id: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ApprovalMatrix',
-    required: true
+    // Optional because two-phase approvals (e.g. risk HoD severity assessment)
+    // create the request BEFORE the priority-matched matrix is known. The
+    // matrix is attached once the department head decides severity.
+    required: false,
+    default: null
   },
   approval_type: {
     type: String,

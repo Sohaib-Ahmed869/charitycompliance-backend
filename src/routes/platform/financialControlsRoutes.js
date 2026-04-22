@@ -9,6 +9,7 @@ import * as financialControlsController from '../../controllers/financialControl
 import { body } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireAdminOrOwner } from '../../middleware/rbac.js';
 
 const router = express.Router();
 
@@ -25,6 +26,7 @@ router.get(
 // Update financial controls
 router.put(
   '/',
+  requireAdminOrOwner,
   [
     body('estimated_annual_revenue')
       .isFloat({ min: 0 })

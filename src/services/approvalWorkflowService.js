@@ -23,6 +23,7 @@ import { ProjectRegisterService } from './projectRegisterService.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
 import emailService from './emailService.js';
+import { notifyVolunteersForPolicy } from './volunteerPolicyNotifier.js';
 
 export class ApprovalWorkflowService {
   constructor(orgId) {
@@ -544,6 +545,176 @@ export class ApprovalWorkflowService {
       approvalRequestId: approvalRequest._id,
       approversCount: approvers.length
     });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Find an active risk-management matrix/rule by priority (low/moderate/high).
+   * Looks at the matrix-level `workflow_type` / `priority_level` rather than
+   * min/max amount, so the selection is unambiguous regardless of any legacy
+   * amount-based configuration.
+   */
+  async findRiskMatrixByPriority(priority, orgId) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const approvalMatrixRepo = new ApprovalMatrixRepository(tenantDb);
+
+    // "medium" and "moderate" both show up in UIs; normalise to the matrix values.
+    const want = String(priority || '').toLowerCase();
+    const workflowTypes = want === 'moderate'
+      ? ['moderate', 'medium']
+      : want === 'high'
+        ? ['high']
+        : ['low'];
+
+    const matrices = await approvalMatrixRepo.findEffectiveByOrgId(orgId, new Date());
+    if (!matrices || matrices.length === 0) {
+      throw new AppError('No approval workflow is currently effective.', 400, 'NO_APPROVAL_MATRIX');
+    }
+
+    const priorityMatch = (m) => {
+      const t = String(m.workflow_type || '').toLowerCase();
+      const pl = String(m.priority_level || '').toLowerCase();
+      return workflowTypes.includes(t) || workflowTypes.includes(pl);
+    };
+
+    // Prefer risk-management matrices that match the priority exactly.
+    const riskMatrices = matrices.filter((m) => {
+      const cat = String(m.workflow_category || '').toLowerCase();
+      if (cat && cat !== 'risk_management') return false;
+      return (m.rules || []).some((r) => r.is_active && this._normalizeActionType(r.action_type) === 'risk');
+    });
+
+    const matched = riskMatrices.find(priorityMatch);
+    const fallback = riskMatrices[0];
+    const selectedMatrix = matched || fallback || null;
+    if (!selectedMatrix) {
+      throw new AppError(
+        `No risk approval workflow configured for priority "${priority}".`,
+        400,
+        'NO_MATCHING_RULE'
+      );
+    }
+    const selectedRule = (selectedMatrix.rules || []).find(
+      (r) => r.is_active && this._normalizeActionType(r.action_type) === 'risk'
+    );
+    if (!selectedRule) {
+      throw new AppError(
+        `No active risk rule in the matched matrix for priority "${priority}".`,
+        400,
+        'NO_MATCHING_RULE'
+      );
+    }
+    return { matrix: selectedMatrix, rule: selectedRule };
+  }
+
+  /**
+   * Create a pre-approval request whose ONLY step is the department head.
+   *
+   * The risk is not yet assigned a severity — the HoD sets it during approval,
+   * and only then do we attach the severity-matched workflow steps. This avoids
+   * defaulting every risk to "low" and firing the low-priority chain prematurely.
+   */
+  async createRiskHodAssessmentRequest(riskId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const riskRepo = new RiskRepository(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const boardMemberRepo = new BoardMemberRepository(tenantDb);
+
+    const risk = await riskRepo.findById(riskId);
+    if (!risk) {
+      throw new AppError('Risk not found', 404, 'RISK_NOT_FOUND');
+    }
+
+    const submittingUserId =
+      submittedBy ||
+      (risk.submitted_by && typeof risk.submitted_by === 'object' ? risk.submitted_by._id : risk.submitted_by);
+
+    const departmentId = risk.department_id?._id || risk.department_id;
+    if (!departmentId) {
+      throw new AppError(
+        'Risks must be assigned to a department so the department head can assess severity.',
+        400,
+        'RISK_NO_DEPARTMENT'
+      );
+    }
+
+    const deptHead = await boardMemberRepo.findDepartmentHeadByDepartmentId(orgObjectId, departmentId);
+    if (!deptHead) {
+      throw new AppError(
+        'No head of department is configured for this department. Set one in Responsible People before submitting risks.',
+        400,
+        'NO_DEPARTMENT_HEAD'
+      );
+    }
+
+    const headUserId = deptHead.user_id?._id || deptHead.user_id;
+    const approvalSteps = [{
+      level: 1,
+      approver_user_id: headUserId || undefined,
+      approver_position_id: deptHead.position_id?._id || deptHead.position_id,
+      approver_department_id: departmentId,
+      is_department_head: true,
+      status: 'pending'
+    }];
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'risk',
+      entity_id: riskId,
+      entity_type: 'risk',
+      amount: 0,
+      // matrix_id intentionally left null — it is assigned once HoD chooses severity.
+      approval_matrix_id: null,
+      approval_type: 'sequential',
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittingUserId,
+      metadata: { risk_hod_assessment_only: true }
+    });
+
+    await riskRepo.update(riskId, {
+      approval_request_id: approvalRequest._id,
+      approval_matrix_id: null,
+      status: 'pending',
+      submitted_by: submittingUserId
+    });
+
+    logInfo('Risk HoD severity-assessment request created', {
+      riskId,
+      approvalRequestId: approvalRequest._id,
+      departmentId: String(departmentId)
+    });
+
+    // Notify ONLY the department head — no other approvers are attached yet.
+    try {
+      if (headUserId) {
+        const userRepo = new UserRepository(tenantDb);
+        const submitter = await userRepo.findById(submittingUserId);
+        const submitterName = submitter ? `${submitter.first_name} ${submitter.last_name}` : 'A user';
+        const head = await userRepo.findById(headUserId);
+        if (head?.email) {
+          await emailService.sendApprovalRequestEmail({
+            to: head.email,
+            recipientName: `${head.first_name} ${head.last_name}`.trim() || 'Department head',
+            approvalRequestId: approvalRequest._id.toString(),
+            requestType: 'risk',
+            entityTitle: `Risk: ${risk.title}`,
+            approvalLevel: 1,
+            submitterName,
+            approvalType: 'sequential'
+          });
+        }
+      }
+    } catch (emailErr) {
+      logError('Failed to send HoD risk-assessment email', {
+        error: emailErr?.message,
+        approvalRequestId: approvalRequest._id
+      });
+    }
 
     return approvalRequest;
   }
@@ -1376,6 +1547,8 @@ export class ApprovalWorkflowService {
           previousStatus: request.status,
           newStatus: updatedPolicy?.status
         });
+        // Fan out policy-ack emails to volunteers now that the policy is active.
+        notifyVolunteersForPolicy(this.orgId, tenantDb, updatedPolicy).catch(() => {});
       } else if (request.entity_type === 'donor') {
         const donorRepo = new DonorRepository(tenantDb);
         await donorRepo.update(request.entity_id, {

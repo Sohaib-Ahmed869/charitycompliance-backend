@@ -11,6 +11,7 @@ import { validate } from '../../middleware/validation.js';
 import { uploadSingle, handleUploadError } from '../../middleware/upload.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { requireMfa } from '../../middleware/mfa.js';
+import { requireAdminOrOwner } from '../../middleware/rbac.js';
 
 const router = express.Router();
 
@@ -23,6 +24,7 @@ router.get('/departments-roles', boardMemberController.getDepartmentsAndRoles);
 // Create department at runtime (from Add Responsible Person)
 router.post(
   '/departments',
+  requireAdminOrOwner,
   [
     body('name').trim().notEmpty().withMessage('Department name is required'),
     body('code').optional().trim()
@@ -34,6 +36,7 @@ router.post(
 // Create position/role at runtime (from Add Responsible Person)
 router.post(
   '/positions',
+  requireAdminOrOwner,
   [
     body('title').trim().notEmpty().withMessage('Position/role title is required'),
     body('department_id').isMongoId().withMessage('Valid department is required'),
@@ -46,6 +49,7 @@ router.post(
 // Update position (e.g. set granted_permissions for training, etc.)
 router.put(
   '/positions/:positionId',
+  requireAdminOrOwner,
   [
     param('positionId').isMongoId().withMessage('Valid position ID is required'),
     body('granted_permissions').optional().isArray().withMessage('granted_permissions must be an array')
@@ -82,6 +86,7 @@ router.get(
 // Create responsible person (stored in board_members collection)
 router.post(
   '/',
+  requireAdminOrOwner,
   [
     body('given_names')
       .trim()
@@ -173,6 +178,7 @@ router.post(
 // Update board member
 router.put(
   '/:boardMemberId',
+  requireAdminOrOwner,
   [
     param('boardMemberId')
       .isMongoId()
@@ -185,6 +191,7 @@ router.put(
 // Delete board member
 router.delete(
   '/:boardMemberId',
+  requireAdminOrOwner,
   [
     param('boardMemberId')
       .isMongoId()
@@ -198,6 +205,7 @@ router.delete(
 // ── WWCC upload / view / delete ──
 router.post(
   '/:boardMemberId/wwcc',
+  requireAdminOrOwner,
   [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
   validate,
   uploadSingle,
@@ -214,6 +222,7 @@ router.get(
 
 router.delete(
   '/:boardMemberId/wwcc',
+  requireAdminOrOwner,
   [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
   validate,
   boardMemberController.deleteWwcc
@@ -222,6 +231,7 @@ router.delete(
 // ── Police Check upload / view / delete ──
 router.post(
   '/:boardMemberId/police-check',
+  requireAdminOrOwner,
   [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
   validate,
   uploadSingle,
@@ -238,6 +248,7 @@ router.get(
 
 router.delete(
   '/:boardMemberId/police-check',
+  requireAdminOrOwner,
   [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
   validate,
   boardMemberController.deletePoliceCheck
@@ -246,6 +257,7 @@ router.delete(
 // ── Contract upload / view / delete ──
 router.post(
   '/:boardMemberId/contract',
+  requireAdminOrOwner,
   [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
   validate,
   uploadSingle,
@@ -262,6 +274,7 @@ router.get(
 
 router.delete(
   '/:boardMemberId/contract',
+  requireAdminOrOwner,
   [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
   validate,
   boardMemberController.deleteContract
@@ -270,6 +283,7 @@ router.delete(
 // ── Directors Handbook upload / view ──
 router.post(
   '/directors-handbook',
+  requireAdminOrOwner,
   uploadSingle,
   handleUploadError,
   boardMemberController.uploadDirectorsHandbook
