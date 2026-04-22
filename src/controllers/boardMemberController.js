@@ -19,6 +19,7 @@ import { getFileUrl, uploadToS3 } from '../services/s3Service.js';
 import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
+import { notifyVolunteerOfActivePolicies } from '../services/volunteerPolicyNotifier.js';
 
 const NORMALIZED_SUITABILITY_TYPES = new Set([
   'criminal_history_declaration',
@@ -290,6 +291,22 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     }
   }
 
+  // New volunteers receive a backfill policy-ack email for every active
+  // policy so their acknowledgement record is complete from day one. Fires for
+  // both invite and manual-create flows. Uses plaintext email/name from the
+  // request body because the stored board_member fields are encrypted at rest.
+  if (is_volunteer && boardMemberData.email) {
+    notifyVolunteerOfActivePolicies(orgId, tenantDb, {
+      _id: boardMember._id,
+      org_id: org._id,
+      email: boardMemberData.email,
+      given_names: boardMemberData.given_names,
+      family_name: boardMemberData.family_name,
+      is_volunteer: true,
+      status: 'active'
+    }).catch(() => {});
+  }
+
   // Update progress if this is the first board member
   const count = await boardMemberRepo.countByOrgId(org._id);
   if (count === 1) {
@@ -491,6 +508,35 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
       .filter(Boolean)
   );
 
+  // Build a map of position_id → active people holding it (for UI labels).
+  // Includes board members and staff alike, excludes volunteers and offboarded.
+  const allActiveAssignees = await boardMemberRepo.BoardMember.find({
+    org_id: org._id,
+    is_active: true,
+    position_id: { $ne: null },
+    $or: [{ status: { $exists: false } }, { status: 'active' }]
+  })
+    .select('position_id given_names family_name is_board_member is_volunteer')
+    .lean();
+
+  const masterKey = getMasterKeyHex();
+  decryptBoardMemberList(allActiveAssignees, masterKey);
+
+  const assigneesByPositionId = new Map();
+  for (const bm of allActiveAssignees) {
+    const pid = bm.position_id?.toString?.();
+    if (!pid) continue;
+    if (!assigneesByPositionId.has(pid)) assigneesByPositionId.set(pid, []);
+    assigneesByPositionId.get(pid).push({
+      id: bm._id?.toString?.(),
+      given_names: bm.given_names || '',
+      family_name: bm.family_name || '',
+      full_name: `${bm.given_names || ''} ${bm.family_name || ''}`.trim(),
+      is_board_member: bm.is_board_member === true,
+      is_volunteer: bm.is_volunteer === true
+    });
+  }
+
   // Group positions by department
   const departmentsWithRoles = departments.map(dept => {
     const deptPositions = positions.filter(
@@ -513,6 +559,7 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
             };
           }
         });
+        const assignees = assigneesByPositionId.get(pos._id.toString()) || [];
         return {
           id: pos._id.toString(),
           name: pos.title,
@@ -521,7 +568,11 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
           // Derived flag: true when at least one active board member holds this position
           is_board_level: boardPositionIds.has(pos._id.toString()),
           granted_permissions: pos.granted_permissions || [],
-          modulePermissions
+          modulePermissions,
+          // Active people holding this position; empty = unassigned
+          assignees,
+          assignee_count: assignees.length,
+          primary_assignee_name: assignees.length > 0 ? assignees[0].full_name || null : null
         };
       })
     };

@@ -17,45 +17,7 @@ import { getMasterKeyHex } from '../config/encryption.js';
 import archiver from 'archiver';
 import path from 'path';
 import fs from 'fs';
-import emailService from '../services/emailService.js';
-import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
-
-const FRONTEND_URL_POLICY = process.env.FRONTEND_URL || 'http://localhost:5173';
-
-async function notifyVolunteersForPolicy(orgId, tenantDb, policyLike) {
-  try {
-    // Only email volunteers once the policy has been approved and is active.
-    if (!policyLike || policyLike.status !== 'active') return;
-
-    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
-    const boardMemberRepo = new BoardMemberRepository(tenantDb);
-    const volunteers = await boardMemberRepo.findByOrgId(policyLike.org_id, false);
-    const recipients = (volunteers || []).filter(
-      (bm) => bm?.is_volunteer === true && bm?.email && (bm?.status || 'active') === 'active'
-    );
-    await Promise.all(
-      recipients.map(async (bm) => {
-        const tokenDoc = await createVolunteerActionToken({
-          orgId,
-          boardMemberId: bm._id,
-          actionType: 'policy_ack',
-          email: bm.email,
-          metadata: { policy_id: String(policyLike._id) },
-        });
-        const acknowledgeUrl = `${FRONTEND_URL_POLICY}/public/volunteer/policy_ack/${tokenDoc.token}`;
-        return emailService.sendVolunteerPolicyNotification({
-          to: bm.email,
-          recipientName: `${bm.given_names || ''} ${bm.family_name || ''}`.trim() || 'Volunteer',
-          policyTitle: policyLike.title || 'Policy',
-          policyId: String(policyLike._id),
-          acknowledgeUrl,
-        });
-      })
-    );
-  } catch {
-    // non-blocking
-  }
-}
+import { notifyVolunteersForPolicy } from '../services/volunteerPolicyNotifier.js';
 
 export const getPolicies = asyncHandler(async (req, res) => {
   const orgId = req.orgId;

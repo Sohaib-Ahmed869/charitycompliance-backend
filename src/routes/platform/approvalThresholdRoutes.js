@@ -6,6 +6,7 @@ import express from 'express';
 import { body } from 'express-validator';
 import { getThresholds, updateThresholds, getTierForAmount } from '../../controllers/approvalThresholdController.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireAdminOrOwner } from '../../middleware/rbac.js';
 
 const router = express.Router();
 
@@ -17,6 +18,7 @@ router.get('/', getThresholds);
 
 // Update thresholds
 router.put('/',
+  requireAdminOrOwner,
   [
     body('currency').optional().isString().isLength({ min: 3, max: 3 }),
     body('tiers').isArray({ min: 4, max: 4 }),
