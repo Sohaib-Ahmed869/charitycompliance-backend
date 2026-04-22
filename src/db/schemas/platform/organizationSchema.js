@@ -191,6 +191,41 @@ const organizationSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     default: {}
   },
+  // ACNC classification — used by the Annual Information Statement (AIS) PDF.
+  acnc_classification: {
+    main_activity: { type: String, trim: true, default: '' },
+    entity_subtypes: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: (arr) => Array.isArray(arr) && arr.every((v) => [
+          'pbi', 'hpc', 'religious', 'public_education',
+          'animal_welfare', 'culture', 'environment', 'charity_fund', 'other'
+        ].includes(v)),
+        message: 'Invalid entity subtype value'
+      }
+    },
+    charitable_purposes: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: (arr) => Array.isArray(arr) && arr.every((v) => [
+          'health', 'education', 'social_welfare', 'religion', 'culture',
+          'reconciliation', 'human_rights', 'security', 'animal_welfare',
+          'environment', 'other_beneficial', 'law_change'
+        ].includes(v)),
+        message: 'Invalid charitable purpose value'
+      }
+    },
+    operating_states: {
+      type: [String],
+      default: [],
+      validate: {
+        validator: (arr) => Array.isArray(arr) && arr.every((v) => ['NSW', 'VIC', 'QLD', 'WA', 'SA', 'TAS', 'ACT', 'NT'].includes(v)),
+        message: 'Invalid Australian state/territory code'
+      }
+    }
+  },
   status: {
     type: String,
     enum: ['pending_setup', 'active', 'suspended', 'inactive'],

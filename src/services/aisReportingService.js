@@ -87,17 +87,24 @@ export async function buildAisPrefill({ tenantDb, orgId, fyEnd }) {
     description: safeStr(p?.description),
     website_url: safeStr(p?.website_url),
     beneficiaries: safeStr(p?.beneficiaries),
-    locations: Array.isArray(p?.locations) ? p.locations.filter(Boolean) : []
+    locations: Array.isArray(p?.locations) ? p.locations.filter(Boolean) : [],
+    start_date: toIsoDate(p?.start_date),
+    end_date: toIsoDate(p?.end_date),
+    status: safeStr(p?.status)
   }));
 
   const responsible_people = responsiblePeoplePlain
     .filter((bm) => bm?.is_board_member === true)
     .map((bm) => ({
-    id: String(bm?._id || ''),
-    name: boardMemberName(bm),
-    position: safeStr(bm?.custom_position_title || bm?.position || ''),
-    start_date: toIsoDate(bm?.appointment_date),
-    end_date: toIsoDate(bm?.term_end_date)
+      id: String(bm?._id || ''),
+      name: boardMemberName(bm),
+      position: safeStr(bm?.custom_position_title || bm?.position || ''),
+      start_date: toIsoDate(bm?.appointment_date),
+      end_date: toIsoDate(bm?.term_end_date),
+      email: safeStr(bm?.email),
+      phone: safeStr(bm?.phone),
+      director_id: safeStr(bm?.director_id?.number || bm?.director_id || ''),
+      is_head_of_department: !!bm?.is_head_of_department
     }));
 
   // Donations revenue
@@ -195,16 +202,50 @@ export async function buildAisPrefill({ tenantDb, orgId, fyEnd }) {
   const revenue = donationsTotal + donationBoxesTotal;
   const net = revenue - expensesTotal;
 
+  // ── ACNC classification: prefer typed top-level; fall back to legacy metadata.acnc ──
+  const acncRaw = org?.acnc_classification || org?.metadata?.acnc || {};
+  const acnc = {
+    main_activity: safeStr(acncRaw?.main_activity),
+    entity_subtypes: Array.isArray(acncRaw?.entity_subtypes) ? acncRaw.entity_subtypes.filter(Boolean) : [],
+    charitable_purposes: Array.isArray(acncRaw?.charitable_purposes) ? acncRaw.charitable_purposes.filter(Boolean) : [],
+    operating_states: Array.isArray(acncRaw?.operating_states) ? acncRaw.operating_states.filter(Boolean) : []
+  };
+
+  const opLocations = Array.isArray(org?.settings?.operating_locations)
+    ? org.settings.operating_locations.filter(Boolean)
+    : (Array.isArray(org?.operating_locations) ? org.operating_locations.filter(Boolean) : []);
+
   return {
     fy: { end_year: win.fyEnd, start_date: toIsoDate(win.start), end_date: toIsoDate(win.end) },
     charity: {
       name: safeStr(org?.name),
+      trading_name: safeStr(org?.trading_name),
+      former_names: Array.isArray(org?.former_names) ? org.former_names.filter(Boolean) : [],
       abn: safeStr(org?.abn),
+      acn: safeStr(org?.acn),
+      acnc_registration_number: safeStr(org?.acnc_registration_number),
+      registration_number: safeStr(org?.registration_number),
       website: safeStr(org?.website),
       email: safeStr(org?.email),
       address: buildAddress(org),
-      logo_url: safeStr(org?.logo_url)
+      logo_url: safeStr(org?.logo_url),
+      establishment_date: toIsoDate(org?.establishment_date),
+      size_band: safeStr(org?.metadata?.size),
+      employee_count: Number(org?.employee_count || 0),
+      works_with_atsi: org?.metadata?.works_with_aboriginal_torres_strait_islander === true,
+      incorporation: {
+        org_type: safeStr(org?.org_type),
+        state: safeStr(org?.incorporation_state),
+        number: safeStr(org?.incorporation_number)
+      },
+      dgr: {
+        status: safeStr(org?.dgr_status),
+        item_number: safeStr(org?.dgr_item_number),
+        endorsement_date: toIsoDate(org?.dgr_endorsement_date)
+      },
+      operating_locations: opLocations
     },
+    acnc,
     programs,
     responsible_people,
     financials: {
