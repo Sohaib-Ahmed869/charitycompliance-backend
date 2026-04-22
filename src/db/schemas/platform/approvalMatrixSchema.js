@@ -34,6 +34,11 @@ const approvalRuleSchema = new mongoose.Schema({
       'project',
       'emergency',
       'sweep_funds',
+      'bas_lodgement',
+      'financial_reporting',
+      'project_delivery',
+      'project_delivery_changes',
+      'refunds',
       // legacy
       'policy_approval',
       'document_approval',
@@ -115,6 +120,11 @@ const approvalMatrixSchema = new mongoose.Schema({
       'social_media_campaign_workflow',
       'emergency',
       'sweep_funds_approval',
+      'bas_lodgement_approval',
+      'financial_reporting_approval',
+      'project_delivery_approval',
+      'project_delivery_changes_approval',
+      'refunds_approval',
       'other'
     ],
     description: 'Categorizes workflow by module/purpose for validation'
@@ -222,7 +232,12 @@ const getCategoryDisplayName = (category) => {
     social_media_campaign_workflow: 'Social Media Campaigns',
     hr_approval: 'HR Approval',
     sweep_funds_approval: 'Sweep Funds',
-    emergency: 'Emergency Response'
+    emergency: 'Emergency Response',
+    bas_lodgement_approval: 'BAS Lodgment',
+    financial_reporting_approval: 'Fiscal Reports',
+    project_delivery_approval: 'Project Delivery',
+    project_delivery_changes_approval: 'Project Delivery Changes',
+    refunds_approval: 'Refunds'
   };
   return categoryNames[category] || category;
 };

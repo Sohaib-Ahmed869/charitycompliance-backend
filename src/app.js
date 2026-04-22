@@ -14,6 +14,14 @@ import { logDebug, logInfo, logWarn } from './utils/logger.js';
 
 dotenv.config();
 
+const disabledModules = new Set(
+  String(process.env.DISABLED_MODULES || '')
+    .split(',')
+    .map((v) => v.trim().toLowerCase())
+    .filter(Boolean)
+);
+const isModuleEnabled = (name) => !disabledModules.has(String(name || '').toLowerCase());
+
 const app = express();
 
 app.set('trust proxy', 1)
