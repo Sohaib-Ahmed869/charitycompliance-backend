@@ -58,7 +58,11 @@ export const getProfile = asyncHandler(async (req, res) => {
       firstName,
       lastName,
       position,
-      profile_picture_url
+      profile_picture_url,
+      // Expose sign-in signals so the profile page can re-hydrate security UI
+      // after the user logs out and back in (login response may not carry them).
+      mfa_enabled: user?.mfa_enabled === true,
+      email: user?.email || null
     }
   });
 });

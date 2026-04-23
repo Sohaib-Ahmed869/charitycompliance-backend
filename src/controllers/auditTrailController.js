@@ -749,28 +749,50 @@ async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
     const personName = [person.given_names, person.family_name].filter(Boolean).join(' ').trim() || 'Responsible person';
     const personEmail = person.email || null;
     const personPosition = person.custom_position_title || person.position || null;
+    const personDepartment = person.department || null;
+    const isVolunteer = person.is_volunteer === true;
+    const isBoardMember = person.is_board_member === true;
+    const roleLabel = isVolunteer ? 'Volunteer' : (isBoardMember ? 'Board member' : 'Staff');
+    const detailsBase = {
+      person_name: personName,
+      person_email: personEmail,
+      position: personPosition,
+      department: personDepartment,
+      status: person.status || null,
+      is_volunteer: isVolunteer,
+      is_board_member: isBoardMember,
+      role_label: roleLabel
+    };
+    const addedAction = isVolunteer
+      ? 'Volunteer added'
+      : isBoardMember
+        ? 'Responsible person added'
+        : 'Team member added';
     events.push(normalizeEvent({
       id: `person-added-${person._id}`,
       timestamp: person.createdAt,
       actor,
-      action: 'Responsible person added',
+      action: addedAction,
       module: 'board_member',
       request_type: 'board_member',
       request_id: person._id?.toString(),
-      details: { person_name: personName, person_email: personEmail, position: personPosition, status: person.status || null },
+      details: detailsBase,
       source: 'board_member'
     }));
     const removed = person.status === 'removed' || person.status === 'resigned' || person.is_active === false;
     if (removed && person.updatedAt) {
+      const removedAction = person.status === 'resigned'
+        ? (isVolunteer ? 'Volunteer resigned' : 'Responsible person resigned')
+        : (isVolunteer ? 'Volunteer offboarded' : 'Responsible person offboarded');
       events.push(normalizeEvent({
         id: `person-removed-${person._id}`,
         timestamp: person.updatedAt,
         actor,
-        action: 'Responsible person removed',
+        action: removedAction,
         module: 'board_member',
         request_type: 'board_member',
         request_id: person._id?.toString(),
-        details: { person_name: personName, person_email: personEmail, position: personPosition, status: person.status || null },
+        details: detailsBase,
         source: 'board_member'
       }));
     }

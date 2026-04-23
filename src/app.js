@@ -7,7 +7,6 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import rateLimit from 'express-rate-limit';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 import { connectRouterDB } from './config/database.js';
 import { logDebug, logInfo, logWarn } from './utils/logger.js';
@@ -87,25 +86,10 @@ const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '50mb';
 app.use(express.json({ limit: requestBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
 
-// Rate Limiting
-// Production stays tight (100 req / 15 min). Development gets a much higher
-// ceiling because the dashboard + sidebar widgets can fire ~20 parallel
-// queries on page load and burn through a tight budget in seconds — causing
-// misleading 429s during normal dev work. Override either value via env.
-const isDev = process.env.NODE_ENV === 'development';
-const limiter = rateLimit({
-  windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (isDev ? 5000 : 100),
-  message: {
-    success: false,
-    error: 'Too many requests from this IP, please try again later.'
-  },
-  standardHeaders: true,
-  legacyHeaders: false,
-  // OPTIONS preflight must not be throttled or the browser often shows a misleading CORS error.
-  skip: (req) => req.method === 'OPTIONS'
-});
-app.use('/api/', limiter);
+// Rate limiting intentionally disabled — the dashboard fans out ~20 parallel
+// queries per load and a shared tenant hits global IP limits immediately,
+// producing spurious 429s. If abuse protection is needed later, re-introduce
+// a per-tenant (not per-IP) limiter rather than a global one.
 
 // Request Logging (Development only)
 if (process.env.NODE_ENV === 'development') {
