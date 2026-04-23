@@ -152,6 +152,75 @@ export const listApprovalRequests = asyncHandler(async (req, res) => {
     return doc;
   });
 
+  // Enrich each approval with the title of the related entity so the list UI
+  // can show something more descriptive than "Risk Assessment" / "Expense".
+  // Batched by entity_type to keep this at O(types) queries, not O(rows).
+  try {
+    const byType = new Map(); // entity_type -> Set(entity_id)
+    for (const r of requests) {
+      const id = r.entity_id?._id?.toString?.() || r.entity_id?.toString?.();
+      const t = String(r.entity_type || '').toLowerCase();
+      if (!id || !t) continue;
+      if (!byType.has(t)) byType.set(t, new Set());
+      byType.get(t).add(id);
+    }
+
+    // Map each entity_type → { collection, title fields to try }
+    const typeResolvers = {
+      risk: { collection: 'risks', fields: ['title'] },
+      policy: { collection: 'policies', fields: ['title'] },
+      expense: { collection: 'expenses', fields: ['expense_name', 'description', 'title'] },
+      project: { collection: 'projects_register', fields: ['project_name', 'title', 'name'] },
+      funding_agreement: { collection: 'funding_agreements', fields: ['agreement_title', 'title'] },
+      donor: { collection: 'donors', fields: ['name', 'organization_name', 'display_name'] },
+      donation: { collection: 'donations', fields: ['title', 'campaign_name', 'description'] },
+      donation_agreement: { collection: 'donation_agreements', fields: ['title', 'agreement_title'] },
+      donation_milestone: { collection: 'donation_milestones', fields: ['title', 'name'] },
+      grant: { collection: 'grants', fields: ['title', 'grant_name', 'name'] },
+      complaint: { collection: 'complaints', fields: ['complaint_title', 'title', 'subject'] },
+      coi: { collection: 'coi_declarations', fields: ['title', 'nature', 'subject'] },
+      partner_vetting: { collection: 'partner_vettings', fields: ['partner_name', 'name', 'organization_name'] },
+      social_media_campaign: { collection: 'social_media_campaigns', fields: ['campaign_name', 'title', 'name'] },
+      sweep_funds: { collection: 'sweep_funds_requests', fields: ['title', 'reference', 'name'] },
+      donor_refund: { collection: 'donor_refunds', fields: ['title', 'reference'] }
+    };
+
+    const titleById = new Map(); // `${type}:${id}` -> title
+    await Promise.all(
+      Array.from(byType.entries()).map(async ([type, idSet]) => {
+        const resolver = typeResolvers[type];
+        if (!resolver) return;
+        try {
+          const coll = tenantDb.collection(resolver.collection);
+          const ids = Array.from(idSet).map((s) => {
+            try { return new mongoose.Types.ObjectId(s); } catch { return null; }
+          }).filter(Boolean);
+          if (ids.length === 0) return;
+          const projection = { _id: 1 };
+          resolver.fields.forEach((f) => { projection[f] = 1; });
+          const docs = await coll.find({ _id: { $in: ids } }, { projection }).toArray();
+          for (const d of docs) {
+            const title = resolver.fields.map((f) => d[f]).find((v) => typeof v === 'string' && v.trim());
+            if (title) titleById.set(`${type}:${d._id.toString()}`, String(title).trim());
+          }
+        } catch (e) {
+          // Resolver may fail if a tenant doesn't have that collection; skip silently.
+        }
+      })
+    );
+
+    requests = requests.map((r) => {
+      const id = r.entity_id?._id?.toString?.() || r.entity_id?.toString?.();
+      const t = String(r.entity_type || '').toLowerCase();
+      if (!id || !t) return r;
+      const title = titleById.get(`${t}:${id}`);
+      if (title) return { ...r, entity_title: title };
+      return r;
+    });
+  } catch (e) {
+    // Enrichment is best-effort — never fail the list request because of it.
+  }
+
   res.json({
     success: true,
     data: requests
