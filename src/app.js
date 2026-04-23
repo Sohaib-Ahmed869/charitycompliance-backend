@@ -88,9 +88,14 @@ app.use(express.json({ limit: requestBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
 
 // Rate Limiting
+// Production stays tight (100 req / 15 min). Development gets a much higher
+// ceiling because the dashboard + sidebar widgets can fire ~20 parallel
+// queries on page load and burn through a tight budget in seconds — causing
+// misleading 429s during normal dev work. Override either value via env.
+const isDev = process.env.NODE_ENV === 'development';
 const limiter = rateLimit({
   windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
+  max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (isDev ? 5000 : 100),
   message: {
     success: false,
     error: 'Too many requests from this IP, please try again later.'
