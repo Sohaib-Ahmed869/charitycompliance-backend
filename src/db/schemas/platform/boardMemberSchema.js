@@ -219,6 +219,18 @@ const boardMemberSchema = new mongoose.Schema({
     type: String,
     trim: true,
     default: ''
+  },
+
+  /**
+   * Public action links for volunteers (complaint / risk / COI).
+   * Populated by regenerateVolunteerActionLinks after tokens are created.
+   * Without this field in the schema, Mongoose strict mode would strip it on $set.
+   */
+  volunteer_action_links: {
+    complaint: { type: String, default: null },
+    risk:      { type: String, default: null },
+    coi:       { type: String, default: null },
+    generated_at: { type: Date, default: null }
   }
 }, {
   timestamps: true,
