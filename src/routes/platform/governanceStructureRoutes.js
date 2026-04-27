@@ -29,14 +29,14 @@ router.put(
   requireAdminOrOwner,
   governanceStructureController.uploadFiles,
   [
+    // COI fields are optional — many small charities don't have a formal COI
+    // policy and shouldn't be blocked from finishing setup.
     body('conflict_of_interest_clause')
-      .trim()
-      .notEmpty()
-      .withMessage('Conflict of interest clause is required'),
+      .optional({ checkFalsy: true })
+      .trim(),
     body('conflict_management_explanation')
-      .trim()
-      .notEmpty()
-      .withMessage('Conflict management explanation is required'),
+      .optional({ checkFalsy: true })
+      .trim(),
     body('works_with_vulnerable_people')
       .isIn(['yes', 'no'])
       .withMessage('Invalid value for works with vulnerable people'),

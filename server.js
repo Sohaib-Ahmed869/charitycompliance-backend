@@ -4,22 +4,30 @@
  * Starts the Express server and handles graceful shutdown.
  */
 
-import app, { initializeApp } from './src/app.js';
+import dns from 'node:dns';
 import dotenv from 'dotenv';
-import { closeRouterDB } from './src/config/database.js';
-import { closeAllConnections } from './src/db/connectionManager.js';
-import emailService from './src/services/emailService.js';
-import { logError, logInfo, logWarn } from './src/utils/logger.js';
-import { startRegistrationLicenseReminderScheduler } from './src/services/registrationLicenseReminderService.js';
-import { startMeetingReminderScheduler } from './src/services/meetingReminderService.js';
-import { runRegistrationLicenseRemindersOnce } from './src/services/registrationLicenseReminderService.js';
-import { runMeetingRemindersOnce } from './src/services/meetingReminderService.js';
-import { startFinanceCloseScheduler } from './src/services/checklistSchedulerService.js';
-import { startFiscalReportReminderScheduler, runFiscalReportRemindersOnce } from './src/services/fiscalReportReminderService.js';
-import { startSuitabilityRenewalScheduler, runSuitabilityRenewalsOnce } from './src/services/suitabilityReminderService.js';
-import { startSubscriptionMaintenanceReminderScheduler, runSubscriptionMaintenanceRemindersOnce } from './src/services/subscriptionMaintenanceReminderService.js';
 
 dotenv.config();
+
+// Ensure Node resolves MongoDB SRV records through a known public resolver
+// before any app modules import the database layer.
+dns.setServers(['1.1.1.1', '8.8.8.8']);
+
+const [{ default: app, initializeApp }, { closeRouterDB }, { closeAllConnections }, { default: emailService }, { logError, logInfo, logWarn }, { startRegistrationLicenseReminderScheduler }, { startMeetingReminderScheduler }, { runRegistrationLicenseRemindersOnce }, { runMeetingRemindersOnce }, { startFinanceCloseScheduler }, { startFiscalReportReminderScheduler, runFiscalReportRemindersOnce }, { startSuitabilityRenewalScheduler, runSuitabilityRenewalsOnce }, { startSubscriptionMaintenanceReminderScheduler, runSubscriptionMaintenanceRemindersOnce }] = await Promise.all([
+  import('./src/app.js'),
+  import('./src/config/database.js'),
+  import('./src/db/connectionManager.js'),
+  import('./src/services/emailService.js'),
+  import('./src/utils/logger.js'),
+  import('./src/services/registrationLicenseReminderService.js'),
+  import('./src/services/meetingReminderService.js'),
+  import('./src/services/registrationLicenseReminderService.js'),
+  import('./src/services/meetingReminderService.js'),
+  import('./src/services/checklistSchedulerService.js'),
+  import('./src/services/fiscalReportReminderService.js'),
+  import('./src/services/suitabilityReminderService.js'),
+  import('./src/services/subscriptionMaintenanceReminderService.js')
+]);
 
 const PORT = process.env.PORT || 5000;
 const isDevelopment = String(process.env.NODE_ENV || '').toLowerCase() === 'development';

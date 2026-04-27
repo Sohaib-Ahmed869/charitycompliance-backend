@@ -142,9 +142,11 @@ async function ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, 
     const lastApproverId = lastStep?.approver_user_id?._id || lastStep?.approver_user_id || null;
     const userIdStr = String(userId);
 
-    // For major complaints, the selected board sign‑off user is allowed to complete resolution
-    const boardSignoffUserId = complaint?.board_signoff_user_id
-      ? String(complaint.board_signoff_user_id)
+    // For major complaints, the selected board sign‑off user is allowed to complete resolution.
+    // `board_signoff_user_id` may be a raw ObjectId OR a populated User document.
+    const signoffRef = complaint?.board_signoff_user_id;
+    const boardSignoffUserId = signoffRef
+      ? String(signoffRef._id || signoffRef.id || signoffRef)
       : null;
 
     const isFinalWorkflowApprover = !!lastApproverId && String(lastApproverId) === userIdStr;
@@ -161,9 +163,14 @@ async function ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, 
   }
   
   if (stage === 'board_signoff') {
-    // ONLY the selected board member can sign off - even escalations do NOT bypass this
-    const signoffUserId = complaint?.board_signoff_user_id ? String(complaint.board_signoff_user_id) : null;
-    if (!signoffUserId || String(signoffUserId) !== String(userId)) {
+    // ONLY the selected board member can sign off - even escalations do NOT bypass this.
+    // `board_signoff_user_id` may be a raw ObjectId OR a populated User document
+    // (findById uses .populate); extract the id for either shape.
+    const signoffRef = complaint?.board_signoff_user_id;
+    const signoffUserId = signoffRef
+      ? String(signoffRef._id || signoffRef.id || signoffRef)
+      : null;
+    if (!signoffUserId || signoffUserId !== String(userId)) {
       throw new AppError('Only the selected board member can sign off', 403, 'FORBIDDEN');
     }
     return;
@@ -709,28 +716,32 @@ export const adminApproveComplaint = asyncHandler(async (req, res) => {
       const departmentSchema = (await import('../db/schemas/platform/departmentSchema.js')).default;
       tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
       const Department = tenantDb.model('Department');
-      
+
       const dept = await Department.findById(categoryId).select('name').lean();
       const deptName = dept?.name || '';
-      
+
       if (deptName) {
         const deptHeadIds = await getDeptHeadUserIds(tenantDb, org._id, deptName);
-        
+
         if (deptHeadIds && deptHeadIds.length > 0) {
           const notifRepo = new NotificationRepository(tenantDb);
           const complaintTitle = complaint.complaint_title || 'Untitled Complaint';
-          
-          const notifications = deptHeadIds.map(headId => ({
+
+          // schema requires `title`; `subject` (used previously) caused a silent
+          // ValidationError that the catch-all swallowed, so notifications
+          // never landed. `link` lets the in-app dropdown deep-link the recipient.
+          const notifications = deptHeadIds.map((headId) => ({
             user_id: headId,
             type: 'complaint_assigned',
-            subject: 'Complaint Assigned to Your Department',
+            title: 'Complaint assigned to your department',
             message: `A new complaint "${complaintTitle}" has been assigned to ${deptName} for review.`,
+            link: `/complaints/${complaintId}`,
             related_entity_id: complaintId,
             related_entity_type: 'complaint',
             read: false,
             created_at: new Date(),
           }));
-          
+
           await notifRepo.createMany(notifications);
         }
       }
@@ -1033,28 +1044,32 @@ export const workflowTriageComplete = asyncHandler(async (req, res) => {
       const departmentSchema = (await import('../db/schemas/platform/departmentSchema.js')).default;
       tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
       const Department = tenantDb.model('Department');
-      
+
       const dept = await Department.findById(categoryId).select('name').lean();
       const deptName = dept?.name || '';
-      
+
       if (deptName) {
         const deptHeadIds = await getDeptHeadUserIds(tenantDb, org._id, deptName);
-        
+
         if (deptHeadIds && deptHeadIds.length > 0) {
           const notifRepo = new NotificationRepository(tenantDb);
           const complaintTitle = complaint.complaint_title || 'Untitled Complaint';
-          
-          const notifications = deptHeadIds.map(headId => ({
+
+          // schema requires `title`; `subject` (used previously) caused a silent
+          // ValidationError that the catch-all swallowed, so notifications
+          // never landed. `link` lets the in-app dropdown deep-link the recipient.
+          const notifications = deptHeadIds.map((headId) => ({
             user_id: headId,
             type: 'complaint_assigned',
-            subject: 'Complaint Assigned to Your Department',
+            title: 'Complaint assigned to your department',
             message: `A new complaint "${complaintTitle}" has been assigned to ${deptName} for review.`,
+            link: `/complaints/${complaintId}`,
             related_entity_id: complaintId,
             related_entity_type: 'complaint',
             read: false,
             created_at: new Date(),
           }));
-          
+
           await notifRepo.createMany(notifications);
         }
       }
@@ -1328,7 +1343,23 @@ export const workflowBoardSignoff = asyncHandler(async (req, res) => {
 
   const complaint = await complaintRepo.findById(complaintId);
   if (!complaint) throw new AppError('Complaint not found', 404, 'NOT_FOUND');
-  if ((complaint.workflow_stage || 'admin_triage') !== 'board_signoff') {
+
+  // Tolerant stage check: accept board_signoff (the normal case) AND
+  // workflow_resolution when all three resolution steps are complete and the
+  // complaint is major with a board signoff user assigned. Older complaints
+  // (before linkOrCreateTraining started auto-advancing) can otherwise get
+  // stuck — this lets the assigned board member finish the flow regardless.
+  const stageNow = complaint.workflow_stage || 'admin_triage';
+  const resolutionFullyComplete =
+    !!complaint.resolution_details?.root_cause &&
+    (!!complaint.linked_risk_id || !!complaint.resolution_details?.risk_linked_at) &&
+    !!complaint.linked_training_id;
+  const canAcceptFromResolution =
+    stageNow === 'workflow_resolution' &&
+    !!complaint.is_major &&
+    !!complaint.board_signoff_user_id &&
+    resolutionFullyComplete;
+  if (stageNow !== 'board_signoff' && !canAcceptFromResolution) {
     throw new AppError('Complaint is not in board sign-off stage', 400, 'INVALID_STAGE');
   }
 
@@ -1337,7 +1368,20 @@ export const workflowBoardSignoff = asyncHandler(async (req, res) => {
     throw new AppError('Complaint is already signed off', 400, 'ALREADY_SIGNED_OFF');
   }
 
-  await ensureCanActOnComplaintStage({ tenantDb, org, complaint, userId, userRole, isOrgOwner });
+  // For the recovery path, the FE may show the sign-off action while the
+  // backend stage is still workflow_resolution. ensureCanActOnComplaintStage
+  // gates strictly by stage, so synthesise a temporary view of the complaint
+  // for the permission check.
+  await ensureCanActOnComplaintStage({
+    tenantDb,
+    org,
+    complaint: canAcceptFromResolution
+      ? { ...(typeof complaint.toObject === 'function' ? complaint.toObject() : complaint), workflow_stage: 'board_signoff' }
+      : complaint,
+    userId,
+    userRole,
+    isOrgOwner
+  });
 
   if (!complaint.resolution_details?.root_cause) throw new AppError('Resolution details not completed', 400, 'INCOMPLETE_RESOLUTION');
   if (!complaint.linked_risk_id && !complaint.resolution_details?.risk_linked_at) throw new AppError('Risk step not completed', 400, 'INCOMPLETE_RESOLUTION');
@@ -1726,18 +1770,70 @@ export const linkOrCreateTraining = asyncHandler(async (req, res) => {
     notes: training_data?.notes || req.body.notes || '',
   };
 
-  const updatedComplaint = await complaintRepo.update(complaintId, {
+  // Step 3 of the resolution flow auto-advances the workflow:
+  //   - major + has active board members → board_signoff (board e-signs to close)
+  //   - otherwise → resolved (current user is the implicit final approver)
+  // Mirrors completeResolutionStep so callers using either endpoint converge on
+  // the same end-state. Without this, the modal completed all 3 steps but the
+  // stage stayed at workflow_resolution and "Add resolution details" kept showing.
+  let nextStage = null;
+  let didResolve = false;
+  if (complaint.is_major) {
+    const boardMemberSchema = (await import('../db/schemas/platform/boardMemberSchema.js')).default;
+    tenantDb.models.BoardMember || tenantDb.model('BoardMember', boardMemberSchema);
+    const BoardMember = tenantDb.model('BoardMember');
+    const hasBoardMembers = (await BoardMember.countDocuments({
+      org_id: org._id,
+      is_active: true,
+      is_board_member: true,
+      user_id: { $ne: null },
+    })) > 0;
+
+    if (hasBoardMembers) {
+      if (!complaint.board_signoff_user_id) {
+        throw new AppError('Board member must be selected for sign-off', 400, 'MISSING_BOARD_SIGNOFF');
+      }
+      nextStage = 'board_signoff';
+    } else {
+      // Major was flagged but no board members are configured — fall through to resolved.
+      nextStage = 'resolved';
+      didResolve = true;
+    }
+  } else {
+    nextStage = 'resolved';
+    didResolve = true;
+  }
+
+  const now = new Date();
+  const setOps = {
     linked_training_id: trainingId,
     training_attachment: trainingAttachmentData,
-    'resolution_details.training_linked_at': new Date(),
-  });
+    'resolution_details.training_linked_at': now,
+    workflow_stage: nextStage,
+  };
+  if (didResolve) {
+    setOps.status = 'resolved';
+    setOps['resolution_details.resolved_at'] = now;
+  }
+
+  const updatedComplaint = await complaintRepo.update(complaintId, setOps);
   await complaintRepo.updateWithOps(complaintId, {
     $push: {
       trail: {
-        at: new Date(),
-        actor_user_id: userId || null,
-        action: 'training_linked',
-        details: { action, linked_training_id: trainingId || null },
+        $each: [
+          {
+            at: now,
+            actor_user_id: userId || null,
+            action: 'training_linked',
+            details: { action, linked_training_id: trainingId || null },
+          },
+          ...(didResolve ? [{
+            at: now,
+            actor_user_id: userId || null,
+            action: 'resolved',
+            details: { auto_resolved_after: 'training_linked' },
+          }] : []),
+        ],
       },
     },
   });
@@ -1745,7 +1841,10 @@ export const linkOrCreateTraining = asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: updatedComplaint,
-    message: 'Training linked successfully. Ready to mark as resolved.',
+    workflow: { next_stage: nextStage, resolved: didResolve },
+    message: didResolve
+      ? 'Training linked. Complaint marked as resolved.'
+      : 'Training linked. Awaiting board sign-off.',
   });
 });
 

@@ -221,6 +221,27 @@ const boardMemberSchema = new mongoose.Schema({
     default: ''
   },
 
+  /** Suitability checks and uploaded evidence for responsible persons */
+  suitability_check: {
+    status: { type: String, enum: ['pending', 'verified', 'expired'], default: 'pending' },
+    next_review_date: { type: Date, default: null },
+    items: {
+      type: [{
+        type: { type: String, trim: true },
+        completed: { type: Boolean, default: false },
+        completed_at: { type: Date, default: null },
+        expires_at: { type: Date, default: null },
+        comments: { type: String, default: '' },
+        document_key: { type: String, default: null },
+        document_name: { type: String, default: null },
+        document_type: { type: String, default: null },
+        document_url: { type: String, default: null },
+        uploaded_at: { type: Date, default: null }
+      }],
+      default: []
+    }
+  },
+
   /**
    * Public action links for volunteers (complaint / risk / COI).
    * Populated by regenerateVolunteerActionLinks after tokens are created.

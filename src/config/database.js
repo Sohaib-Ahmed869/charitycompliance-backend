@@ -11,15 +11,23 @@
  */
 
 import mongoose from 'mongoose';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { logError, logInfo, logWarn } from '../utils/logger.js';
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ENV_PATH = path.resolve(__dirname, '../../.env');
 
-const ROUTER_DB_URI = process.env.ROUTER_DB_URI;
+dotenv.config({ path: ENV_PATH });
 
-if (!ROUTER_DB_URI) {
-  throw new Error('ROUTER_DB_URI environment variable is required');
+function getRouterDbUri() {
+  const uri = String(process.env.ROUTER_DB_URI || '').trim();
+  if (!uri) {
+    throw new Error(`ROUTER_DB_URI environment variable is required (checked ${ENV_PATH})`);
+  }
+  return uri;
 }
 
 // Create connection to Router DB
@@ -34,18 +42,20 @@ export const connectRouterDB = async () => {
     return routerConnection;
   }
 
+  const routerDbUri = getRouterDbUri();
+
   try {
-    routerConnection = await mongoose.createConnection(ROUTER_DB_URI, {
+    routerConnection = await mongoose.createConnection(routerDbUri, {
       maxPoolSize: parseInt(process.env.MAX_POOL_SIZE) || 10,
       minPoolSize: parseInt(process.env.MIN_POOL_SIZE) || 0,
       serverSelectionTimeoutMS: 5000,
       socketTimeoutMS: 45000,
     }).asPromise();
 
-    logInfo('Router Database connected', { uri: ROUTER_DB_URI.replace(/\/\/.*@/, '//***@') });
+    logInfo('Router Database connected', { uri: routerDbUri.replace(/\/\/.*@/, '//***@') });
     
     routerConnection.on('error', (err) => {
-      logError('Router Database connection error', err, { uri: ROUTER_DB_URI.replace(/\/\/.*@/, '//***@') });
+      logError('Router Database connection error', err, { uri: routerDbUri.replace(/\/\/.*@/, '//***@') });
     });
 
     routerConnection.on('disconnected', () => {
@@ -54,7 +64,7 @@ export const connectRouterDB = async () => {
 
     return routerConnection;
   } catch (error) {
-    logError('Failed to connect to Router Database', error, { uri: ROUTER_DB_URI.replace(/\/\/.*@/, '//***@') });
+    logError('Failed to connect to Router Database', error, { uri: routerDbUri.replace(/\/\/.*@/, '//***@') });
     throw error;
   }
 };

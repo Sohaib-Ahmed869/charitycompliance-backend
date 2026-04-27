@@ -15,9 +15,11 @@ const governanceStructureSchema = new mongoose.Schema({
     index: true,
     unique: true // One governance structure record per organization
   },
+  // COI fields are optional — see governanceStructureRoutes.js for the
+  // matching express-validator change. Charities without a formal COI policy
+  // can finish setup; they can fill these in later.
   conflict_of_interest_clause: {
     type: String,
-    required: true,
     trim: true
   },
   conflict_of_interest_policy_url: {
@@ -26,7 +28,6 @@ const governanceStructureSchema = new mongoose.Schema({
   },
   conflict_management_explanation: {
     type: String,
-    required: true,
     trim: true
   },
   works_with_vulnerable_people: {

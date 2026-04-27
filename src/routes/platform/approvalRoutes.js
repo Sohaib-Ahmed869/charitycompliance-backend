@@ -16,6 +16,11 @@ const router = express.Router();
 // All approval routes require authentication and tenant resolution
 router.use(authAndResolveTenant);
 
+// Pre-flight: check whether a workflow is configured for a given category/actionType.
+// FE calls this before opening any module's "create" form so it can surface a
+// helpful redirect dialog instead of letting the user fill a form that will fail.
+router.get('/precheck', approvalController.precheckWorkflow);
+
 // Get approval matrices (workflows)
 router.get('/matrices', approvalController.getApprovalMatrices);
 

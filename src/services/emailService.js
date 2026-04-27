@@ -468,13 +468,16 @@ class EmailService {
    */
   async sendMeetingInvitationEmail({ to, recipientName, meetingTitle, meetingDate, durationMinutes, location, meetingLink, agenda, attendeeNames, organizerName, meetingId, isExternal = false, rsvpToken }) {
     const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    const apiBase = process.env.API_BASE_URL || process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 5000}`;
     const viewMeetingLink = `${baseUrl}/meetings/${meetingId}`;
 
     let rsvpButtonsHtml = '';
     if (rsvpToken && meetingId) {
-      const acceptUrl = `${apiBase}/api/v1/platform/meetings/public/rsvp/${meetingId}/${rsvpToken}/accept`;
-      const declineUrl = `${apiBase}/api/v1/platform/meetings/public/rsvp/${meetingId}/${rsvpToken}/decline`;
+      // Point the email at the frontend so emailed links use FRONTEND_URL
+      // (not the backend host) and aren't tied to a hardcoded localhost.
+      // The FE page does the API call to record the response, then shows
+      // the existing RsvpDonePage confirmation.
+      const acceptUrl = `${baseUrl}/meetings/rsvp/${meetingId}/${rsvpToken}/accept`;
+      const declineUrl = `${baseUrl}/meetings/rsvp/${meetingId}/${rsvpToken}/decline`;
       rsvpButtonsHtml = `
         <table width="100%" cellpadding="0" cellspacing="0" border="0">
           <tr>

@@ -17,6 +17,7 @@ import { CoiRequestRepository } from '../repositories/coiRequestRepository.js';
 import { RiskRepository } from '../repositories/riskRepository.js';
 import checklistInstanceSchema from '../db/schemas/platform/checklistInstanceSchema.js';
 import { ChecklistService } from '../services/checklistService.js';
+import { checkWorkflowConfigured } from '../services/workflowGuardService.js';
 import { logInfo } from '../utils/logger.js';
 
 // Helper function to convert workflow_category to display name
@@ -36,6 +37,21 @@ const getCategoryDisplayName = (category) => {
   };
   return categoryNames[category] || category;
 };
+
+/**
+ * GET /platform/approvals/precheck?category=<>&actionType=<>
+ * Lenient configured-check used by the FE before opening any module's create form.
+ * Either category or actionType is required; both are accepted for callers' convenience.
+ * Always returns 200 — `configured: false` is a valid answer, not an error.
+ */
+export const precheckWorkflow = asyncHandler(async (req, res) => {
+  const result = await checkWorkflowConfigured({
+    orgId: req.orgId,
+    category: req.query.category,
+    actionType: req.query.actionType
+  });
+  res.json({ success: true, data: result });
+});
 
 export const listApprovalRequests = asyncHandler(async (req, res) => {
   const orgId = req.orgId;

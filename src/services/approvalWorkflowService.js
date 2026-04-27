@@ -19,8 +19,10 @@ import { BoardMemberRepository } from '../repositories/boardMemberRepository.js'
 import { UserRepository } from '../repositories/userRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { DonorRepository } from '../repositories/donorRepository.js';
+import { DocumentRepository } from '../repositories/documentRepository.js';
 import { ProjectRegisterService } from './projectRegisterService.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { ACTION_TO_CATEGORY, getDisplayName, getRedirectPath } from './workflowGuardService.js';
 import { logError, logInfo } from '../utils/logger.js';
 import emailService from './emailService.js';
 import { notifyVolunteersForPolicy } from './volunteerPolicyNotifier.js';
@@ -128,21 +130,35 @@ export class ApprovalWorkflowService {
     // workflow type (expense, grant, risk, etc.) may be stored in its own matrix.
     // Only use workflows that are currently effective (within date range) and not revoked.
     const matrices = await approvalMatrixRepo.findEffectiveByOrgId(orgId, new Date());
+
+    // Build the structured details payload the FE redirect dialog expects.
+    const guardCategory = ACTION_TO_CATEGORY[normalizedActionType] || null;
+    const guardDetails = {
+      category: guardCategory,
+      actionType: normalizedActionType,
+      displayName: getDisplayName(guardCategory),
+      redirectPath: getRedirectPath(guardCategory)
+    };
+
     if (!matrices || matrices.length === 0) {
       throw new AppError(
-        'No approval workflow is currently effective. Please set an effective date range or create a new workflow.',
+        `No approval workflow is configured for ${guardDetails.displayName}. Please set one up before creating this request.`,
         400,
-        'NO_APPROVAL_MATRIX'
+        'WORKFLOW_NOT_CONFIGURED',
+        guardDetails
       );
     }
 
     let selectedMatrix = null;
     let selectedRule = null;
+    let actionTypeHasAnyRule = false;
 
     for (const matrix of matrices) {
       for (const rule of matrix.rules) {
         if (!rule.is_active) continue;
         if (this._normalizeActionType(rule.action_type) !== normalizedActionType) continue;
+
+        actionTypeHasAnyRule = true;
 
         const minMatch = rule.min_amount === undefined || amount >= rule.min_amount;
         const maxMatch = rule.max_amount === undefined || amount <= rule.max_amount;
@@ -156,11 +172,24 @@ export class ApprovalWorkflowService {
       if (selectedRule) break;
     }
 
+    // No matrix has any rule for this action type at all → same UX as "not configured".
+    // (A tier-mismatch — rule exists but amount falls outside min/max — is a different
+    // problem the user fixes by editing, so we keep NO_MATCHING_RULE for that.)
+    if (!selectedRule && !actionTypeHasAnyRule) {
+      throw new AppError(
+        `No approval workflow is configured for ${guardDetails.displayName}. Please set one up before creating this request.`,
+        400,
+        'WORKFLOW_NOT_CONFIGURED',
+        guardDetails
+      );
+    }
+
     if (!selectedRule) {
       throw new AppError(
-        `No approval rule found for ${normalizedActionType} with amount ${amount}. Please configure an approval rule.`,
+        `Your ${guardDetails.displayName} workflow doesn't cover the amount ${amount}. Please edit the workflow's amount tiers.`,
         400,
-        'NO_MATCHING_RULE'
+        'NO_MATCHING_RULE',
+        guardDetails
       );
     }
 
@@ -2749,6 +2778,123 @@ export class ApprovalWorkflowService {
       status: 'pending',
       approval_steps: approvalSteps,
       submitted_by: submittedBy
+    });
+
+    return approvalRequest;
+  }
+
+  /**
+   * Create approval workflow for an uploaded fiscal report (action_type: financial_reporting).
+   * Called from documentController.createDocument right after a fiscal_report file is saved.
+   * Stamps the resulting approval_request_id back onto document.metadata so the FE cell can
+   * deep-link to the workflow.
+   */
+  async createFinancialReportingApprovalRequest(documentId, submittedBy) {
+    return this._createDocumentDrivenApprovalRequest({
+      documentId,
+      submittedBy,
+      actionType: 'financial_reporting',
+      requestType: 'financial_reporting',
+      categoryLabel: 'Financial Reporting'
+    });
+  }
+
+  /**
+   * Create approval workflow for an uploaded BAS lodgement (action_type: bas_lodgement).
+   * Mirrors createFinancialReportingApprovalRequest — same shape, different category.
+   */
+  async createBasLodgementApprovalRequest(documentId, submittedBy) {
+    return this._createDocumentDrivenApprovalRequest({
+      documentId,
+      submittedBy,
+      actionType: 'bas_lodgement',
+      requestType: 'bas_lodgement',
+      categoryLabel: 'BAS Lodgment'
+    });
+  }
+
+  /**
+   * Shared implementation for upload-driven workflows where the entity is a Document
+   * and the workflow is non-tiered (single rule per category, amount = 0).
+   * @private
+   */
+  async _createDocumentDrivenApprovalRequest({ documentId, submittedBy, actionType, requestType, categoryLabel }) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const documentRepo = new DocumentRepository(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+
+    const document = await documentRepo.findById(documentId);
+    if (!document) {
+      throw new AppError(`${categoryLabel} document not found`, 404, 'DOCUMENT_NOT_FOUND');
+    }
+
+    // Resolves the workflow for this action_type. If none configured this throws
+    // WORKFLOW_NOT_CONFIGURED with structured details — caller (documentController)
+    // should surface it rather than silently swallow, so the user knows the upload
+    // landed but the workflow couldn't start.
+    const { matrix, rule } = await this.findMatchingRule(actionType, 0, orgObjectId);
+    const approvers = await this.resolveApprovers(rule, orgObjectId);
+
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id || undefined,
+      approver_position_id: approver.position_id || undefined,
+      approver_department_id: approver.department_id || undefined,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: requestType,
+      entity_id: document._id,
+      entity_type: 'document',
+      amount: 0,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    // Stamp the approval_request_id back onto the document so the FE cell can link to it.
+    // Preserve any existing metadata fields (period_year, period_month, etc).
+    const nextMetadata = { ...(document.metadata || {}), approval_request_id: approvalRequest._id };
+    await documentRepo.update(document._id, {
+      metadata: nextMetadata,
+      status: 'review_pending'
+    });
+
+    // Email notifications to approvers (same pattern as expense workflow).
+    try {
+      const userRepo = new UserRepository(tenantDb);
+      const submitter = await userRepo.findById(submittedBy);
+      const submitterName = submitter ? `${submitter.first_name || ''} ${submitter.last_name || ''}`.trim() || 'A user' : 'A user';
+
+      for (const approver of approvers) {
+        if (!approver.user_id) continue;
+        const approverUser = await userRepo.findById(approver.user_id);
+        if (!approverUser?.email) continue;
+        const approverName = `${approverUser.first_name || ''} ${approverUser.last_name || ''}`.trim();
+        await emailService.sendApprovalRequestEmail({
+          to: approverUser.email,
+          recipientName: approverName,
+          approvalRequestId: approvalRequest._id.toString(),
+          requestType,
+          entityTitle: document.title || categoryLabel,
+          approvalLevel: approver.level,
+          submitterName,
+          approvalType: rule.approval_type
+        });
+      }
+    } catch (emailError) {
+      logError('Failed to send approval request emails', { error: emailError.message, approvalRequestId: approvalRequest._id });
+      // Non-fatal — workflow created OK, email is best-effort.
+    }
+
+    logInfo('Document-driven approval workflow created', {
+      requestType, documentId: String(document._id), approvalRequestId: String(approvalRequest._id)
     });
 
     return approvalRequest;

@@ -419,6 +419,8 @@ export const regenerateVolunteerActionLinks = asyncHandler(async (req, res) => {
   const { boardMemberId } = req.params;
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
   const volunteer = await boardMemberRepo.findById(boardMemberId);
   if (!volunteer) throw new AppError('Volunteer not found', 404, 'NOT_FOUND');
   if (!volunteer.is_volunteer) throw new AppError('Board member is not marked as volunteer', 400, 'NOT_VOLUNTEER');
@@ -456,6 +458,16 @@ export const regenerateVolunteerActionLinks = asyncHandler(async (req, res) => {
 
   await boardMemberRepo.update(boardMemberId, {
     volunteer_action_links: actionLinks,
+  });
+
+  const recipientName = [volunteer.given_names, volunteer.family_name].filter(Boolean).join(' ').trim() || 'Volunteer';
+  await emailService.sendBoardMemberInvitation({
+    to: volunteer.email,
+    recipientName,
+    organizationName: org?.name || 'Your Organization',
+    position: volunteer.custom_position_title || volunteer.position || 'Volunteer',
+    invitationToken: '',
+    volunteerActionLinks: actionLinks,
   });
 
   res.json({
@@ -508,10 +520,12 @@ export const resendVolunteerActionLinks = asyncHandler(async (req, res) => {
   }
 
   const recipientName = [volunteer.given_names, volunteer.family_name].filter(Boolean).join(' ').trim() || 'Volunteer';
-  await emailService.sendVolunteerActionLinksEmail({
+  await emailService.sendBoardMemberInvitation({
     to: volunteer.email,
     recipientName,
     organizationName: org?.name || 'Your Organization',
+    position: volunteer.custom_position_title || volunteer.position || 'Volunteer',
+    invitationToken: '',
     volunteerActionLinks: links,
   });
 

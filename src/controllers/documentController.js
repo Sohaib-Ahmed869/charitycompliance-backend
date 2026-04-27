@@ -261,33 +261,36 @@ export const createDocument = asyncHandler(async (req, res) => {
     metadata: fiscalMetadata || basMetadata || safeParseMetadata(req.body.metadata)
   });
 
-  if (req.body.category === 'fiscal_report') {
+  // Fiscal reports and BAS lodgements auto-start an approval workflow on upload.
+  // We catch failures so the upload itself isn't rolled back, but we surface the
+  // outcome on the response so the FE can tell the user what actually happened
+  // (and pop the WORKFLOW_NOT_CONFIGURED guard dialog if the workflow is missing).
+  let workflowOutcome = null;
+  if (req.body.category === 'fiscal_report' || req.body.category === 'bas_lodgement') {
+    const isFiscal = req.body.category === 'fiscal_report';
     try {
       const { ApprovalWorkflowService } = await import('../services/approvalWorkflowService.js');
       const wf = new ApprovalWorkflowService(orgId);
-      await wf.createFinancialReportingApprovalRequest(document._id, userId);
-      logInfo('Fiscal report approval workflow started', { orgId, documentId: String(document._id) });
+      const approvalRequest = isFiscal
+        ? await wf.createFinancialReportingApprovalRequest(document._id, userId)
+        : await wf.createBasLodgementApprovalRequest(document._id, userId);
+      workflowOutcome = { started: true, approvalRequestId: String(approvalRequest._id) };
+      logInfo(`${isFiscal ? 'Fiscal report' : 'BAS lodgement'} approval workflow started`, {
+        orgId, documentId: String(document._id), approvalRequestId: String(approvalRequest._id)
+      });
     } catch (err) {
-      logError('Fiscal report uploaded but workflow could not be started', {
+      logError(`${isFiscal ? 'Fiscal report' : 'BAS'} uploaded but workflow could not be started`, {
         orgId,
         documentId: String(document._id),
-        error: err?.message
+        error: err?.message,
+        code: err?.code
       });
-    }
-  }
-
-  if (req.body.category === 'bas_lodgement') {
-    try {
-      const { ApprovalWorkflowService } = await import('../services/approvalWorkflowService.js');
-      const wf = new ApprovalWorkflowService(orgId);
-      await wf.createBasLodgementApprovalRequest(document._id, userId);
-      logInfo('BAS lodgement approval workflow started', { orgId, documentId: String(document._id) });
-    } catch (err) {
-      logError('BAS uploaded but workflow could not be started', {
-        orgId,
-        documentId: String(document._id),
-        error: err?.message
-      });
+      workflowOutcome = {
+        started: false,
+        code: err?.code || 'WORKFLOW_START_FAILED',
+        message: err?.message || 'Approval workflow could not be started.',
+        details: err?.details || null
+      };
     }
   }
 
@@ -305,10 +308,9 @@ export const createDocument = asyncHandler(async (req, res) => {
     file_url: url
   };
 
-  res.status(201).json({
-    success: true,
-    data: documentWithUrl
-  });
+  const responseBody = { success: true, data: documentWithUrl };
+  if (workflowOutcome) responseBody.workflow = workflowOutcome;
+  res.status(201).json(responseBody);
 });
 
 export const updateDocument = asyncHandler(async (req, res) => {
@@ -506,20 +508,27 @@ export const replaceWorkflowDocumentFile = asyncHandler(async (req, res) => {
       metadata: prevMeta
     });
 
+    let workflowOutcome = null;
     try {
       const { ApprovalWorkflowService } = await import('../services/approvalWorkflowService.js');
       const wf = new ApprovalWorkflowService(orgId);
-      if (cat === 'fiscal_report') {
-        await wf.createFinancialReportingApprovalRequest(doc._id, userId);
-      } else {
-        await wf.createBasLodgementApprovalRequest(doc._id, userId);
-      }
+      const approvalRequest = cat === 'fiscal_report'
+        ? await wf.createFinancialReportingApprovalRequest(doc._id, userId)
+        : await wf.createBasLodgementApprovalRequest(doc._id, userId);
+      workflowOutcome = { started: true, approvalRequestId: String(approvalRequest._id) };
     } catch (err) {
       logError('Replaced fiscal/BAS file but workflow could not be restarted', {
         orgId,
         documentId: String(documentId),
-        error: err?.message
+        error: err?.message,
+        code: err?.code
       });
+      workflowOutcome = {
+        started: false,
+        code: err?.code || 'WORKFLOW_START_FAILED',
+        message: err?.message || 'Approval workflow could not be started.',
+        details: err?.details || null
+      };
     }
 
     const latest = await documentRepo.findById(documentId);
@@ -530,7 +539,7 @@ export const replaceWorkflowDocumentFile = asyncHandler(async (req, res) => {
     } catch {
       /* keep upload response url */
     }
-    res.json({ success: true, data: { ...docObj, file_url: fileUrl } });
+    res.json({ success: true, data: { ...docObj, file_url: fileUrl }, workflow: workflowOutcome });
     return;
   }
 

@@ -71,6 +71,31 @@ router.get(
   boardMemberController.getBoardMembers
 );
 
+// Suitability checks
+router.patch(
+  '/:boardMemberId/suitability',
+  requireAdminOrOwner,
+  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
+  validate,
+  boardMemberController.updateSuitability
+);
+
+router.post(
+  '/:boardMemberId/suitability/documents',
+  requireAdminOrOwner,
+  [param('boardMemberId').isMongoId().withMessage('Invalid board member ID')],
+  validate,
+  uploadSingle,
+  handleUploadError,
+  boardMemberController.uploadSuitabilityDocument
+);
+
+router.get(
+  '/suitability/bulk-status',
+  requireAdminOrOwner,
+  boardMemberController.getSuitabilityBulkStatus
+);
+
 // Get board member by ID
 router.get(
   '/:boardMemberId',

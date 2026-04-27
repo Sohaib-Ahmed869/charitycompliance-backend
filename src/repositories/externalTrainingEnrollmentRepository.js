@@ -71,14 +71,33 @@ export class ExternalTrainingEnrollmentRepository {
   }
 
   async updateProgressByToken(token, updates) {
-    const program = await this.TrainingProgram.findOne({ 'enrollments.token': token });
+    const setOps = {};
+    Object.entries(updates || {}).forEach(([k, v]) => {
+      setOps[`enrollments.$.${k}`] = v;
+    });
+
+    if (Object.keys(setOps).length === 0) {
+      return this.findByToken(token);
+    }
+
+    const program = await this.TrainingProgram.findOneAndUpdate(
+      {
+        enrollments: {
+          $elemMatch: {
+            enrollment_type: 'external',
+            token,
+          },
+        },
+      },
+      { $set: setOps },
+      { new: true }
+    )
+      .select({ enrollments: 1 })
+      .lean();
+
     if (!program) return null;
     const enr = (program.enrollments || []).find((e) => e.enrollment_type === 'external' && e.token === token);
-    if (!enr) return null;
-    Object.entries(updates || {}).forEach(([k, v]) => { enr[k] = v; });
-    await program.save();
-    const plain = enr.toObject ? enr.toObject() : enr;
-    return { ...plain, training_program_id: program._id };
+    return enr ? { ...enr, training_program_id: program._id } : null;
   }
 
   async listByOrg(orgObjectId, options = {}) {
