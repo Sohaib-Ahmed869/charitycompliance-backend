@@ -152,6 +152,12 @@ const meetingSchema = new mongoose.Schema({
     is_mandatory: { type: Boolean, default: true },
     compliance_checklist: [{
       item: String,
+      // `selected` = "this item is on the agenda for this meeting". User picks
+      // the agenda at creation time; only selected items show during the meeting
+      // and gate completion. Items missing this field (legacy meetings created
+      // before this concept existed) are treated as selected by the FE for
+      // backward compat.
+      selected: { type: Boolean, default: false },
       completed: { type: Boolean, default: false },
       checked_at: Date
     }],

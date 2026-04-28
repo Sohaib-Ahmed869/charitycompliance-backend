@@ -127,10 +127,27 @@ export const updateMeeting = asyncHandler(async (req, res) => {
     });
   }
 
-  res.json({
-    success: true,
-    data: meeting
-  });
+  // Non-status patch: write the allowed fields the FE is permitted to update
+  // (currently only board_meeting_info — used for adding agenda items mid-meeting
+  // and toggling `selected` flags on the compliance checklist).
+  const allowedFields = ['board_meeting_info', 'agenda', 'title', 'meeting_link', 'location'];
+  const patch = {};
+  for (const key of allowedFields) {
+    if (Object.prototype.hasOwnProperty.call(updateData, key)) patch[key] = updateData[key];
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return res.json({ success: true, data: meeting });
+  }
+
+  patch.updated_at = new Date();
+  const { MeetingRepository } = await import('../repositories/meetingRepository.js');
+  const { getTenantConnection } = await import('../db/connectionManager.js');
+  const tenantDb = await getTenantConnection(orgId);
+  const meetingRepo = new MeetingRepository(tenantDb);
+  const updated = await meetingRepo.update(meetingId, patch);
+
+  return res.json({ success: true, data: updated });
 });
 
 export const addMeetingNotes = asyncHandler(async (req, res) => {

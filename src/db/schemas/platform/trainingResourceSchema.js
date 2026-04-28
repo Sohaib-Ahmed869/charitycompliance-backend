@@ -26,7 +26,7 @@ const trainingResourceSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['pdf', 'video', 'link'],
+    enum: ['pdf', 'video', 'link', 'image'],
     default: 'pdf'
   },
   file_url: { type: String },

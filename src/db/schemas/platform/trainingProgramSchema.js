@@ -60,7 +60,7 @@ const enrollmentSchema = new mongoose.Schema({
 const resourceSchema = new mongoose.Schema({
   _id: { type: mongoose.Schema.Types.ObjectId, auto: true },
   name: { type: String, required: true, trim: true },
-  type: { type: String, enum: ['pdf', 'video', 'link'], default: 'pdf' },
+  type: { type: String, enum: ['pdf', 'video', 'link', 'image'], default: 'pdf' },
   file_url: { type: String, default: null },
   link_url: { type: String, default: null },
   cover_image_url: { type: String, default: null },
