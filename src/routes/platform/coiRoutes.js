@@ -50,6 +50,21 @@ router.post(
 // AUTHENTICATED ROUTES BELOW
 router.use(authAndResolveTenant);
 
+// Internal user declares a COI for themselves (in-app form).
+router.post(
+  '/declare',
+  [
+    body('coi_reason').trim().notEmpty().withMessage('Conflict of interest description is required'),
+    body('conflict_person_name').trim().notEmpty().withMessage('Person in conflict name is required'),
+    body('conflict_person_details').trim().notEmpty().withMessage('Person in conflict details are required'),
+    body('submitter.name').optional().trim(),
+    body('submitter.email').optional().trim().isEmail().withMessage('Valid email is required'),
+    body('submitter.phone').optional().trim()
+  ],
+  validate,
+  coiController.submitInternalCoi
+);
+
 router.get('/list', coiController.listCoiRequests);
 router.get('/pending', coiController.getPendingCoiRequests);
 router.get('/debug/all', coiController.debugGetAllCoi);

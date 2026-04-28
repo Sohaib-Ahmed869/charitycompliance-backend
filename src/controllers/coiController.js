@@ -635,6 +635,120 @@ export const assignCoiToWorkflow = asyncHandler(async (req, res) => {
   }
 });
 
+// AUTHENTICATED ENDPOINT: Submit COI on behalf of the logged-in user.
+// Distinct from `submitExternalCoi` (public partner form) — this records the
+// declaration as `submission_source: 'internal'` and stamps `submitted_by`
+// with the user id so the COI register shows it as an internal disclosure.
+export const submitInternalCoi = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'Validation failed',
+        details: errors.array()
+      }
+    });
+  }
+
+  const orgId = req.orgId;
+  const userId = req.user?.userId || req.user?.id || null;
+  const { coi_reason, conflict_person_name, conflict_person_details, submitter } = req.body;
+
+  try {
+    const tenantDb = await getTenantConnection(orgId);
+    const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (!org) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'ORG_NOT_FOUND', message: 'Organization not found' }
+      });
+    }
+
+    // Resolve COI workflow matrix (same logic as the external endpoint).
+    const { ApprovalMatrixRepository } = await import('../repositories/approvalMatrixRepository.js');
+    const matrixRepo = new ApprovalMatrixRepository(tenantDb);
+    const matrices = await matrixRepo.findByOrgId(org._id);
+
+    const coiMatrix = matrices?.find((matrix) =>
+      matrix.rules?.some((rule) => rule.action_type === 'coi' && rule.is_active)
+    );
+    if (!coiMatrix) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: 'NO_COI_MATRIX',
+          message: 'COI approval workflow not configured. Please configure COI workflow in settings.'
+        }
+      });
+    }
+    const coiRule = coiMatrix.rules.find((rule) => rule.action_type === 'coi' && rule.is_active);
+    if (!coiRule) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'NO_COI_RULE', message: 'No active COI rule found in approval matrix.' }
+      });
+    }
+
+    const workflowService = new CoiWorkflowService(orgId);
+    const approvers = await workflowService.resolveApprovers(coiRule, null);
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const coiRepo = new CoiRequestRepository(tenantDb);
+    const internalCoi = await coiRepo.create({
+      org_id: org._id,
+      submission_source: 'internal',
+      is_external: false,
+      // Snapshot the submitter so the register can show name/email even if
+      // the user record changes later.
+      external_submitter: submitter ? {
+        name: submitter.name || null,
+        email: submitter.email || null,
+        phone: submitter.phone || null
+      } : undefined,
+      coi_reason,
+      conflict_person_name,
+      conflict_person_details,
+      approval_matrix_id: coiMatrix._id,
+      approval_type: coiRule.approval_type || 'sequential',
+      approval_steps: approvalSteps,
+      parent_approval_request_id: null,
+      parent_step_index: null,
+      parent_entity_id: null,
+      parent_entity_type: null,
+      submitted_by: userId,
+      status: 'pending'
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Conflict of interest declared. Sent for review.',
+      data: {
+        coi_id: internalCoi._id,
+        submitted_at: internalCoi.created_at
+      }
+    });
+  } catch (error) {
+    console.error('Internal COI submission error:', error);
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: 'SUBMISSION_ERROR',
+        message: 'Failed to submit conflict of interest. Please try again.'
+      }
+    });
+  }
+});
+
 export default {
   listCoiRequests,
   getPendingCoiRequests,
@@ -644,6 +758,7 @@ export default {
   rejectCoiRequest,
   getParentApprovalForCoi,
   submitExternalCoi,
+  submitInternalCoi,
   assignExternalCoiToModule,
   assignCoiToWorkflow
 };
