@@ -7,7 +7,11 @@
 import dns from 'node:dns';
 import dotenv from 'dotenv';
 
-dotenv.config();
+// `override: true` makes the .env file the source of truth even when a value
+// was previously set in process.env (shell export, PM2 ecosystem, parent
+// process). Without this, edits to .env can appear to "not pick up" because
+// the existing process.env value silently wins.
+dotenv.config({ override: true });
 
 // Ensure Node resolves MongoDB SRV records through a known public resolver
 // before any app modules import the database layer.

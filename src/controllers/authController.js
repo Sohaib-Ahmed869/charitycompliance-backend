@@ -171,3 +171,15 @@ export const refreshPermissions = asyncHandler(async (req, res) => {
     }
   });
 });
+
+/**
+ * Demo Portal: log in as another user without a password. Hard-gated to the
+ * tenant matching DEMO_ORG_ID env var. Returns a fresh JWT for the target
+ * user — frontend swaps the auth state and reloads, so the rest of the app
+ * sees a normal session under the new user with no impersonation plumbing.
+ */
+export const loginAsDemoUser = asyncHandler(async (req, res) => {
+  const { targetUserId } = req.body || {};
+  const result = await authService.loginAsDemoUser(req.orgId, targetUserId);
+  res.json({ success: true, data: result });
+});

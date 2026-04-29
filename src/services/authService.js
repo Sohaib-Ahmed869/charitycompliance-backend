@@ -1257,6 +1257,158 @@ export class AuthService {
     await userRepo.update(userId, { mfa_enabled: false });
     logInfo('MFA disabled for user', { userId });
   }
+
+  /**
+   * Demo Portal: log in as another user without a password. Hard-gated to a
+   * single tenant via DEMO_ORG_ID env var so the endpoint is a no-op anywhere
+   * else. Used to demo the platform to consultants by swapping between users.
+   */
+  async loginAsDemoUser(callerOrgId, targetUserId) {
+    const demoOrgId = String(process.env.DEMO_ORG_ID || '').trim().toLowerCase();
+    if (!demoOrgId) {
+      throw new AppError('Demo portal is not configured', 403, 'DEMO_NOT_CONFIGURED');
+    }
+    const normalizedOrgId = String(callerOrgId || '').trim().toLowerCase();
+    if (normalizedOrgId !== demoOrgId) {
+      // Log the exact values so the operator can see the mismatch in BE logs.
+      logWarn('Demo login rejected — orgId mismatch', {
+        envDemoOrgId: demoOrgId,
+        envDemoOrgIdLength: demoOrgId.length,
+        callerOrgId: normalizedOrgId,
+        callerOrgIdLength: normalizedOrgId.length
+      });
+      throw new AppError('Demo login is only available on the demo portal', 403, 'NOT_DEMO_TENANT');
+    }
+    if (!targetUserId) {
+      throw new AppError('Target user is required', 400, 'TARGET_USER_REQUIRED');
+    }
+
+    try {
+      const tenantDb = await getTenantConnection(normalizedOrgId);
+      const userRepo = new UserRepository(tenantDb);
+      const target = await userRepo.findById(targetUserId);
+      if (!target) {
+        throw new AppError('Target user not found', 404, 'USER_NOT_FOUND');
+      }
+      if (target.status && target.status !== 'active') {
+        throw new AppError('Target account is inactive', 403, 'ACCOUNT_INACTIVE');
+      }
+
+      const rawUser = target.toObject ? target.toObject() : target;
+      const masterKeyHex = getMasterKeyHex();
+      if (!masterKeyHex) {
+        throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
+      }
+      const userObj = decryptUserFields(rawUser, masterKeyHex);
+
+      // Auditor branch — issue a read-only auditor token.
+      if (userObj.is_auditor) {
+        const auditorPerms = buildAuditorPermissions();
+        const token = generateToken({
+          userId: userObj._id.toString(),
+          orgId: normalizedOrgId,
+          email: userObj.email || '',
+          roles: ['auditor'],
+          permissions: auditorPerms,
+          isAuditor: true
+        });
+        return {
+          user: {
+            id: userObj._id.toString(),
+            email: userObj.email || '',
+            firstName: userObj.first_name || '',
+            lastName: userObj.last_name || '',
+            role: 'auditor',
+            permissions: auditorPerms,
+            is_board_member: false,
+            is_auditor: true,
+            is_org_owner: false,
+            position: 'Auditor',
+            positions: [{ id: null, title: 'Auditor' }]
+          },
+          token,
+          orgId: normalizedOrgId
+        };
+      }
+
+      const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+      const orgRepo = new OrganizationRepository(tenantDb);
+      const org = await orgRepo.findOne();
+      const positionPermissions = org
+        ? await getPositionPermissionsForUser(tenantDb, userObj._id, org._id)
+        : [];
+
+      let baseRoles;
+      let basePermissions;
+      if (userObj.is_org_owner) {
+        baseRoles = ['admin'];
+        basePermissions = ['*:*'];
+      } else if (positionPermissions.length > 0) {
+        baseRoles = ['board_member'];
+        basePermissions = ['read:own', 'write:own', ...positionPermissions];
+      } else {
+        baseRoles = ['board_member'];
+        basePermissions = ['read:own', 'write:own'];
+      }
+
+      const token = generateToken({
+        userId: userObj._id.toString(),
+        orgId: normalizedOrgId,
+        email: userObj.email || '',
+        roles: baseRoles,
+        permissions: basePermissions,
+        isAuditor: false
+      });
+
+      const responseUser = {
+        id: userObj._id.toString(),
+        email: userObj.email || '',
+        firstName: userObj.first_name || '',
+        lastName: userObj.last_name || '',
+        role: baseRoles[0] || 'board_member',
+        permissions: basePermissions,
+        is_board_member: false,
+        is_auditor: false,
+        is_org_owner: !!userObj.is_org_owner
+      };
+
+      const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+      const boardMemberRepo = new BoardMemberRepository(tenantDb);
+      if (org) {
+        const allBoardMembers = await boardMemberRepo.findAllActiveByUserId(userObj._id, org._id);
+        const { userHoldsBoardLevelPosition } = await import('../utils/workflowBoardMember.js');
+        responseUser.is_board_member = await userHoldsBoardLevelPosition(tenantDb, userObj._id, org._id);
+        if (allBoardMembers && allBoardMembers.length > 0) {
+          const primaryBm = allBoardMembers[0];
+          responseUser.position = primaryBm.custom_position_title || primaryBm.position || null;
+          responseUser.positions = allBoardMembers.map((bm) => ({
+            id: bm.position_id?.toString?.() || bm.position_id,
+            title: bm.custom_position_title || bm.position || 'Position'
+          }));
+          const bmWithPic = allBoardMembers.find((bm) => bm.profile_picture_key);
+          if (bmWithPic) {
+            try {
+              const { getFileUrl } = await import('../services/s3Service.js');
+              responseUser.profile_picture_url = await getFileUrl(bmWithPic.profile_picture_key, 604800);
+            } catch (err) {
+              logError('Failed to resolve profile picture URL (demo)', err, { userId: userObj._id });
+            }
+          }
+        } else if (userObj.is_org_owner) {
+          responseUser.position = 'Admin';
+          responseUser.positions = [{ id: null, title: 'Admin' }];
+        }
+      }
+
+      logInfo('Demo portal: logged in as user', { targetUserId: userObj._id, orgId: normalizedOrgId });
+
+      return { user: responseUser, token, orgId: normalizedOrgId };
+    } catch (error) {
+      if (error instanceof AppError) throw error;
+      logError('Demo login failed', error, { targetUserId, orgId: callerOrgId });
+      throw new AppError('Demo login failed', 500, 'DEMO_LOGIN_ERROR');
+    }
+  }
 }
 
 export default new AuthService();

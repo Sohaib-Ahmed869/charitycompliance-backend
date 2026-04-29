@@ -15,7 +15,8 @@ import {
   sendOtp,
   refreshPermissions,
   enableMfa,
-  disableMfa
+  disableMfa,
+  loginAsDemoUser
 } from '../../controllers/authController.js';
 import { registerValidator, loginValidator, refreshTokenValidator, acceptInvitationValidator, forgotPasswordValidator, resetPasswordValidator, verifyOtpValidator, sendOtpValidator } from '../../validators/authValidators.js';
 import { validate } from '../../middleware/validation.js';
@@ -45,5 +46,9 @@ router.post('/invitation/:token/accept', acceptInvitationValidator, validate, ac
 
 // Runtime permission refresh for current user
 router.get('/me/permissions', authAndResolveTenant, refreshPermissions);
+
+// Demo Portal: log in as another user (no password). Service enforces that
+// the caller's tenant matches DEMO_ORG_ID env var — disabled everywhere else.
+router.post('/demo-login-as', authAndResolveTenant, loginAsDemoUser);
 
 export default router;
