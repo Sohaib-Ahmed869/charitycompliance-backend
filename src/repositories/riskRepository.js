@@ -157,17 +157,28 @@ export class RiskRepository {
     const overdueReview = risks.filter(
       r => r.next_review_date && new Date(r.next_review_date) < new Date() && !['closed', 'rejected'].includes(r.status)
     ).length;
+    // Fall back to residual_risk_level when inherent isn't set, so resolved or
+    // newly-treated risks still slot into a severity bucket on the dashboard.
+    const sevOf = (r) => r.inherent_risk_level || r.residual_risk_level || null;
+    const byStatus = {};
+    for (const r of risks) {
+      const k = r.status || 'unknown';
+      byStatus[k] = (byStatus[k] || 0) + 1;
+    }
     return {
       total: risks.length,
       highExtreme,
       underTreatment,
       overdueReview,
+      resolved: risks.filter(r => r.status === 'resolved').length,
+      closed: risks.filter(r => r.status === 'closed').length,
+      byStatus,
       bySeverity: {
-        critical: risks.filter(r => r.inherent_risk_level === 'critical').length,
-        extreme: risks.filter(r => r.inherent_risk_level === 'extreme').length,
-        high: risks.filter(r => r.inherent_risk_level === 'high').length,
-        moderate: risks.filter(r => r.inherent_risk_level === 'moderate').length,
-        low: risks.filter(r => r.inherent_risk_level === 'low').length
+        critical: risks.filter(r => sevOf(r) === 'critical').length,
+        extreme: risks.filter(r => sevOf(r) === 'extreme').length,
+        high: risks.filter(r => sevOf(r) === 'high').length,
+        moderate: risks.filter(r => sevOf(r) === 'moderate').length,
+        low: risks.filter(r => sevOf(r) === 'low').length
       }
     };
   }
