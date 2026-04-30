@@ -14,15 +14,17 @@ import { connectRouterDB, closeRouterDB } from '../src/config/database.js';
 import { getTenantConnection, closeAllConnections } from '../src/db/connectionManager.js';
 import riskSchema from '../src/db/schemas/platform/riskSchema.js';
 import meetingSchema from '../src/db/schemas/platform/meetingSchema.js';
+import coiRequestSchema from '../src/db/schemas/platform/coiRequestSchema.js';
 
 dotenv.config();
 
 const orgId = (process.argv[2] || '').trim();
 const riskCount = Number((process.argv.find((a) => a.startsWith('--risks=')) || '--risks=6').split('=')[1]) || 6;
 const meetingCount = Number((process.argv.find((a) => a.startsWith('--meetings=')) || '--meetings=6').split('=')[1]) || 6;
+const coiCount = Number((process.argv.find((a) => a.startsWith('--cois=')) || '--cois=10').split('=')[1]) || 10;
 
 if (!orgId) {
-  console.error('Usage: node scripts/seedMoreDataForOrg.js <orgId> [--risks=N] [--meetings=N]');
+  console.error('Usage: node scripts/seedMoreDataForOrg.js <orgId> [--risks=N] [--meetings=N] [--cois=N]');
   process.exit(1);
 }
 
@@ -74,6 +76,7 @@ async function main() {
 
   const Risk = tenantDb.models.Risk || tenantDb.model('Risk', riskSchema);
   const Meeting = tenantDb.models.Meeting || tenantDb.model('Meeting', meetingSchema);
+  const CoiRequest = tenantDb.models.CoiRequest || tenantDb.model('CoiRequest', coiRequestSchema);
 
   // ── RISKS ─────────────────────────────────────────────────────────────
   const sourceRisks = await Risk.find({ org_id: { $exists: true } }).limit(20).lean();
@@ -181,6 +184,76 @@ async function main() {
       console.log(`   ✓ "${newTitle}"  [${status} · ${doc.date.toDateString()}]`);
     }
     console.log(`   → inserted ${inserted} meeting${inserted === 1 ? '' : 's'}`);
+  }
+
+  // ── COIs ──────────────────────────────────────────────────────────────
+  // Find any existing COI to use as a template (org_id, etc.). If none, fall
+  // back to the orgIdValue used by risks and synthesise minimal COIs.
+  const existingCoi = await CoiRequest.findOne().lean();
+  const orgValueForCoi = existingCoi?.org_id || (sourceRisks[0]?.org_id) || null;
+  const sourceUserId = existingCoi?.submitted_by || sourceRisks[0]?.created_by || null;
+
+  if (!orgValueForCoi) {
+    console.log('\n⚠️  Could not determine org_id for COIs. Skipping COIs.');
+  } else {
+    console.log(`\n⚖️  Seeding COIs (template: ${existingCoi ? 'existing record' : 'minimal synthesised'})…`);
+    const COI_REASONS = [
+      'Personal relationship with vendor under consideration',
+      'Family member is a beneficiary of grant program',
+      'Director sits on board of recipient charity',
+      'Spouse employed by service provider',
+      'Personal financial interest in funding agreement',
+      'Past employment with potential partner',
+      'Owns shares in supplier company',
+      'Friend of donor with significant gift',
+      'Holds advisory role with competing applicant',
+      'Disclosed gift from grant recipient',
+    ];
+    const STATUSES = ['pending', 'pending', 'approved', 'approved', 'approved', 'rejected'];
+    const APPROVAL_TYPES = ['sequential', 'parallel', 'any'];
+
+    let inserted = 0;
+    for (let i = 0; i < coiCount; i++) {
+      const reason = COI_REASONS[i % COI_REASONS.length];
+      const personName = `Sample Person ${i + 1}`;
+      const exists = await CoiRequest.findOne({ org_id: orgValueForCoi, conflict_person_name: personName }).lean();
+      if (exists) {
+        console.log(`   • skip "${personName}" (already exists)`);
+        continue;
+      }
+
+      const isExternal = i % 4 === 0;
+      const status = STATUSES[i % STATUSES.length];
+      const approvalType = APPROVAL_TYPES[i % APPROVAL_TYPES.length];
+      const createdAt = dayOffset(-Math.floor(Math.random() * 180));
+      const completedAt = status !== 'pending' ? dayOffset(-Math.floor(Math.random() * 30)) : null;
+
+      const doc = {
+        org_id: orgValueForCoi,
+        coi_reason: reason,
+        conflict_person_name: personName,
+        conflict_person_details: `Sample COI declaration ${i + 1} for dashboard testing.`,
+        submission_source: isExternal ? 'external' : 'internal',
+        is_external: isExternal,
+        ...(isExternal ? {
+          external_submitter: {
+            name: `External Submitter ${i + 1}`,
+            email: `external${i + 1}@example.com`,
+          }
+        } : {}),
+        approval_type: approvalType,
+        status,
+        approval_steps: [],
+        submitted_by: sourceUserId,
+        created_at: createdAt,
+        completed_at: completedAt,
+      };
+
+      await CoiRequest.create(doc);
+      inserted++;
+      console.log(`   ✓ "${personName}"  [${status} · ${isExternal ? 'external' : 'internal'}]`);
+    }
+    console.log(`   → inserted ${inserted} COI${inserted === 1 ? '' : 's'}`);
   }
 
   await closeAllConnections();

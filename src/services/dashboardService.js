@@ -53,7 +53,12 @@ export class DashboardService {
     const meetingRepo = new MeetingRepository(tenantDb);
 
     const org = await orgRepo.findOne();
-    const orgId = org?._id || this.orgId;
+    // org_id is stored as ObjectId in some collections (Risk, Policy, COI,
+    // FundingAgreement, ApprovalRequest) and as the slug string in others
+    // (Asset, Meeting, Expense, SupportTicket, LegalDocument). Pass the
+    // matching shape per repo or queries silently return zero.
+    const orgObjectId = org?._id || this.orgId;
+    const orgSlug = this.orgId;
 
     // Check if user has permission to view complaints
     const hasComplaintAccess = this.hasModulePermission(userPermissions, 'complaints');
@@ -74,19 +79,19 @@ export class DashboardService {
       coiStats,
       meetingStats,
     ] = await Promise.allSettled([
-      riskRepo.getCountsByOrg(this.orgId),
-      assetRepo.getAssetStats(this.orgId),
-      ticketRepo.getStats(this.orgId),
-      legalDocRepo.getStats(this.orgId),
-      hasComplaintAccess ? complaintRepo.getStats(orgId, complaintUserId) : Promise.resolve({}),
-      policyRepo.getCounts(this.orgId),
-      this._getEnhancedRiskStats(tenantDb),
-      this._getApprovalTurnaround(approvalRepo),
-      this._getApprovalTrend(approvalRepo),
-      fundingAgreementRepo.getCountsByOrg(this.orgId),
-      expenseRepo.getExpenseStats(this.orgId),
-      this._getCoiStats(coiRepo),
-      this._getMeetingStats(meetingRepo),
+      riskRepo.getCountsByOrg(orgObjectId),                                  // ObjectId
+      assetRepo.getAssetStats(orgSlug),                                       // slug
+      ticketRepo.getStats(orgSlug),                                           // slug
+      legalDocRepo.getStats(orgSlug),                                         // slug
+      hasComplaintAccess ? complaintRepo.getStats(orgObjectId, complaintUserId) : Promise.resolve({}),
+      policyRepo.getCounts(orgObjectId),                                      // ObjectId
+      this._getEnhancedRiskStats(tenantDb, orgObjectId),
+      this._getApprovalTurnaround(approvalRepo, orgObjectId),
+      this._getApprovalTrend(approvalRepo, orgObjectId),
+      fundingAgreementRepo.getCountsByOrg(orgObjectId),                       // ObjectId
+      expenseRepo.getExpenseStats(orgSlug),                                   // slug
+      this._getCoiStats(coiRepo, orgObjectId),
+      this._getMeetingStats(meetingRepo, orgSlug),
     ]);
 
     const rawComplaints = (complaints.status === 'fulfilled' && hasComplaintAccess) ? complaints.value : {};
@@ -131,11 +136,11 @@ export class DashboardService {
     };
   }
 
-  async _getEnhancedRiskStats(tenantDb) {
+  async _getEnhancedRiskStats(tenantDb, orgId) {
     const riskRepo = new RiskRepository(tenantDb);
     const Risk = riskRepo.Risk;
 
-    const allRisks = await Risk.find({ org_id: this.orgId });
+    const allRisks = await Risk.find({ org_id: orgId ?? this.orgId });
     const total = allRisks.length;
     const treated = allRisks.filter(r => ['resolved', 'closed', 'approved'].includes(r.status)).length;
     const closed = allRisks.filter(r => r.status === 'closed').length;
@@ -159,7 +164,7 @@ export class DashboardService {
     };
   }
 
-  async _getApprovalTurnaround(approvalRepo) {
+  async _getApprovalTurnaround(approvalRepo, orgId) {
     const ApprovalRequest = approvalRepo.ApprovalRequest;
     if (!ApprovalRequest) return { avgTurnaroundDays: 0, completedCount: 0, thisMonthCount: 0 };
 
@@ -170,7 +175,7 @@ export class DashboardService {
     // completed_at written by falling back to updatedAt or rejected/approved
     // step timestamps when computing turnaround.
     const completed = await ApprovalRequest.find({
-      org_id: this.orgId,
+      org_id: orgId ?? this.orgId,
       status: { $in: ['approved', 'rejected'] },
     }).select('created_at completed_at updatedAt approval_steps').lean();
 
@@ -214,7 +219,7 @@ export class DashboardService {
    * year: 2026, count }. Counts approvals whose terminal completion (or
    * updatedAt fallback) falls inside the calendar month.
    */
-  async _getApprovalTrend(approvalRepo) {
+  async _getApprovalTrend(approvalRepo, orgId) {
     const ApprovalRequest = approvalRepo.ApprovalRequest;
     if (!ApprovalRequest) return [];
 
@@ -222,7 +227,7 @@ export class DashboardService {
     const monthStart = new Date(now.getFullYear(), now.getMonth() - 5, 1);
 
     const docs = await ApprovalRequest.find({
-      org_id: this.orgId,
+      org_id: orgId ?? this.orgId,
       status: { $in: ['approved', 'rejected'] },
     }).select('completed_at updatedAt approval_steps status').lean();
 
@@ -268,7 +273,7 @@ export class DashboardService {
     return buckets.map(({ key, ...rest }) => rest); // drop internal key
   }
 
-  async _getCoiStats(coiRepo) {
+  async _getCoiStats(coiRepo, orgId) {
     const CoiRequest = coiRepo.CoiRequest;
     if (!CoiRequest) return { total: 0, pending: 0, approved: 0, rejected: 0, last90Days: 0, internal: 0, external: 0 };
 
@@ -276,7 +281,7 @@ export class DashboardService {
     const ninetyDaysAgo = new Date(now);
     ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
-    const all = await CoiRequest.find({ org_id: this.orgId })
+    const all = await CoiRequest.find({ org_id: orgId ?? this.orgId })
       .select('status created_at is_external submission_source')
       .lean();
 
@@ -299,14 +304,14 @@ export class DashboardService {
     return { total, pending, approved, rejected, last90Days, internal, external };
   }
 
-  async _getMeetingStats(meetingRepo) {
+  async _getMeetingStats(meetingRepo, orgId) {
     const Meeting = meetingRepo.Meeting;
     if (!Meeting) {
       return { upcoming: 0, completed: 0, cancelled: 0, lastHeldDate: null, nextMeetingDate: null, attendanceRate: 0, pendingRsvps: 0 };
     }
 
     const now = new Date();
-    const meetings = await Meeting.find({ org_id: this.orgId })
+    const meetings = await Meeting.find({ org_id: orgId ?? this.orgId })
       .select('status date attendees external_attendees')
       .lean();
 
