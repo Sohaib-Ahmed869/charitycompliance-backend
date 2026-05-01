@@ -922,6 +922,35 @@ class EmailService {
 
     return this.sendEmail({ to, subject, html });
   }
+
+  async sendFundingAgreementPartnerSignatureRequestEmail({ to, partnerName, agreementTitle, signLink, expiryDate }) {
+    const safeTitle = agreementTitle || 'Funding agreement';
+    const subject = `Signature requested: ${safeTitle}`;
+    const expiryStr = expiryDate
+      ? new Date(expiryDate).toLocaleDateString('en-AU', { year: 'numeric', month: 'long', day: 'numeric' })
+      : null;
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${partnerName || 'Partner'},</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">The funding agreement <strong>${safeTitle}</strong> has been signed internally and is now ready for your signature.</p>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Please review the agreement and add your signature using the secure link below.</p>
+    `;
+
+    const infoBoxLines = [
+      'The link is unique to you — please do not share it.',
+      expiryStr ? `This link expires on ${expiryStr}.` : 'This link will expire after 14 days.'
+    ];
+
+    const html = buildEmailTemplate({
+      heading: 'Funding agreement signature requested',
+      bodyHtml,
+      buttonText: 'Review & sign agreement',
+      buttonLink: signLink,
+      infoBoxLines
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
 }
 
 export default new EmailService();

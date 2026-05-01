@@ -37,9 +37,16 @@ export class FundingAgreementService {
     const orgId = await this._getOrgObjectId();
     const repo = new FundingAgreementRepository(tenantDb);
 
-    if (!String(data.agreement_attachment_data_url || '').trim()) {
-      throw new AppError('Agreement PDF attachment is required', 400, 'AGREEMENT_ATTACHMENT_REQUIRED');
-    }
+    const attachments = Array.isArray(data.attachments)
+      ? data.attachments
+        .map((att) => ({
+          file_name: String(att?.file_name || '').trim(),
+          mime_type: String(att?.mime_type || '').trim(),
+          data_url: String(att?.data_url || '').trim(),
+          size: Number(att?.size || 0)
+        }))
+        .filter((att) => att.data_url && att.file_name)
+      : [];
 
     const agreement = await repo.create({
       org_id: orgId,
@@ -58,6 +65,7 @@ export class FundingAgreementService {
       agreement_attachment_data_url: String(data.agreement_attachment_data_url || '').trim(),
       agreement_attachment_file_name: String(data.agreement_attachment_file_name || '').trim(),
       agreement_attachment_mime_type: String(data.agreement_attachment_mime_type || 'application/pdf').trim(),
+      attachments,
       metadata: data.metadata || {}
     });
 
