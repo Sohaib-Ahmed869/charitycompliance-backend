@@ -1,46 +1,80 @@
 /**
  * Email Service
  *
- * Handles sending emails using nodemailer with SMTP
- * Templates follow Stewardex design: purple gradient background, logo, tagline, CTA, info box, footer
+ * Handles sending emails using nodemailer with SMTP. Templates follow the
+ * Stewardex brand system: deep-navy → azure → teal gradient (sampled from
+ * the Stewardex wordmark), logoFull image when available, gradient CTA
+ * button, and a clean light card on a neutral backdrop. Single template
+ * function `buildEmailTemplate` is the source of truth for every email
+ * the platform sends — change the look here, every email follows.
  */
 
 import nodemailer from 'nodemailer';
 import { logError, logInfo } from '../utils/logger.js';
 
 const APP_NAME = process.env.APP_NAME || 'Stewardex';
-const LOGO_URL = process.env.logo || process.env.LOGO_URL || '';
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@stewardex.com';
 
-const GRADIENT = 'linear-gradient(103.82deg, #132E5E 6.74%, #9A78EC 76.18%)';
-const BODY_GRADIENT = 'linear-gradient(180deg, #FAFAFC 0%, #F5F3FA 40%, #EDE9F7 100%)';
-const CONTAINER_GRADIENT = 'linear-gradient(180deg, #FFFFFF 0%, #FDFCFE 50%, #FAF8FC 100%)';
+// Resolve at call time, not module-load time — dotenv may not have run yet
+// when this module is first imported. Accept LOGO_URL (preferred) and the
+// legacy lowercase `logo` key for backwards compatibility.
+function resolveLogoUrl() {
+  const raw = (process.env.LOGO_URL || process.env.logo || '').trim();
+  if (!raw) return '';
+  // HTML-attribute-safe: pre-signed URLs contain unencoded `&` that some
+  // strict email clients treat as entity references. Escape only the
+  // characters that matter inside a double-quoted attribute.
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;');
+}
+
+// Brand stops sampled from logoFull.png — same paint as every primary CTA
+// in the app. 95deg = horizontal left-to-right (matches the wordmark).
+const BRAND_GRADIENT = 'linear-gradient(95deg, #0A2E3F 0%, #117A8B 50%, #4DB3A8 100%)';
+const BRAND_DEEP = '#0A2E3F';
+const BRAND_AZURE = '#117A8B';
+const BRAND_TEAL = '#4DB3A8';
+const BODY_BG = '#f4f7fa';                // neutral page surround
+const CONTAINER_BG = '#ffffff';            // crisp white card
+
 /**
- * Build base email HTML - Yathic design (Reset Your Password reference)
- * Vertical gradient background, gradient logo/heading, CTA with arrow, info box with padlock
+ * Build base email HTML — brand-aligned design.
+ * Top brand-gradient strip, logo lockup, big heading, optional gradient CTA,
+ * optional info box, footer with brand-azure links.
+ *
  * @param {Object} options
- * @param {string} options.heading - Main heading (e.g. "Reset Your Password")
- * @param {string} [options.headingHighlight] - Optional first word to style in purple (e.g. "Reset")
- * @param {string} options.bodyHtml - Main body content (HTML)
- * @param {string} options.buttonText - CTA button text
- * @param {string} options.buttonLink - CTA button href
- * @param {string[]} options.infoBoxLines - Info box lines (array of strings)
- * @param {string} [options.rsvpButtonsHtml] - Optional RSVP Accept/Decline buttons HTML
+ * @param {string} options.heading                — main heading (e.g. "Reset Your Password")
+ * @param {string} [options.headingHighlight]     — optional first word painted in brand-azure
+ * @param {string} options.bodyHtml               — main body content (HTML)
+ * @param {string} options.buttonText             — CTA button text
+ * @param {string} options.buttonLink             — CTA button href
+ * @param {string[]} options.infoBoxLines         — info box lines (array of strings)
+ * @param {string} [options.rsvpButtonsHtml]      — optional RSVP Accept/Decline buttons HTML
  */
 function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, buttonLink, infoBoxLines, rsvpButtonsHtml }) {
-  const logoHtml = LOGO_URL
-    ? `<img src="${LOGO_URL}" alt="${APP_NAME}" style="max-width: 160px; height: auto;" />`
-    : `<span style="font-size: 32px; font-weight: 600; letter-spacing: 1px; color: #5B6B9D;">${APP_NAME.toLowerCase()}</span>`;
+  // Logo: image when LOGO_URL is set (production CDN of logoFull.png), else
+  // a brand-gradient wordmark fallback so the email still feels on-brand.
+  // HTML width/height attributes are required (Outlook ignores inline styles
+  // on <img>, and the Gmail proxy collapses images without an explicit width
+  // into a tiny broken-icon).
+  const logoUrl = resolveLogoUrl();
+  const logoHtml = logoUrl
+    ? `<img src="${logoUrl}" alt="${APP_NAME}" width="180" height="44" border="0" style="width: 180px; height: 44px; max-width: 180px; display: block; margin: 0 auto; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />`
+    : `<span style="font-family: 'Bodoni Moda', Georgia, 'Times New Roman', serif; font-size: 30px; font-weight: 700; letter-spacing: -0.015em; color: ${BRAND_DEEP};">${APP_NAME}</span>`;
 
-  const lockIcon = '🔒';
-
+  // Heading — first word can be painted brand-azure for visual emphasis.
   const headingHtml = headingHighlight
-    ? `<span style="color: #6B7FBD; font-weight: 600;">${headingHighlight}</span> <span style="color: #1F2937; font-weight: 600;">${heading.slice(headingHighlight.length).trim()}</span>`
-    : `<span style="color: #132E5E;">${heading}</span>`;
+    ? `<span style="color: ${BRAND_AZURE}; font-weight: 700;">${headingHighlight}</span> <span style="color: ${BRAND_DEEP}; font-weight: 700;">${heading.slice(headingHighlight.length).trim()}</span>`
+    : `<span style="color: ${BRAND_DEEP};">${heading}</span>`;
 
   const infoBoxContent = infoBoxLines && infoBoxLines.length
     ? infoBoxLines.map((line, i) => `<p style="margin: ${i === 0 ? '0 0 4px 0' : '0'}; font-size: 12px; line-height: 15px; color: #4A5568; font-weight: 400;">${line}</p>`).join('')
     : '';
+
+  // Brand mark at the front of the info box — small gradient tile with a
+  // shield icon. Clear visual link to the brand without relying on emoji.
+  const infoIcon = `<span style="display: inline-block; width: 28px; height: 28px; line-height: 28px; border-radius: 8px; background: ${BRAND_GRADIENT}; color: #ffffff; text-align: center; font-size: 14px; font-weight: 700;">🔒</span>`;
 
   return `
 <!DOCTYPE html>
@@ -50,58 +84,59 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${APP_NAME} - ${heading}</title>
 </head>
-<body style="margin: 0; padding: 0; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; background: ${BODY_GRADIENT};">
-    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background: ${BODY_GRADIENT}; min-height: 100vh;">
+<body style="margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; background: ${BODY_BG};">
+    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background: ${BODY_BG}; min-height: 100vh;">
         <tr>
             <td align="center" style="padding: 40px 20px;">
-                <table width="600" cellpadding="0" cellspacing="0" border="0" style="background: ${CONTAINER_GRADIENT}; border-radius: 12px; box-shadow: 0 4px 24px rgba(19, 46, 94, 0.08); overflow: hidden;">
+                <table width="600" cellpadding="0" cellspacing="0" border="0" style="background: ${CONTAINER_BG}; border-radius: 16px; box-shadow: 0 1px 2px rgba(15,23,42,0.04), 0 18px 44px -14px rgba(10, 46, 63, 0.18); overflow: hidden;">
+                    <!-- Brand-gradient top strip -->
                     <tr>
-                        <td style="background: ${GRADIENT}; height: 6px; font-size: 0; line-height: 0;">&nbsp;</td>
+                        <td style="background: ${BRAND_GRADIENT}; height: 6px; font-size: 0; line-height: 0;">&nbsp;</td>
                     </tr>
                     <tr>
                         <td style="padding: 48px 40px 56px 40px;">
-                            <!-- Logo -->
+                            <!-- Logo lockup -->
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
-                                    <td align="center" style="padding-bottom: 8px;">
+                                    <td align="center" style="padding-bottom: 6px;">
                                         ${logoHtml}
                                     </td>
                                 </tr>
                                 <tr>
                                     <td align="center" style="padding-bottom: 40px;">
-                                        <p style="margin: 0; font-size: 11px; line-height: 14px; color: #6B7280; font-weight: 500;">End to End Compliance Made Easy!</p>
+                                        <p style="margin: 0; font-size: 11px; line-height: 14px; color: #64748b; font-weight: 600; letter-spacing: 0.10em; text-transform: uppercase;">Charity Compliance Platform</p>
                                     </td>
                                 </tr>
                             </table>
-                            
+
                             <!-- Heading -->
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
-                                    <td align="center" style="padding-bottom: 28px;">
-                                        <h1 style="margin: 0; font-size: 32px; line-height: 42px; font-weight: 600; text-align: center;">${headingHtml}</h1>
+                                    <td align="center" style="padding-bottom: 24px;">
+                                        <h1 style="margin: 0; font-family: 'Bodoni Moda', Georgia, 'Times New Roman', serif; font-size: 32px; line-height: 1.15; font-weight: 700; letter-spacing: -0.018em; text-align: center;">${headingHtml}</h1>
                                     </td>
                                 </tr>
                             </table>
-                            
+
                             <!-- Body -->
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
-                                    <td align="center" style="padding: 0 24px 32px;">
+                                    <td align="center" style="padding: 0 24px 32px; font-size: 14px; line-height: 1.6; color: #475569;">
                                         ${bodyHtml}
                                     </td>
                                 </tr>
                             </table>
-                            
-                            <!-- CTA Button (only when buttonText + buttonLink provided) -->
+
+                            <!-- CTA Button — brand gradient, brand-tinted shadow -->
                             ${(buttonText && buttonLink) ? `
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
                                     <td align="center" style="padding-bottom: 36px;">
                                         <table cellpadding="0" cellspacing="0" border="0" align="center">
                                             <tr>
-                                                <td align="center" style="background: ${GRADIENT}; border-radius: 50px; box-shadow: 0px 4px 20px rgba(154, 120, 236, 0.45);">
-                                                    <a href="${buttonLink}" style="display: inline-block; padding: 16px 36px; text-decoration: none; color: #FFFFFF; font-size: 15px; font-weight: 600; border-radius: 50px;">
-                                                        ${buttonText} ↗
+                                                <td align="center" style="background: ${BRAND_GRADIENT}; border-radius: 999px; box-shadow: 0 1px 2px rgba(10, 46, 63, 0.22), 0 8px 22px -8px rgba(10, 46, 63, 0.45);">
+                                                    <a href="${buttonLink}" style="display: inline-block; padding: 14px 32px; text-decoration: none; color: #FFFFFF; font-size: 14px; font-weight: 700; letter-spacing: 0.005em; border-radius: 999px;">
+                                                        ${buttonText} →
                                                     </a>
                                                 </td>
                                             </tr>
@@ -111,18 +146,19 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
                             </table>
                             ` : ''}
                             ${rsvpButtonsHtml || ''}
-                            <!-- Info Box -->
+
+                            <!-- Info Box — brand-azure rim, gradient icon tile -->
                             ${infoBoxContent ? `
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
                                     <td align="center" style="padding: 0 24px 32px;">
-                                        <table cellpadding="0" cellspacing="0" border="0" align="center" style="max-width: 440px; border: 1px solid #E5E7EB; border-radius: 10px; background: #FFFFFF;">
+                                        <table cellpadding="0" cellspacing="0" border="0" align="center" style="max-width: 460px; border: 1px solid rgba(17, 122, 139, 0.18); border-radius: 12px; background: rgba(17, 122, 139, 0.04);">
                                             <tr>
-                                                <td style="padding: 18px 20px;">
+                                                <td style="padding: 16px 20px;">
                                                     <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                                         <tr>
-                                                            <td width="36" valign="top" style="padding-right: 14px; font-size: 18px;">${lockIcon}</td>
-                                                            <td>
+                                                            <td width="40" valign="top" style="padding-right: 12px;">${infoIcon}</td>
+                                                            <td valign="middle">
                                                                 ${infoBoxContent}
                                                             </td>
                                                         </tr>
@@ -134,19 +170,19 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
                                 </tr>
                             </table>
                             ` : ''}
-                            
+
                             <!-- Footer -->
                             <table width="100%" cellpadding="0" cellspacing="0" border="0">
                                 <tr>
                                     <td align="center" style="border-top: 1px solid #E5E7EB; padding-top: 28px;">
-                                        <p style="margin: 0 0 8px 0; font-size: 12px; line-height: 18px; color: #6B7280; font-weight: 400;">© ${new Date().getFullYear()} ${APP_NAME}. All rights reserved.</p>
-                                        <p style="margin: 0 0 8px 0; font-size: 12px; line-height: 18px; color: #6B7280; font-weight: 400;">
-                                            Need help? <a href="mailto:${SUPPORT_EMAIL}" style="color: #9A78EC; text-decoration: none;">${SUPPORT_EMAIL}</a>
+                                        <p style="margin: 0 0 8px 0; font-size: 12px; line-height: 18px; color: #94a3b8; font-weight: 400;">© ${new Date().getFullYear()} ${APP_NAME}. All rights reserved.</p>
+                                        <p style="margin: 0 0 8px 0; font-size: 12px; line-height: 18px; color: #94a3b8; font-weight: 400;">
+                                            Need help? <a href="mailto:${SUPPORT_EMAIL}" style="color: ${BRAND_AZURE}; text-decoration: none; font-weight: 600;">${SUPPORT_EMAIL}</a>
                                         </p>
                                         <p style="margin: 0; font-size: 12px; line-height: 18px; font-weight: 400;">
-                                            <a href="#" style="color: #9A78EC; text-decoration: none;">Privacy Policy</a>
-                                            <span style="color: #6B7280;"> • </span>
-                                            <a href="#" style="color: #9A78EC; text-decoration: none;">Terms</a>
+                                            <a href="#" style="color: ${BRAND_AZURE}; text-decoration: none; font-weight: 600;">Privacy Policy</a>
+                                            <span style="color: #cbd5e1;"> • </span>
+                                            <a href="#" style="color: ${BRAND_AZURE}; text-decoration: none; font-weight: 600;">Terms</a>
                                         </p>
                                     </td>
                                 </tr>
@@ -407,7 +443,7 @@ class EmailService {
     const bodyHtml = `
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${recipientName},</p>
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Your verification code is:</p>
-      <p style="margin: 16px 0; font-size: 28px; font-weight: 700; letter-spacing: 6px; text-align: center; color: #132E5E;">${code}</p>
+      <p style="margin: 16px 0; font-size: 28px; font-weight: 700; letter-spacing: 6px; text-align: center; color: #0A2E3F;">${code}</p>
       <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Enter this code to complete your login. It expires in 10 minutes.</p>
     `;
 
@@ -527,14 +563,14 @@ class EmailService {
       : '';
 
     const meetingLinkHtml = meetingLink
-      ? `<p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Meeting Link:</strong> <a href="${meetingLink}" style="color: #9A78EC; text-decoration: none;">${meetingLink}</a></p>`
+      ? `<p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Meeting Link:</strong> <a href="${meetingLink}" style="color: #117A8B; text-decoration: none;">${meetingLink}</a></p>`
       : '';
 
     const bodyHtml = `
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
       <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">You have been invited to a meeting by <strong>${organizerName}</strong>.</p>
       <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
-        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #132E5E;">${meetingTitle}</p>
+        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #0A2E3F;">${meetingTitle}</p>
         <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Date:</strong> ${formattedDate}</p>
         <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Time:</strong> ${formattedTime} (${durationMinutes} minutes)</p>
         ${location ? `<p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Location:</strong> ${location}</p>` : ''}
@@ -576,7 +612,7 @@ class EmailService {
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
       <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;"><strong>${addedByName}</strong> has added a new note to the meeting <strong>${meetingTitle}</strong>.</p>
       <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
-        <p style="margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: #132E5E;">Note:</p>
+        <p style="margin: 0 0 8px 0; font-size: 12px; font-weight: 600; color: #0A2E3F;">Note:</p>
         <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333;">${noteContent}</p>
       </div>
     `;
@@ -730,7 +766,7 @@ class EmailService {
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
       <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">A new <strong>${typeLabel}</strong> approval request requires your action. ${submitterName ? `<strong>${submitterName}</strong> submitted it.` : ''}</p>
       <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
-        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #132E5E;">Request Details:</p>
+        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #0A2E3F;">Request Details:</p>
         <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Type:</strong> ${typeLabel}</p>
         <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Item:</strong> ${entityTitle}</p>
         <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Your Role:</strong> Level ${approvalLevel} approver - ${urgencyText}</p>
@@ -802,7 +838,7 @@ class EmailService {
         <p style="margin: 0; font-size: 16px; font-weight: 700; color: ${statusColor};">${statusText}</p>
       </div>
       <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
-        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #132E5E;">Decision Details:</p>
+        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #0A2E3F;">Decision Details:</p>
         <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Request:</strong> ${entityTitle}</p>
         <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Decided By:</strong> ${decidedByName}</p>
         ${stepsInfo}
@@ -856,11 +892,11 @@ class EmailService {
       <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;">Hi ${recipientName},</p>
       <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center;"><strong>${escalatedByName}</strong> is requesting your input/opinion on a ${typeLabel.toLowerCase()} before they make their final decision.</p>
       <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
-        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #132E5E;">Request for Opinion:</p>
+        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #0A2E3F;">Request for Opinion:</p>
         <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Request Type:</strong> ${typeLabel}</p>
         <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Item:</strong> ${entityTitle}</p>
         <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Requested By:</strong> ${escalatedByName}</p>
-        ${requestComments ? `<p style="margin: 12px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Context:</strong></p><p style="margin: 0; padding: 8px; background: #FFFFFF; border-left: 3px solid #9A78EC; font-size: 12px; color: #333333;">${requestComments}</p>` : ''}
+        ${requestComments ? `<p style="margin: 12px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Context:</strong></p><p style="margin: 0; padding: 8px; background: #FFFFFF; border-left: 3px solid #117A8B; font-size: 12px; color: #333333;">${requestComments}</p>` : ''}
       </div>
     `;
 
