@@ -164,6 +164,7 @@ import checklistRoutes from './routes/platform/checklistRoutes.js';
 import itRegisterRoutes from './routes/platform/itRegisterRoutes.js';
 import offboardingRoutes from './routes/platform/offboardingRoutes.js';
 import sweepFundsRoutes from './routes/platform/sweepFundsRoutes.js';
+import chatRoutes from './routes/platform/chatRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -210,6 +211,7 @@ if (isModuleEnabled('project-delivery')) app.use('/api/v1/platform/project-deliv
 if (isModuleEnabled('it-register')) app.use('/api/v1/platform/it-register', itRegisterRoutes);
 if (isModuleEnabled('offboarding')) app.use('/api/v1/platform/offboarding', offboardingRoutes);
 if (isModuleEnabled('sweep-funds')) app.use('/api/v1/platform/sweep-funds', sweepFundsRoutes);
+if (isModuleEnabled('chat')) app.use('/api/v1/platform/chat', chatRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

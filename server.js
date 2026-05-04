@@ -17,7 +17,7 @@ dotenv.config({ override: true });
 // before any app modules import the database layer.
 dns.setServers(['1.1.1.1', '8.8.8.8']);
 
-const [{ default: app, initializeApp }, { closeRouterDB }, { closeAllConnections }, { default: emailService }, { logError, logInfo, logWarn }, { startRegistrationLicenseReminderScheduler }, { startMeetingReminderScheduler }, { runRegistrationLicenseRemindersOnce }, { runMeetingRemindersOnce }, { startFinanceCloseScheduler }, { startFiscalReportReminderScheduler, runFiscalReportRemindersOnce }, { startSuitabilityRenewalScheduler, runSuitabilityRenewalsOnce }, { startSubscriptionMaintenanceReminderScheduler, runSubscriptionMaintenanceRemindersOnce }] = await Promise.all([
+const [{ default: app, initializeApp }, { closeRouterDB }, { closeAllConnections }, { default: emailService }, { logError, logInfo, logWarn }, { startRegistrationLicenseReminderScheduler }, { startMeetingReminderScheduler }, { runRegistrationLicenseRemindersOnce }, { runMeetingRemindersOnce }, { startFinanceCloseScheduler }, { startFiscalReportReminderScheduler, runFiscalReportRemindersOnce }, { startSuitabilityRenewalScheduler, runSuitabilityRenewalsOnce }, { startSubscriptionMaintenanceReminderScheduler, runSubscriptionMaintenanceRemindersOnce }, { startChatRetentionScheduler }] = await Promise.all([
   import('./src/app.js'),
   import('./src/config/database.js'),
   import('./src/db/connectionManager.js'),
@@ -30,7 +30,8 @@ const [{ default: app, initializeApp }, { closeRouterDB }, { closeAllConnections
   import('./src/services/checklistSchedulerService.js'),
   import('./src/services/fiscalReportReminderService.js'),
   import('./src/services/suitabilityReminderService.js'),
-  import('./src/services/subscriptionMaintenanceReminderService.js')
+  import('./src/services/subscriptionMaintenanceReminderService.js'),
+  import('./src/services/chatRetentionService.js')
 ]);
 
 const PORT = process.env.PORT || 5000;
@@ -59,6 +60,8 @@ const startServer = async () => {
         startFiscalReportReminderScheduler();
         startSuitabilityRenewalScheduler();
         startSubscriptionMaintenanceReminderScheduler();
+        // Chat retention: daily sweep that purges expired attachments per channel.retention_days
+        startChatRetentionScheduler();
 
         // Optional: run catch-up reminders immediately on boot (useful after downtime).
         // These are deduped (notifications) and phase-tracked (meetings), so safe on restarts.

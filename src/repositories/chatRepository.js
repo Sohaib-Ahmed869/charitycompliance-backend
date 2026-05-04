@@ -1,0 +1,909 @@
+/**
+ * Chat Repository
+ *
+ * Per-tenant chat data access. Auto-provisions org-wide channels (general,
+ * announcements) plus a department channel per Department on the first
+ * channel-list read for an org. DM channels are created on demand.
+ */
+
+import mongoose from 'mongoose';
+import chatChannelSchema from '../db/schemas/platform/chatChannelSchema.js';
+import chatChannelMembershipSchema from '../db/schemas/platform/chatChannelMembershipSchema.js';
+import chatMessageSchema from '../db/schemas/platform/chatMessageSchema.js';
+import departmentSchema from '../db/schemas/platform/departmentSchema.js';
+import boardMemberSchema from '../db/schemas/platform/boardMemberSchema.js';
+import organizationSchema from '../db/schemas/platform/organizationSchema.js';
+import chatMessageStarSchema from '../db/schemas/platform/chatMessageStarSchema.js';
+import policySchema from '../db/schemas/platform/policySchema.js';
+import riskSchema from '../db/schemas/platform/riskSchema.js';
+import trainingProgramSchema from '../db/schemas/platform/trainingProgramSchema.js';
+import meetingSchema from '../db/schemas/platform/meetingSchema.js';
+import complaintSchema from '../db/schemas/platform/complaintSchema.js';
+import expenseSchema from '../db/schemas/platform/expenseSchema.js';
+import partnerVettingSchema from '../db/schemas/platform/partnerVettingSchema.js';
+import fundingAgreementSchema from '../db/schemas/platform/fundingAgreementSchema.js';
+import projectRegisterSchema from '../db/schemas/platform/projectRegisterSchema.js';
+import socialMediaCampaignSchema from '../db/schemas/platform/socialMediaCampaignSchema.js';
+import assetSchema from '../db/schemas/platform/assetSchema.js';
+import legalDocumentSchema from '../db/schemas/platform/legalDocumentSchema.js';
+import donorSchema from '../db/schemas/platform/donorSchema.js';
+import { UserRepository } from './userRepository.js';
+import { getFileUrl, deleteFromS3 } from '../services/s3Service.js';
+
+/**
+ * Modules surfaced in the #-mention picker. Each entry is a stable mention
+ * target that points to the module's landing page. `moduleId` matches the
+ * frontend permissions system — picker filters out modules the user can't view.
+ */
+export const COMPLIANCE_MODULE_TARGETS = [
+  { id: 'policies',           label: 'Policies & Procedures',  href: '/policies',                          moduleId: 'policies' },
+  { id: 'risks',              label: 'Risk Register',          href: '/risk-management',                   moduleId: 'risk_mgmt' },
+  { id: 'trainings',          label: 'Training',               href: '/human-resources',                   moduleId: 'human_resources' },
+  { id: 'meetings',           label: 'Meetings',               href: '/meetings',                          moduleId: 'dashboard' },
+  { id: 'complaints',         label: 'Complaints',             href: '/complaints/dashboard',              moduleId: 'complaints' },
+  { id: 'coi',                label: 'Conflict of Interest',   href: '/coi',                               moduleId: 'coi' },
+  { id: 'expenses',           label: 'Financial Controls',     href: '/finances/financial-controls',       moduleId: 'financial_mgmt' },
+  { id: 'sweep-funds',        label: 'Sweep Funds',            href: '/finances/sweep-funds',              moduleId: 'financial_mgmt' },
+  { id: 'workflows',          label: 'Approval Workflows',     href: '/approval-workflows',                moduleId: 'approval_workflow' },
+  { id: 'audit-trail',        label: 'Audit Trail',            href: '/audit-trail',                       moduleId: 'audit_trail' },
+  { id: 'charity-admin',      label: 'Charity Administration', href: '/charity-administration',            moduleId: 'charity_admin' },
+  { id: 'people',             label: 'Responsible People',     href: '/charity-administration/responsible-people', moduleId: 'charity_admin' },
+  { id: 'donors',             label: 'Donors',                 href: '/grants-donors/donors',              moduleId: 'grants_donors' },
+  { id: 'partner-vetting',    label: 'Partner Vetting',        href: '/grants-donors/partner-vetting',     moduleId: 'grants_donors' },
+  { id: 'funding-agreements', label: 'Funding Agreements',     href: '/grants-donors/funding-agreements',  moduleId: 'grants_donors' },
+  { id: 'projects',           label: 'Project Monitoring',     href: '/grants-donors/project-monitoring',  moduleId: 'grants_donors' },
+  { id: 'donation-boxes',     label: 'Donation Boxes',         href: '/donation-boxes',                    moduleId: 'donation_boxes' },
+  { id: 'social-campaigns',   label: 'Marketing Campaigns',    href: '/social-media-campaigns',            moduleId: 'social_media_campaigns' },
+  { id: 'volunteers',         label: 'Volunteers',             href: '/volunteers',                        moduleId: 'human_resources' },
+  { id: 'assets',             label: 'IT Asset Register',      href: '/assets',                            moduleId: 'asset_mgmt' },
+  { id: 'bcp',                label: 'Business Continuity',    href: '/bcp',                               moduleId: 'bcp' },
+  { id: 'legal-docs',         label: 'Legal Documents',        href: '/legal-documents',                   moduleId: 'legal_docs' },
+  { id: 'reporting',          label: 'Reporting & Compliance', href: '/reporting',                         moduleId: 'reporting' },
+  { id: 'fiscal-reports',     label: 'Fiscal Reports',         href: '/finance/fiscal-reports',            moduleId: 'reporting' },
+  { id: 'bas-lodgement',      label: 'BAS Lodgement',          href: '/finance/bas-lodgement',             moduleId: 'reporting' },
+  { id: 'dashboard',          label: 'Dashboard',              href: '/dashboard',                         moduleId: 'dashboard' },
+  { id: 'calendar',           label: 'Calendar',               href: '/calendar',                          moduleId: 'dashboard' }
+];
+
+/**
+ * Searchable entity collections. Each entry tells the search how to query a
+ * collection, how to render a result, and which moduleId protects access.
+ *
+ * NOTE: only schemas with non-encrypted, plain-string title fields are listed.
+ * Adding a schema whose title field is encrypted requires using its `<field>_hash`
+ * blind index instead of a regex (encrypted fields can only be matched exactly).
+ */
+const COMPLIANCE_ENTITY_TARGETS = [
+  { type: 'policy',           label: 'Policy',            modelName: 'Policy',              schema: policySchema,              titleField: 'title',            moduleId: 'policies',                hrefBuilder: (id) => `/policies/${id}` },
+  { type: 'risk',             label: 'Risk',              modelName: 'Risk',                schema: riskSchema,                titleField: 'title',            moduleId: 'risk_mgmt',               hrefBuilder: (id) => `/risk-management/${id}` },
+  { type: 'training',         label: 'Training',          modelName: 'TrainingProgram',     schema: trainingProgramSchema,     titleField: 'title',            moduleId: 'human_resources',         hrefBuilder: (id) => `/human-resources/trainings/${id}` },
+  { type: 'meeting',          label: 'Meeting',           modelName: 'Meeting',             schema: meetingSchema,             titleField: 'title',            moduleId: 'dashboard',               hrefBuilder: (id) => `/meetings/${id}` },
+  { type: 'complaint',        label: 'Complaint',         modelName: 'Complaint',           schema: complaintSchema,           titleField: 'complaint_title',  moduleId: 'complaints',              hrefBuilder: (id) => `/complaints/${id}` },
+  { type: 'expense',          label: 'Expense',           modelName: 'Expense',             schema: expenseSchema,             titleField: 'expense_name',     moduleId: 'financial_mgmt',          hrefBuilder: (id) => `/expenses/${id}` },
+  { type: 'partner',          label: 'Partner',           modelName: 'PartnerVetting',      schema: partnerVettingSchema,      titleField: 'name',             moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/partner-vetting/${id}` },
+  { type: 'funding-agreement',label: 'Funding Agreement', modelName: 'FundingAgreement',    schema: fundingAgreementSchema,    titleField: 'agreement_title',  moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/funding-agreements/${id}` },
+  { type: 'project',          label: 'Project',           modelName: 'ProjectRegister',     schema: projectRegisterSchema,     titleField: 'project_name',     moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/project-monitoring/${id}` },
+  { type: 'social-campaign',  label: 'Marketing Campaign',modelName: 'SocialMediaCampaign', schema: socialMediaCampaignSchema, titleField: 'title',            moduleId: 'social_media_campaigns',  hrefBuilder: (id) => `/social-media-campaigns/${id}` },
+  { type: 'asset',            label: 'IT Asset',          modelName: 'Asset',               schema: assetSchema,               titleField: 'asset_name',       moduleId: 'asset_mgmt',              hrefBuilder: (id) => `/assets/${id}` },
+  { type: 'legal-doc',        label: 'Legal Document',    modelName: 'LegalDocument',       schema: legalDocumentSchema,       titleField: 'document_name',    moduleId: 'legal_docs',              hrefBuilder: () => `/legal-documents` },
+  { type: 'donor',            label: 'Donor',             modelName: 'Donor',               schema: donorSchema,               titleField: 'name',             moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/donors/${id}` }
+];
+
+/** Module IDs that are always granted to every user (mirrors the frontend ALWAYS_GRANTED set). */
+const ALWAYS_GRANTED_MODULES = new Set(['dashboard', 'support_tickets']);
+
+/** Returns true if a permissions array grants view access for `moduleId`. */
+function canViewModuleSync(permissions, moduleId) {
+  if (!moduleId) return true;
+  if (ALWAYS_GRANTED_MODULES.has(moduleId)) return true;
+  if (!Array.isArray(permissions)) return false;
+  if (permissions.includes('*:*')) return true;
+  return permissions.includes(`module:${moduleId}:view`)
+      || permissions.includes(`module:${moduleId}:edit`)
+      || permissions.includes(`module:${moduleId}:delete`);
+}
+
+const toObjectId = (v) => (v instanceof mongoose.Types.ObjectId ? v : new mongoose.Types.ObjectId(String(v)));
+
+/**
+ * `req.orgId` is the slug used to find the tenant DB (e.g. "compliance_212312"),
+ * NOT a Mongo ObjectId. Tenant-DB documents store `org_id` as the Organization
+ * document's _id. Resolve once per request and cache on the repo instance.
+ */
+
+export class ChatRepository {
+  constructor(tenantDb) {
+    this.tenantDb = tenantDb;
+    // Side-effect: register User on this connection so .populate('sender_user_id') decrypts
+    // first_name / last_name / email via the encrypt plugin's find post-hook.
+    new UserRepository(tenantDb);
+    tenantDb.models.Department || tenantDb.model('Department', departmentSchema);
+    tenantDb.models.BoardMember || tenantDb.model('BoardMember', boardMemberSchema);
+    tenantDb.models.Organization || tenantDb.model('Organization', organizationSchema);
+
+    this.Channel = tenantDb.models.ChatChannel || tenantDb.model('ChatChannel', chatChannelSchema);
+    this.Membership = tenantDb.models.ChatChannelMembership ||
+      tenantDb.model('ChatChannelMembership', chatChannelMembershipSchema);
+    this.Message = tenantDb.models.ChatMessage || tenantDb.model('ChatMessage', chatMessageSchema);
+    this.Star = tenantDb.models.ChatMessageStar || tenantDb.model('ChatMessageStar', chatMessageStarSchema);
+    this.Department = tenantDb.model('Department');
+    this.BoardMember = tenantDb.model('BoardMember');
+    this.Organization = tenantDb.model('Organization');
+    this.User = tenantDb.model('User');
+  }
+
+  /** Resolve the Organization _id (real ObjectId) from the tenant DB. */
+  async _resolveOrgObjectId() {
+    if (this._orgObjectId) return this._orgObjectId;
+    const org = await this.Organization.findOne({}).select('_id').lean();
+    if (!org) throw new Error('ORG_NOT_FOUND');
+    this._orgObjectId = org._id;
+    return this._orgObjectId;
+  }
+
+  // ---------- provisioning ----------
+
+  /**
+   * Idempotently ensure the standing channels exist for an org and that every
+   * active user is a member of the org-wide channels. Department channels get
+   * the corresponding department's BoardMember.user_id set as members.
+   *
+   * Cheap to run on every channel-list read — uses upsert + existence checks.
+   */
+  async ensureCoreChannels(_orgIdSlug, currentUserId) {
+    const org = await this._resolveOrgObjectId();
+
+    const orgWide = [
+      { kind: 'general',       name: 'general',       description: 'Organisation-wide. Admins post; everyone reads.', posting_open: false },
+      { kind: 'announcements', name: 'announcements', description: 'Important notices. Admins only.',                  posting_open: false }
+    ];
+
+    for (const def of orgWide) {
+      await this.Channel.updateOne(
+        { org_id: org, kind: def.kind },
+        { $setOnInsert: { ...def, org_id: org, created_by_user_id: toObjectId(currentUserId) } },
+        { upsert: true }
+      );
+    }
+
+    // Department channels — one per active Department.
+    const departments = await this.Department.find({ org_id: org, is_active: true })
+      .select('_id name')
+      .lean();
+
+    for (const d of departments) {
+      await this.Channel.updateOne(
+        { org_id: org, kind: 'department', department_id: d._id },
+        {
+          $setOnInsert: {
+            org_id: org,
+            kind: 'department',
+            department_id: d._id,
+            name: d.name,
+            description: `Department channel for ${d.name}`,
+            posting_open: true,
+            created_by_user_id: toObjectId(currentUserId)
+          }
+        },
+        { upsert: true }
+      );
+    }
+
+    await this._syncMembershipsForUser(org, toObjectId(currentUserId));
+
+    // Belt-and-braces sweeps so the channel list is never stranded:
+    //   - Every active user is in general + announcements.
+    //   - Every org owner / admin is in every department channel (visibility
+    //     across all departments).
+    await this._addAllActiveUsersToOrgWideChannels(org);
+    await this._addAdminsToAllDepartmentChannels(org);
+  }
+
+  async _addAllActiveUsersToOrgWideChannels(orgObjectId) {
+    const orgWideChannels = await this.Channel.find({
+      org_id: orgObjectId,
+      kind: { $in: ['general', 'announcements'] }
+    }).select('_id').lean();
+    if (orgWideChannels.length === 0) return;
+
+    const users = await this.User.find({ status: 'active' }).select('_id').lean();
+    if (users.length === 0) return;
+
+    const ops = [];
+    for (const c of orgWideChannels) {
+      for (const u of users) {
+        ops.push({
+          updateOne: {
+            filter: { channel_id: c._id, user_id: u._id },
+            update: { $setOnInsert: { org_id: orgObjectId, channel_id: c._id, user_id: u._id, joined_at: new Date() } },
+            upsert: true
+          }
+        });
+      }
+    }
+    if (ops.length) await this.Membership.bulkWrite(ops, { ordered: false });
+  }
+
+  /**
+   * Org owners need visibility into every department conversation. Identified
+   * by `User.is_org_owner: true` (the only admin signal stored in the tenant
+   * DB — JWT `roles` are not persisted).
+   */
+  async _addAdminsToAllDepartmentChannels(orgObjectId) {
+    const deptChannels = await this.Channel.find({
+      org_id: orgObjectId,
+      kind: 'department'
+    }).select('_id').lean();
+    if (deptChannels.length === 0) return;
+
+    const admins = await this.User.find({ status: 'active', is_org_owner: true })
+      .select('_id')
+      .lean();
+    if (admins.length === 0) return;
+
+    const ops = [];
+    for (const c of deptChannels) {
+      for (const a of admins) {
+        ops.push({
+          updateOne: {
+            filter: { channel_id: c._id, user_id: a._id },
+            update: { $setOnInsert: { org_id: orgObjectId, channel_id: c._id, user_id: a._id, joined_at: new Date() } },
+            upsert: true
+          }
+        });
+      }
+    }
+    if (ops.length) await this.Membership.bulkWrite(ops, { ordered: false });
+  }
+
+  /**
+   * Make sure the current user is a member of every channel they should see:
+   *   - general / announcements: everyone
+   *   - department: anyone whose BoardMember.user_id matches and whose
+   *     BoardMember.department equals the department's name (matches existing
+   *     denormalised pattern in BoardMember)
+   *   - dm: only added explicitly when the DM is created
+   */
+  async _syncMembershipsForUser(orgObjectId, userId) {
+    const org = orgObjectId instanceof mongoose.Types.ObjectId
+      ? orgObjectId
+      : await this._resolveOrgObjectId();
+    const user = toObjectId(userId);
+
+    const channels = await this.Channel.find({
+      org_id: org,
+      kind: { $in: ['general', 'announcements', 'department'] }
+    }).select('_id kind department_id').lean();
+
+    if (channels.length === 0) return;
+
+    const departmentIds = channels.filter((c) => c.kind === 'department').map((c) => c.department_id);
+    const departmentDocs = departmentIds.length
+      ? await this.Department.find({ _id: { $in: departmentIds } }).select('_id name').lean()
+      : [];
+    const departmentNameById = new Map(departmentDocs.map((d) => [String(d._id), d.name]));
+
+    // Department names this user belongs to (denormalised on BoardMember).
+    const memberRecords = await this.BoardMember.find({
+      org_id: org,
+      user_id: user
+    }).select('department').lean();
+    const userDeptNames = new Set(
+      memberRecords.map((m) => (m.department || '').trim()).filter(Boolean)
+    );
+
+    const ops = [];
+    for (const c of channels) {
+      let shouldBeMember = c.kind !== 'department';
+      if (c.kind === 'department') {
+        const dname = departmentNameById.get(String(c.department_id));
+        if (dname && userDeptNames.has(dname)) shouldBeMember = true;
+      }
+      if (!shouldBeMember) continue;
+
+      ops.push({
+        updateOne: {
+          filter: { channel_id: c._id, user_id: user },
+          update: { $setOnInsert: { org_id: org, channel_id: c._id, user_id: user, joined_at: new Date() } },
+          upsert: true
+        }
+      });
+    }
+
+    if (ops.length) await this.Membership.bulkWrite(ops, { ordered: false });
+  }
+
+  // ---------- queries ----------
+
+  async listChannelsForUser(_orgIdSlug, userId) {
+    const org = await this._resolveOrgObjectId();
+    const user = toObjectId(userId);
+
+    const memberships = await this.Membership.find({ org_id: org, user_id: user })
+      .select('channel_id last_read_at notify')
+      .lean();
+
+    if (memberships.length === 0) return [];
+
+    const byChannel = new Map(memberships.map((m) => [String(m.channel_id), m]));
+    const channelIds = memberships.map((m) => m.channel_id);
+
+    const channels = await this.Channel.find({
+      _id: { $in: channelIds },
+      is_archived: false
+    })
+      .populate('member_user_ids', 'first_name last_name email profile_picture_key')
+      .lean();
+
+    // Unread counts: messages newer than last_read_at, not authored by the user.
+    const counts = await Promise.all(channels.map(async (c) => {
+      const m = byChannel.get(String(c._id));
+      const since = m?.last_read_at || new Date(0);
+      const n = await this.Message.countDocuments({
+        channel_id: c._id,
+        sender_user_id: { $ne: user },
+        is_deleted: false,
+        createdAt: { $gt: since }
+      });
+      return [String(c._id), n];
+    }));
+    const countByChannel = new Map(counts);
+
+    return channels.map((c) => ({
+      ...c,
+      notify: byChannel.get(String(c._id))?.notify || 'all',
+      unread_count: countByChannel.get(String(c._id)) || 0
+    }));
+  }
+
+  async getChannelForUser(_orgIdSlug, channelId, userId) {
+    const org = await this._resolveOrgObjectId();
+    const ch = await this.Channel.findOne({ _id: toObjectId(channelId), org_id: org }).lean();
+    if (!ch) return null;
+    const member = await this.Membership.findOne({
+      channel_id: ch._id,
+      user_id: toObjectId(userId)
+    }).lean();
+    if (!member) return null;
+    return ch;
+  }
+
+  async listMessages(channelId, { limit = 50, beforeId = null } = {}) {
+    const query = { channel_id: toObjectId(channelId), is_deleted: false };
+    if (beforeId) query._id = { $lt: toObjectId(beforeId) };
+    const docs = await this._populateForResponse(
+      this.Message.find(query).sort({ _id: -1 }).limit(Math.min(limit, 200))
+    );
+    return (docs || []).reverse();
+  }
+
+  async createMessage({ orgId: _orgIdSlug, channelId, senderUserId, body, replyToMessageId = null, mentionedUserIds = [], attachments = [] }) {
+    const orgObjectId = await this._resolveOrgObjectId();
+    const channel = await this.Channel.findOne({
+      _id: toObjectId(channelId),
+      org_id: orgObjectId
+    }).lean();
+    if (!channel) throw new Error('CHANNEL_NOT_FOUND');
+
+    const member = await this.Membership.findOne({
+      channel_id: channel._id,
+      user_id: toObjectId(senderUserId)
+    }).lean();
+    if (!member) throw new Error('NOT_A_MEMBER');
+
+    const trimmed = String(body || '').trim();
+    const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
+    if (!trimmed && !hasAttachments) throw new Error('EMPTY_BODY');
+
+    const doc = await this.Message.create({
+      org_id: channel.org_id,
+      channel_id: channel._id,
+      sender_user_id: toObjectId(senderUserId),
+      body: trimmed,
+      reply_to_message_id: replyToMessageId ? toObjectId(replyToMessageId) : null,
+      mentioned_user_ids: (mentionedUserIds || []).map((u) => toObjectId(u)),
+      attachments: (attachments || []).map((a) => ({
+        s3_key: String(a.s3_key || '').trim(),
+        filename: String(a.filename || '').slice(0, 240),
+        mime_type: String(a.mime_type || '').slice(0, 80),
+        size_bytes: Number(a.size_bytes) || 0
+      })).filter((a) => a.s3_key)
+    });
+
+    await this.Channel.updateOne({ _id: channel._id }, { $set: { last_message_at: doc.createdAt } });
+    // Author has implicitly read their own message.
+    await this.Membership.updateOne(
+      { channel_id: channel._id, user_id: toObjectId(senderUserId) },
+      { $set: { last_read_at: doc.createdAt } }
+    );
+
+    return await this._populateForResponse(this.Message.findById(doc._id));
+  }
+
+  async editMessage({ messageId, userId, body }) {
+    const trimmed = String(body || '').trim();
+    if (!trimmed) throw new Error('EMPTY_BODY');
+
+    const msg = await this.Message.findById(toObjectId(messageId));
+    if (!msg || msg.is_deleted) return null;
+    if (String(msg.sender_user_id) !== String(userId)) throw new Error('NOT_AUTHOR');
+
+    msg.edits.push({ body: msg.body, edited_at: new Date() });
+    msg.body = trimmed;
+    await msg.save();
+
+    return await this._populateForResponse(this.Message.findById(msg._id));
+  }
+
+  async softDeleteMessage({ messageId, userId, isAdmin }) {
+    const msg = await this.Message.findById(toObjectId(messageId));
+    if (!msg || msg.is_deleted) return null;
+    if (!isAdmin && String(msg.sender_user_id) !== String(userId)) throw new Error('NOT_AUTHOR');
+
+    msg.is_deleted = true;
+    msg.deleted_at = new Date();
+    await msg.save();
+    return msg.toObject();
+  }
+
+  async markChannelRead({ channelId, userId, at = new Date() }) {
+    await this.Membership.updateOne(
+      { channel_id: toObjectId(channelId), user_id: toObjectId(userId) },
+      { $set: { last_read_at: at } }
+    );
+  }
+
+  // ---------- reactions / pin / star ----------
+
+  /** Toggle a reaction: if user already reacted with this emoji on this message, remove it; else add. */
+  async toggleReaction({ messageId, userId, emoji }) {
+    const msg = await this.Message.findById(toObjectId(messageId));
+    if (!msg || msg.is_deleted) return null;
+    const userObjId = toObjectId(userId);
+    const cleanEmoji = String(emoji || '').trim();
+    if (!cleanEmoji) throw new Error('EMPTY_EMOJI');
+
+    const row = (msg.reactions || []).find((r) => r.emoji === cleanEmoji);
+    if (row) {
+      const had = row.user_ids.some((u) => String(u) === String(userObjId));
+      if (had) {
+        row.user_ids = row.user_ids.filter((u) => String(u) !== String(userObjId));
+        if (row.user_ids.length === 0) {
+          msg.reactions = msg.reactions.filter((r) => r.emoji !== cleanEmoji);
+        }
+      } else {
+        row.user_ids.push(userObjId);
+      }
+    } else {
+      msg.reactions.push({ emoji: cleanEmoji, user_ids: [userObjId] });
+    }
+
+    await msg.save();
+    return await this._populateForResponse(this.Message.findById(msg._id));
+  }
+
+  async setPin({ messageId, userId, pinned }) {
+    const msg = await this.Message.findById(toObjectId(messageId));
+    if (!msg || msg.is_deleted) return null;
+    msg.is_pinned = !!pinned;
+    msg.pinned_at = pinned ? new Date() : null;
+    msg.pinned_by_user_id = pinned ? toObjectId(userId) : null;
+    await msg.save();
+    return await this._populateForResponse(this.Message.findById(msg._id));
+  }
+
+  async listPinnedMessages(channelId) {
+    const docs = await this._populateForResponse(
+      this.Message.find({
+        channel_id: toObjectId(channelId),
+        is_pinned: true,
+        is_deleted: false
+      }).sort({ pinned_at: -1 })
+    );
+    return docs;
+  }
+
+  async setStar({ messageId, userId, starred }) {
+    const msg = await this.Message.findById(toObjectId(messageId)).lean();
+    if (!msg) return false;
+    if (starred) {
+      await this.Star.updateOne(
+        { user_id: toObjectId(userId), message_id: msg._id },
+        { $setOnInsert: {
+            org_id: msg.org_id,
+            user_id: toObjectId(userId),
+            message_id: msg._id,
+            channel_id: msg.channel_id
+          } },
+        { upsert: true }
+      );
+    } else {
+      await this.Star.deleteOne({ user_id: toObjectId(userId), message_id: msg._id });
+    }
+    return true;
+  }
+
+  /**
+   * Returns the user's starred messages (most recent first), populated with sender + signed avatar.
+   * Stops at `limit` items so the personal list never balloons.
+   */
+  async listStarredMessages(userId, { limit = 100 } = {}) {
+    const stars = await this.Star.find({ user_id: toObjectId(userId) })
+      .sort({ createdAt: -1 })
+      .limit(Math.min(limit, 200))
+      .lean();
+    if (stars.length === 0) return [];
+
+    const messageIds = stars.map((s) => s.message_id);
+    const messages = await this._populateForResponse(
+      this.Message.find({ _id: { $in: messageIds }, is_deleted: false })
+    );
+    // Preserve star ordering (most recent first).
+    const byId = new Map(messages.map((m) => [String(m._id), m]));
+    return stars
+      .map((s) => byId.get(String(s.message_id)))
+      .filter(Boolean);
+  }
+
+  /**
+   * Returns the set of message ids the user has starred — small, for marking
+   * star state on a list of currently rendered messages.
+   */
+  async getStarredIds(userId, messageIds) {
+    if (!messageIds || messageIds.length === 0) return new Set();
+    const ids = messageIds.map((m) => toObjectId(m));
+    const docs = await this.Star.find({ user_id: toObjectId(userId), message_id: { $in: ids } })
+      .select('message_id')
+      .lean();
+    return new Set(docs.map((d) => String(d.message_id)));
+  }
+
+  // ---------- mention picker ----------
+
+  /**
+   * Returns active users for the @-mention picker. The plugin's find post-hook
+   * decrypts first_name/last_name/email; we then resolve a signed avatar URL
+   * for the small subset that has one.
+   */
+  async listOrgUsersForMention({ search = '', limit = 30 } = {}) {
+    const q = { status: 'active' };
+    const users = await this.User.find(q)
+      .select('_id first_name last_name email profile_picture_key')
+      .limit(Math.min(limit, 100))
+      .lean();
+
+    const sLower = String(search || '').trim().toLowerCase();
+    const filtered = sLower
+      ? users.filter((u) => {
+          const full = `${u.first_name || ''} ${u.last_name || ''}`.toLowerCase();
+          return full.includes(sLower) || (u.email || '').toLowerCase().includes(sLower);
+        })
+      : users;
+
+    return await Promise.all(filtered.map(async (u) => ({
+      _id: u._id,
+      first_name: u.first_name || '',
+      last_name: u.last_name || '',
+      email: u.email || '',
+      profile_picture_url: u.profile_picture_key
+        ? await safeFileUrl(u.profile_picture_key)
+        : null
+    })));
+  }
+
+  // ---------- compliance mention search ----------
+
+  /**
+   * Returns a result set for the #-mention picker. Both modules and entities
+   * are filtered against the requesting user's `permissions`.
+   *
+   * Result composition is balanced so entities aren't crowded out by the long
+   * module list:
+   *   - Modules are capped at MODULE_CAP (and ranked by query match strength).
+   *   - Entities get up to ENTITY_PER_TYPE per collection.
+   *   - When the user typed a query, entities lead (more specific intent).
+   */
+  async searchComplianceTargets({ q = '', limit = 60, permissions = [] } = {}) {
+    const MODULE_CAP = 10;
+    const ENTITY_PER_TYPE = 5;
+    const query = String(q || '').trim();
+    const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = query ? new RegExp(escapeRe(query), 'i') : null;
+
+    const allowedModules = COMPLIANCE_MODULE_TARGETS
+      .filter((m) => canViewModuleSync(permissions, m.moduleId))
+      .filter((m) => !re || re.test(m.label) || re.test(m.id));
+
+    // Rank module matches by where the query hits the label (prefix > word > anywhere).
+    const rankedModules = re
+      ? allowedModules
+          .map((m) => {
+            const lbl = m.label.toLowerCase();
+            const qLower = query.toLowerCase();
+            let rank = 3;
+            if (lbl.startsWith(qLower)) rank = 0;
+            else if (new RegExp(`\\b${escapeRe(qLower)}`, 'i').test(m.label)) rank = 1;
+            else if (lbl.includes(qLower)) rank = 2;
+            return { m, rank };
+          })
+          .sort((a, b) => a.rank - b.rank)
+          .map((x) => x.m)
+      : allowedModules;
+
+    const moduleResults = rankedModules.slice(0, MODULE_CAP).map((m) => ({
+      kind: 'module',
+      id: m.id,
+      type: m.id,
+      label: m.label,
+      href: m.href,
+      moduleId: m.moduleId
+    }));
+
+    const allowedEntityTargets = COMPLIANCE_ENTITY_TARGETS.filter(
+      (t) => canViewModuleSync(permissions, t.moduleId)
+    );
+
+    const entityResults = [];
+    for (const t of allowedEntityTargets) {
+      const Model = this.tenantDb.models[t.modelName] || this.tenantDb.model(t.modelName, t.schema);
+      const filter = re ? { [t.titleField]: re } : {};
+      let docs = [];
+      try {
+        docs = await Model.find(filter)
+          .select(`_id ${t.titleField}`)
+          .sort({ updatedAt: -1, _id: -1 })
+          .limit(ENTITY_PER_TYPE)
+          .lean();
+      } catch {
+        // Some collections may not exist yet for a tenant — skip silently rather than 500 the picker.
+        continue;
+      }
+      for (const d of docs) {
+        entityResults.push({
+          kind: 'entity',
+          id: String(d._id),
+          type: t.type,
+          label: d[t.titleField] || `(untitled ${t.label})`,
+          typeLabel: t.label,
+          href: t.hrefBuilder(d._id),
+          moduleId: t.moduleId
+        });
+      }
+    }
+
+    // When the user typed a query, lead with entities (specific). When browsing,
+    // lead with modules (overview).
+    const ordered = re
+      ? [...entityResults, ...moduleResults]
+      : [...moduleResults, ...entityResults];
+
+    return ordered.slice(0, Math.min(limit, 100));
+  }
+
+  // ---------- channel CRUD ----------
+
+  async createPrivateChannel({ name, description = '', memberUserIds = [], creatorUserId }) {
+    const cleanName = String(name || '').trim();
+    if (!cleanName) throw new Error('NAME_REQUIRED');
+
+    const org = await this._resolveOrgObjectId();
+    const creator = toObjectId(creatorUserId);
+    const memberObjIds = Array.from(new Set(
+      [creator, ...memberUserIds.map(toObjectId)].map((id) => String(id))
+    )).map((s) => new mongoose.Types.ObjectId(s));
+
+    const channel = await this.Channel.create({
+      org_id: org,
+      kind: 'private',
+      name: cleanName,
+      description,
+      member_user_ids: memberObjIds,
+      posting_open: true,
+      created_by_user_id: creator
+    });
+
+    const ops = memberObjIds.map((uid) => ({
+      updateOne: {
+        filter: { channel_id: channel._id, user_id: uid },
+        update: { $setOnInsert: { org_id: org, channel_id: channel._id, user_id: uid, joined_at: new Date() } },
+        upsert: true
+      }
+    }));
+    if (ops.length) await this.Membership.bulkWrite(ops, { ordered: false });
+
+    return await this.Channel.findById(channel._id)
+      .populate('member_user_ids', 'first_name last_name email profile_picture_key')
+      .lean();
+  }
+
+  /** Returns true if the given user is allowed to manage members of this channel. */
+  async _canManageChannel(channelId, userId) {
+    const channel = await this.Channel.findById(toObjectId(channelId)).lean();
+    if (!channel) return false;
+    if (channel.kind === 'private') {
+      // Any member can add others to a private channel.
+      const m = await this.Membership.findOne({
+        channel_id: channel._id,
+        user_id: toObjectId(userId)
+      }).lean();
+      if (m) return true;
+    }
+    // Org owner can manage anything.
+    const u = await this.User.findById(toObjectId(userId)).select('is_org_owner').lean();
+    return !!u?.is_org_owner;
+  }
+
+  async addChannelMembers({ channelId, userIds, requesterUserId }) {
+    if (!await this._canManageChannel(channelId, requesterUserId)) throw new Error('FORBIDDEN');
+    const org = await this._resolveOrgObjectId();
+    const ch = await this.Channel.findById(toObjectId(channelId));
+    if (!ch) return null;
+
+    const newIds = userIds.map(toObjectId);
+    const existingSet = new Set(ch.member_user_ids.map((u) => String(u)));
+    const toAdd = newIds.filter((u) => !existingSet.has(String(u)));
+    if (toAdd.length === 0) return ch.toObject();
+
+    ch.member_user_ids.push(...toAdd);
+    await ch.save();
+
+    const ops = toAdd.map((uid) => ({
+      updateOne: {
+        filter: { channel_id: ch._id, user_id: uid },
+        update: { $setOnInsert: { org_id: org, channel_id: ch._id, user_id: uid, joined_at: new Date() } },
+        upsert: true
+      }
+    }));
+    if (ops.length) await this.Membership.bulkWrite(ops, { ordered: false });
+
+    return await this.Channel.findById(ch._id)
+      .populate('member_user_ids', 'first_name last_name email profile_picture_key')
+      .lean();
+  }
+
+  async removeChannelMember({ channelId, userId, requesterUserId }) {
+    // A user may always remove themselves; otherwise managers only.
+    if (String(userId) !== String(requesterUserId)) {
+      if (!await this._canManageChannel(channelId, requesterUserId)) throw new Error('FORBIDDEN');
+    }
+    const ch = await this.Channel.findById(toObjectId(channelId));
+    if (!ch) return null;
+    ch.member_user_ids = ch.member_user_ids.filter((u) => String(u) !== String(userId));
+    await ch.save();
+    await this.Membership.deleteOne({ channel_id: ch._id, user_id: toObjectId(userId) });
+    return ch.toObject();
+  }
+
+  /**
+   * Update mutable channel settings.
+   *  - Retention: allowed for org admins on any channel, AND for the creator
+   *    of a private channel (they own it; it's their data).
+   *  - Name / description: admin OR private-channel manager (any member).
+   */
+  async updateChannel({ channelId, requesterUserId, isAdmin, patch }) {
+    const ch = await this.Channel.findById(toObjectId(channelId));
+    if (!ch) return null;
+
+    const isPrivate = ch.kind === 'private';
+    const isCreator = isPrivate && String(ch.created_by_user_id) === String(requesterUserId);
+
+    const wantsRetention = patch.retention_days !== undefined;
+    if (wantsRetention && !isAdmin && !isCreator) throw new Error('FORBIDDEN');
+
+    const wantsRename = patch.name !== undefined || patch.description !== undefined;
+    if (wantsRename) {
+      const can = isAdmin || await this._canManageChannel(channelId, requesterUserId);
+      if (!can) throw new Error('FORBIDDEN');
+    }
+
+    if (patch.name !== undefined) ch.name = String(patch.name).trim();
+    if (patch.description !== undefined) ch.description = String(patch.description);
+    if (wantsRetention) {
+      const days = Number(patch.retention_days);
+      ch.retention_days = Number.isFinite(days) && days >= 0 ? Math.floor(days) : 0;
+    }
+
+    await ch.save();
+    return ch.toObject();
+  }
+
+  // ---------- retention cleanup ----------
+
+  /**
+   * Permanently deletes attachments older than each channel's retention window
+   * (retention_days = 0 means forever). Returns counts so the scheduler can log.
+   * Soft-deletes message bodies that lose all attachments AND are past retention.
+   */
+  async runRetentionSweep() {
+    const channels = await this.Channel.find({ retention_days: { $gt: 0 } })
+      .select('_id retention_days')
+      .lean();
+    let attachmentsRemoved = 0;
+    let messagesPurged = 0;
+
+    for (const c of channels) {
+      const cutoff = new Date(Date.now() - c.retention_days * 24 * 60 * 60 * 1000);
+      const expired = await this.Message.find({
+        channel_id: c._id,
+        createdAt: { $lt: cutoff },
+        $or: [
+          { 'attachments.0': { $exists: true } },
+          { is_deleted: false }
+        ]
+      }).select('_id attachments body is_deleted');
+
+      for (const m of expired) {
+        // Best-effort S3 deletes — never throw out of the sweep.
+        for (const att of (m.attachments || [])) {
+          try {
+            await deleteFromS3(att.s3_key);
+            attachmentsRemoved += 1;
+          } catch { /* ignore */ }
+        }
+        m.attachments = [];
+
+        // If the message has no body either, soft-delete it so the audit trail
+        // (edits[]) is preserved but the content disappears.
+        if (!m.body || !m.body.trim()) {
+          if (!m.is_deleted) {
+            m.is_deleted = true;
+            m.deleted_at = new Date();
+            messagesPurged += 1;
+          }
+        }
+        await m.save();
+      }
+    }
+
+    return { attachmentsRemoved, messagesPurged, channelsProcessed: channels.length };
+  }
+
+  // ---------- response helper ----------
+
+  /**
+   * Apply the standard populate set + signed avatar URLs onto messages.
+   * Accepts either a Mongoose Query (returns populated lean array/doc) OR
+   * a plain doc/array to enrich in-place.
+   */
+  async _populateForResponse(queryOrDocs) {
+    let docs;
+    if (queryOrDocs && typeof queryOrDocs.populate === 'function') {
+      docs = await queryOrDocs
+        .populate('sender_user_id', 'first_name last_name email profile_picture_key')
+        .populate('mentioned_user_ids', 'first_name last_name email profile_picture_key')
+        .populate('pinned_by_user_id', 'first_name last_name email')
+        .lean();
+    } else {
+      docs = queryOrDocs;
+    }
+    if (!docs) return docs;
+    const arr = Array.isArray(docs) ? docs : [docs];
+    await Promise.all(arr.map(async (m) => {
+      if (m.sender_user_id?.profile_picture_key) {
+        m.sender_user_id.profile_picture_url = await safeFileUrl(m.sender_user_id.profile_picture_key);
+      }
+      if (Array.isArray(m.mentioned_user_ids)) {
+        await Promise.all(m.mentioned_user_ids.map(async (u) => {
+          if (u.profile_picture_key) {
+            u.profile_picture_url = await safeFileUrl(u.profile_picture_key);
+          }
+        }));
+      }
+      if (Array.isArray(m.attachments) && m.attachments.length > 0) {
+        await Promise.all(m.attachments.map(async (a) => {
+          if (a.s3_key) a.url = await safeFileUrl(a.s3_key);
+        }));
+      }
+    }));
+    return Array.isArray(docs) ? arr : arr[0];
+  }
+}
+
+/** Never throw out of avatar URL signing — a missing/expired S3 key shouldn't 500 a chat fetch. */
+async function safeFileUrl(key) {
+  try {
+    return await getFileUrl(key, 604800);
+  } catch {
+    return null;
+  }
+}
