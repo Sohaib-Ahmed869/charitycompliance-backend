@@ -79,6 +79,17 @@ const fundingAgreementSchema = new mongoose.Schema({
     type: String,
     default: 'application/pdf'
   },
+  // Optional supporting documents (cover letters, schedules, exhibits, etc.).
+  // Stored alongside the main signable PDF.
+  attachments: [
+    {
+      file_name: { type: String, default: '' },
+      mime_type: { type: String, default: '' },
+      data_url: { type: String, default: '' },
+      size: { type: Number, default: 0 },
+      uploaded_at: { type: Date, default: Date.now }
+    }
+  ],
   internal_signature: {
     signed_at: { type: Date, default: null },
     signed_by_user_id: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },

@@ -10,6 +10,7 @@ import { ChatRepository } from '../repositories/chatRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { uploadToS3 } from '../services/s3Service.js';
+import { getOnlineUserIds } from '../services/chatSocketService.js';
 
 /**
  * Org owner OR a JWT 'admin' role count as admin for chat purposes.
@@ -28,7 +29,7 @@ const resolveIsAdmin = async (req) => {
 };
 
 export const listChannels = asyncHandler(async (req, res) => {
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   await repo.ensureCoreChannels(req.orgId, req.user.userId);
   const channels = await repo.listChannelsForUser(req.orgId, req.user.userId);
   res.json({ success: true, data: channels });
@@ -36,7 +37,7 @@ export const listChannels = asyncHandler(async (req, res) => {
 
 export const listMessages = asyncHandler(async (req, res) => {
   const { channelId } = req.params;
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
 
   const channel = await repo.getChannelForUser(req.orgId, channelId, req.user.userId);
   if (!channel) {
@@ -56,8 +57,8 @@ export const listMessages = asyncHandler(async (req, res) => {
 
 export const postMessage = asyncHandler(async (req, res) => {
   const { channelId } = req.params;
-  const { body, replyToMessageId, mentionedUserIds, attachments } = req.body || {};
-  const repo = new ChatRepository(req.tenantDb);
+  const { body, replyToMessageId, parentMessageId, mentionedUserIds, attachments } = req.body || {};
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
 
   // Posting permission: kind=general/announcements require admin (posting_open=false on those).
   const channel = await repo.getChannelForUser(req.orgId, channelId, req.user.userId);
@@ -85,6 +86,7 @@ export const postMessage = asyncHandler(async (req, res) => {
       senderUserId: req.user.userId,
       body,
       replyToMessageId,
+      parentMessageId,
       mentionedUserIds: Array.isArray(mentionedUserIds) ? mentionedUserIds : [],
       attachments: Array.isArray(attachments) ? attachments : []
     });
@@ -109,7 +111,7 @@ export const postMessage = asyncHandler(async (req, res) => {
 export const editMessage = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
   const { body } = req.body || {};
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
 
   try {
     const msg = await repo.editMessage({ messageId, userId: req.user.userId, body });
@@ -139,7 +141,7 @@ export const editMessage = asyncHandler(async (req, res) => {
 
 export const deleteMessage = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
 
   try {
     const removed = await repo.softDeleteMessage({
@@ -167,9 +169,20 @@ export const deleteMessage = asyncHandler(async (req, res) => {
 
 export const markRead = asyncHandler(async (req, res) => {
   const { channelId } = req.params;
-  const repo = new ChatRepository(req.tenantDb);
+  const { messageIds } = req.body || {};
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   await repo.markChannelRead({ channelId, userId: req.user.userId });
+  if (Array.isArray(messageIds) && messageIds.length > 0) {
+    await repo.markMessagesRead({ userId: req.user.userId, channelId, messageIds });
+  }
   res.json({ success: true });
+});
+
+export const getReadInfo = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
+  const map = await repo.getReadInfoForMessages([messageId]);
+  res.json({ success: true, data: map[String(messageId)] || [] });
 });
 
 // ---------- reactions ----------
@@ -177,7 +190,7 @@ export const markRead = asyncHandler(async (req, res) => {
 export const toggleReaction = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
   const { emoji } = req.body || {};
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   try {
     const msg = await repo.toggleReaction({ messageId, userId: req.user.userId, emoji });
     if (!msg) {
@@ -203,7 +216,7 @@ export const setPin = asyncHandler(async (req, res) => {
       error: { code: 'PIN_RESTRICTED', message: 'Only administrators can pin or unpin messages.' }
     });
   }
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   const msg = await repo.setPin({ messageId, userId: req.user.userId, pinned: !!pinned });
   if (!msg) return res.status(404).json({ success: false, error: { code: 'MESSAGE_NOT_FOUND' } });
   res.json({ success: true, data: msg });
@@ -211,7 +224,7 @@ export const setPin = asyncHandler(async (req, res) => {
 
 export const listPinned = asyncHandler(async (req, res) => {
   const { channelId } = req.params;
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   const channel = await repo.getChannelForUser(req.orgId, channelId, req.user.userId);
   if (!channel) return res.status(404).json({ success: false, error: { code: 'CHANNEL_NOT_FOUND' } });
   const messages = await repo.listPinnedMessages(channelId);
@@ -223,26 +236,34 @@ export const listPinned = asyncHandler(async (req, res) => {
 export const setStar = asyncHandler(async (req, res) => {
   const { messageId } = req.params;
   const { starred } = req.body || {};
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   const ok = await repo.setStar({ messageId, userId: req.user.userId, starred: !!starred });
   if (!ok) return res.status(404).json({ success: false, error: { code: 'MESSAGE_NOT_FOUND' } });
   res.json({ success: true });
 });
 
 export const listStarred = asyncHandler(async (req, res) => {
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   const messages = await repo.listStarredMessages(req.user.userId);
   // Mark each as starred so the UI doesn't have to round-trip.
   res.json({ success: true, data: messages.map((m) => ({ ...m, is_starred: true })) });
 });
 
+// ---------- presence ----------
+
+export const getPresence = asyncHandler(async (req, res) => {
+  const ids = getOnlineUserIds(req.orgId);
+  res.json({ success: true, data: ids });
+});
+
 // ---------- mention picker ----------
 
 export const listMentionableUsers = asyncHandler(async (req, res) => {
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   const users = await repo.listOrgUsersForMention({
     search: req.query.q || '',
-    limit: req.query.limit ? Math.min(parseInt(req.query.limit, 10) || 30, 100) : 30
+    limit: req.query.limit ? Math.min(parseInt(req.query.limit, 10) || 30, 100) : 30,
+    channelId: req.query.channelId || null
   });
   res.json({ success: true, data: users });
 });
@@ -256,7 +277,7 @@ export const listMentionableUsers = asyncHandler(async (req, res) => {
  */
 export const uploadAttachments = asyncHandler(async (req, res) => {
   const { channelId } = req.params;
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   const channel = await repo.getChannelForUser(req.orgId, channelId, req.user.userId);
   if (!channel) {
     return res.status(404).json({ success: false, error: { code: 'CHANNEL_NOT_FOUND' } });
@@ -289,7 +310,7 @@ export const uploadAttachments = asyncHandler(async (req, res) => {
 // ---------- compliance search ----------
 
 export const searchCompliance = asyncHandler(async (req, res) => {
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   const targets = await repo.searchComplianceTargets({
     q: req.query.q || '',
     limit: req.query.limit ? Math.min(parseInt(req.query.limit, 10) || 60, 100) : 60,
@@ -302,7 +323,7 @@ export const searchCompliance = asyncHandler(async (req, res) => {
 
 export const createChannel = asyncHandler(async (req, res) => {
   const { name, description, memberUserIds } = req.body || {};
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   try {
     const channel = await repo.createPrivateChannel({
       name,
@@ -325,7 +346,7 @@ export const addMembers = asyncHandler(async (req, res) => {
   if (!Array.isArray(userIds) || userIds.length === 0) {
     return res.status(400).json({ success: false, error: { code: 'NO_USERS', message: 'userIds is required.' } });
   }
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   try {
     const ch = await repo.addChannelMembers({ channelId, userIds, requesterUserId: req.user.userId });
     if (!ch) return res.status(404).json({ success: false, error: { code: 'CHANNEL_NOT_FOUND' } });
@@ -340,7 +361,7 @@ export const addMembers = asyncHandler(async (req, res) => {
 
 export const removeMember = asyncHandler(async (req, res) => {
   const { channelId, userId } = req.params;
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   try {
     const ch = await repo.removeChannelMember({ channelId, userId, requesterUserId: req.user.userId });
     if (!ch) return res.status(404).json({ success: false, error: { code: 'CHANNEL_NOT_FOUND' } });
@@ -353,11 +374,108 @@ export const removeMember = asyncHandler(async (req, res) => {
   }
 });
 
+// ---------- threads ----------
+
+export const getThread = asyncHandler(async (req, res) => {
+  const { messageId } = req.params;
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
+  const result = await repo.listThread(messageId);
+  if (!result) return res.status(404).json({ success: false, error: { code: 'MESSAGE_NOT_FOUND' } });
+  res.json({ success: true, data: result });
+});
+
+// ---------- DM ----------
+
+export const createOrFindDm = asyncHandler(async (req, res) => {
+  const { otherUserId } = req.body || {};
+  if (!otherUserId) {
+    return res.status(400).json({ success: false, error: { code: 'OTHER_USER_REQUIRED', message: 'otherUserId is required.' } });
+  }
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
+  try {
+    const channel = await repo.findOrCreateDm({ requesterUserId: req.user.userId, otherUserId });
+    res.status(200).json({ success: true, data: channel });
+  } catch (err) {
+    if (err.message === 'SELF_DM') {
+      return res.status(400).json({ success: false, error: { code: 'SELF_DM', message: "You can't DM yourself." } });
+    }
+    throw err;
+  }
+});
+
+// ---------- search ----------
+
+export const searchMessages = asyncHandler(async (req, res) => {
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
+  const messages = await repo.searchMessages({
+    requesterUserId: req.user.userId,
+    q: req.query.q || '',
+    senderId: req.query.sender || null,
+    since: req.query.since || null,
+    until: req.query.until || null,
+    hasAttachment: req.query.hasAttachment,
+    limit: req.query.limit ? Math.min(parseInt(req.query.limit, 10) || 60, 200) : 60
+  });
+  res.json({ success: true, data: messages });
+});
+
+// ---------- archive / leave / mute ----------
+
+export const archiveChannel = asyncHandler(async (req, res) => {
+  const { channelId } = req.params;
+  const { archived } = req.body || {};
+  const isAdmin = await resolveIsAdmin(req);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
+  try {
+    const ch = await repo.setChannelArchived({
+      channelId,
+      archived: !!archived,
+      requesterUserId: req.user.userId,
+      isAdmin
+    });
+    if (!ch) return res.status(404).json({ success: false, error: { code: 'CHANNEL_NOT_FOUND' } });
+    res.json({ success: true, data: ch });
+  } catch (err) {
+    if (err.message === 'FORBIDDEN') {
+      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Only administrators or the channel creator can archive this channel.' } });
+    }
+    throw err;
+  }
+});
+
+export const leaveChannel = asyncHandler(async (req, res) => {
+  const { channelId } = req.params;
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
+  const ch = await repo.removeChannelMember({
+    channelId,
+    userId: req.user.userId,
+    requesterUserId: req.user.userId
+  });
+  if (!ch) return res.status(404).json({ success: false, error: { code: 'CHANNEL_NOT_FOUND' } });
+  res.json({ success: true });
+});
+
+export const setNotify = asyncHandler(async (req, res) => {
+  const { channelId } = req.params;
+  const { notify } = req.body || {};
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
+  try {
+    const m = await repo.setNotifyPreference({ channelId, userId: req.user.userId, notify });
+    if (!m) return res.status(404).json({ success: false, error: { code: 'NOT_A_MEMBER' } });
+    res.json({ success: true, data: { notify: m.notify } });
+  } catch (err) {
+    if (err.message === 'INVALID_NOTIFY') {
+      return res.status(400).json({ success: false, error: { code: 'INVALID_NOTIFY', message: 'notify must be one of all, mentions, muted.' } });
+    }
+    throw err;
+  }
+});
+
 export const updateChannel = asyncHandler(async (req, res) => {
   const { channelId } = req.params;
   const { name, description, retention_days } = req.body || {};
   const isAdmin = await resolveIsAdmin(req);
-  const repo = new ChatRepository(req.tenantDb);
+  const repo = new ChatRepository(req.tenantDb, req.orgId);
   try {
     const ch = await repo.updateChannel({
       channelId,

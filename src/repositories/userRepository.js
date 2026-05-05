@@ -69,6 +69,13 @@ const createUserSchema = () => {
         type: Boolean,
         default: false
       },
+      // Read-only auditor — bypasses all module permissions but blocked
+      // from any mutating action by the auditor write-guard middleware.
+      is_auditor: {
+        type: Boolean,
+        default: false,
+        index: true
+      },
       // S3 key for profile/avatar (used when org owner has no BoardMember record)
       profile_picture_key: {
         type: String,
@@ -140,7 +147,7 @@ export class UserRepository {
       query._id = { $ne: excludeUserId };
     }
     return this.User.find(query)
-      .select('first_name last_name email status profile_picture_key is_auditor')
+      .select('first_name last_name email status profile_picture_key is_auditor is_org_owner')
       .sort({ first_name: 1, last_name: 1 })
       .exec();
   }

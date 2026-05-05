@@ -15,6 +15,24 @@ import { logError, logInfo } from '../utils/logger.js';
 const APP_NAME = process.env.APP_NAME || 'Stewardex';
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || 'support@stewardex.com';
 
+/**
+ * Sentinel embedded in every email built via `buildEmailTemplate`. The
+ * `sendEmail` guard checks for this — anything missing it gets auto-wrapped
+ * so legacy services that pass raw HTML still ship with the new look.
+ */
+const BRAND_TEMPLATE_SENTINEL = 'sx-brand-tpl-v1';
+
+/** True when the html string looks like a complete `<html>...</html>` document. */
+function looksLikeFullDocument(html) {
+  return /^\s*<!doctype/i.test(html) || /<html[\s>]/i.test(html);
+}
+
+/** Pull the inner body of a full HTML document so we can wrap just the content. */
+function extractBody(html) {
+  const m = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  return m ? m[1] : html;
+}
+
 // Resolve at call time, not module-load time — dotenv may not have run yet
 // when this module is first imported. Accept LOGO_URL (preferred) and the
 // legacy lowercase `logo` key for backwards compatibility.
@@ -83,6 +101,7 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${APP_NAME} - ${heading}</title>
+    <!-- ${BRAND_TEMPLATE_SENTINEL} -->
 </head>
 <body style="margin: 0; padding: 0; font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; background: ${BODY_BG};">
     <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background: ${BODY_BG}; min-height: 100vh;">
@@ -104,7 +123,7 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
                                 </tr>
                                 <tr>
                                     <td align="center" style="padding-bottom: 40px;">
-                                        <p style="margin: 0; font-size: 11px; line-height: 14px; color: #64748b; font-weight: 600; letter-spacing: 0.10em; text-transform: uppercase;">Charity Compliance Platform</p>
+                                        <p style="margin: 0; font-size: 11px; line-height: 14px; color: #64748b; font-weight: 600; letter-spacing: 0.10em; text-transform: uppercase;">YourComplianceSuite</p>
                                     </td>
                                 </tr>
                             </table>
@@ -285,7 +304,19 @@ class EmailService {
    * @param {string} options.html - HTML content
    * @param {string} options.text - Plain text content (optional)
    */
-  async sendEmail({ to, subject, html, text }) {
+  async sendEmail({ to, subject, html, text, brandTemplate }) {
+    // Belt-and-braces: if `html` wasn't built via `buildEmailTemplate` (no
+    // sentinel), wrap it now so every outbound email lands in the brand chrome
+    // — gradient strip, logo, footer. Callers can opt out by passing
+    // `brandTemplate: false` (e.g. for raw test pings) but that's the only
+    // escape hatch.
+    if (html && brandTemplate !== false && !html.includes(BRAND_TEMPLATE_SENTINEL)) {
+      html = buildEmailTemplate({
+        heading: subject || `${APP_NAME} notification`,
+        bodyHtml: looksLikeFullDocument(html) ? extractBody(html) : html
+      });
+    }
+
     // Check if email service is configured
     if (!this.isConfigured()) {
       logInfo('Email skipped - SMTP not configured', { to, subject });
@@ -958,6 +989,36 @@ class EmailService {
 
     return this.sendEmail({ to, subject, html });
   }
+
+  async sendFundingAgreementPartnerSignatureRequestEmail({ to, partnerName, agreementTitle, signLink, expiryDate }) {
+    const safeTitle = agreementTitle || 'Funding agreement';
+    const subject = `Signature requested: ${safeTitle}`;
+    const expiryStr = expiryDate
+      ? new Date(expiryDate).toLocaleDateString('en-AU', { year: 'numeric', month: 'long', day: 'numeric' })
+      : null;
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Hi ${partnerName || 'Partner'},</p>
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">The funding agreement <strong>${safeTitle}</strong> has been signed internally and is now ready for your signature.</p>
+      <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333; font-weight: 400; text-align: center; max-width: 500px;">Please review the agreement and add your signature using the secure link below.</p>
+    `;
+
+    const infoBoxLines = [
+      'The link is unique to you — please do not share it.',
+      expiryStr ? `This link expires on ${expiryStr}.` : 'This link will expire after 14 days.'
+    ];
+
+    const html = buildEmailTemplate({
+      heading: 'Funding agreement signature requested',
+      bodyHtml,
+      buttonText: 'Review & sign agreement',
+      buttonLink: signLink,
+      infoBoxLines
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
 }
 
 export default new EmailService();
+export { buildEmailTemplate };

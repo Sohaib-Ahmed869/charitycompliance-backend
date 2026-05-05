@@ -183,6 +183,43 @@ export const handlePolicyUploadError = (err, req, res, next) => {
  */
 export const uploadMultiple = upload.array('files', 10); // Max 10 files
 
+/**
+ * Chat-specific upload — allows everything `uploadMultiple` does PLUS
+ * audio (voice memos) and short video clips. Lives behind its own multer
+ * instance so we don't widen the surface for other modules.
+ */
+const chatFileFilter = (req, file, cb) => {
+  const allowedMimeTypes = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'text/csv',
+    'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
+    'audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/wav',
+    'video/mp4', 'video/webm', 'video/quicktime'
+  ];
+  const allowedExtensions = [
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.csv',
+    '.jpg', '.jpeg', '.png', '.gif', '.webp',
+    '.webm', '.ogg', '.m4a', '.mp3', '.wav',
+    '.mp4', '.mov'
+  ];
+  if (allowedMimeTypes.includes(file.mimetype)) return cb(null, true);
+  const ext = '.' + file.originalname.split('.').pop().toLowerCase();
+  if (allowedExtensions.includes(ext)) return cb(null, true);
+  cb(new AppError(`File type not allowed. Allowed: ${allowedExtensions.join(', ')}`, 400, 'INVALID_FILE_TYPE'), false);
+};
+
+const chatUpload = multer({
+  storage,
+  fileFilter: chatFileFilter,
+  limits: { fileSize: 100 * 1024 * 1024, files: 10 }
+});
+
+export const uploadChatMultiple = chatUpload.array('files', 10);
+
 export const uploadProjectUpdateFiles = upload.fields([
   { name: 'files', maxCount: 10 },
   { name: 'media_report_files', maxCount: 10 },

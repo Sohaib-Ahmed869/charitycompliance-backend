@@ -3,14 +3,17 @@
  * Team member listing for attendees
  */
 
+import crypto from 'crypto';
 import { getTenantConnection } from '../db/connectionManager.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { UserPositionRepository } from '../repositories/userPositionRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { getFileUrl } from '../services/s3Service.js';
+import emailService, { buildEmailTemplate } from '../services/emailService.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { logError, logInfo } from '../utils/logger.js';
 
 export const listTeamMembers = asyncHandler(async (req, res) => {
   const userId = req.user?.userId;
@@ -87,6 +90,7 @@ export const listTeamMembers = asyncHandler(async (req, res) => {
       isAuditor: user?.is_auditor === true,
       isVolunteer: boardMember?.is_volunteer === true,
       isBoardMember: boardMember?.is_board_member === true,
+      isOrgOwner: user?.is_org_owner === true,
       department: boardMember?.department || ''
     };
   }));
@@ -109,13 +113,22 @@ export const inviteAuditor = asyncHandler(async (req, res) => {
 
   const tenantDb = await getTenantConnection(orgId);
 
-  // Check if user already exists with this email
-  const existingUser = await UserRepository.findByEmail(email, tenantDb);
+  // Check if user already exists with this email. findByEmail is an instance
+  // method on UserRepository — needs a tenant-bound instance to resolve the
+  // tenant's User model.
+  const userRepo = new UserRepository(tenantDb);
+  const existingUser = await userRepo.findByEmail(email);
   if (existingUser) {
     throw new AppError('User with this email already exists', 409, 'USER_EXISTS');
   }
 
-  // Create auditor invite record
+  // Generate a one-time invitation token. The same token is what auditors
+  // click in the email; the frontend's /invitation/:token route hits
+  // verifyInvitationToken which now also checks auditor_invites.
+  const invitationToken = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + 7); // Expires in 7 days
+
   const auditorInvite = {
     email,
     firstName,
@@ -123,11 +136,60 @@ export const inviteAuditor = asyncHandler(async (req, res) => {
     invitedAt: new Date(),
     invitedBy: userId,
     status: 'pending',
-    role: 'auditor'
+    role: 'auditor',
+    invitation_token: invitationToken,
+    invitation_expires_at: expiresAt,
+    invitation_status: 'pending'
   };
 
-  // Store invite in database (assuming there's an AuditorInvite model)
   const result = await tenantDb.collection('auditor_invites').insertOne(auditorInvite);
+
+  // Send the invitation email — wrapped in try/catch so a transport failure
+  // doesn't roll back the invite record (the org owner can resend later).
+  let emailSent = false;
+  try {
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    const orgName = org?.trading_name || org?.name || 'your organisation';
+    const baseUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
+    const inviteLink = `${baseUrl}/invitation/${invitationToken}`;
+    const recipientName = `${firstName || ''} ${lastName || ''}`.trim() || 'Auditor';
+    const inviterName = req.user?.firstName
+      ? `${req.user.firstName} ${req.user.lastName || ''}`.trim()
+      : null;
+
+    const html = buildEmailTemplate({
+      heading: 'You\'re Invited as an Auditor',
+      bodyHtml: `
+        <p style="margin: 0 0 12px 0; font-size: 13px; line-height: 1.6; color: #334155; text-align: center; max-width: 520px;">Hi ${recipientName},</p>
+        <p style="margin: 0 0 12px 0; font-size: 13px; line-height: 1.6; color: #334155; text-align: center; max-width: 520px;">${inviterName ? `${inviterName} has invited you` : 'You have been invited'} to audit <strong>${orgName}</strong> on Stewardex.</p>
+        <p style="margin: 0 0 12px 0; font-size: 13px; line-height: 1.6; color: #334155; text-align: center; max-width: 520px;">Auditors get read-only access across every governance module — perfect for end-of-year reviews, ACNC compliance audits, and board-cycle check-ins. You can read everything; nothing you do can change the underlying records.</p>
+        <p style="margin: 0; font-size: 13px; line-height: 1.6; color: #334155; text-align: center; max-width: 520px;">Click the button below to set your password and start.</p>
+      `,
+      buttonText: 'Accept Auditor Invitation',
+      buttonLink: inviteLink,
+      infoBoxLines: [
+        'You\'ll have read-only access — every mutating action is blocked for auditor accounts.',
+        'This invitation expires in 7 days.',
+        'If you didn\'t expect this email, you can safely ignore it.'
+      ]
+    });
+
+    await emailService.sendEmail({
+      to: email,
+      subject: `Auditor invitation — ${orgName}`,
+      html
+    });
+
+    await tenantDb.collection('auditor_invites').updateOne(
+      { _id: result.insertedId },
+      { $set: { invitation_status: 'sent', invitation_sent_at: new Date() } }
+    );
+    emailSent = true;
+    logInfo('Auditor invitation email sent', { orgId, email, inviteId: result.insertedId });
+  } catch (err) {
+    logError('Auditor invitation email failed', { orgId, email, error: err?.message });
+  }
 
   res.json({
     success: true,
@@ -136,8 +198,12 @@ export const inviteAuditor = asyncHandler(async (req, res) => {
       email,
       firstName,
       lastName,
-      status: 'pending',
-      invitedAt: auditorInvite.invitedAt
-    }
+      status: emailSent ? 'sent' : 'pending',
+      invitedAt: auditorInvite.invitedAt,
+      invitation_expires_at: expiresAt
+    },
+    message: emailSent
+      ? 'Auditor invitation sent.'
+      : 'Auditor invite recorded but the email could not be sent. Resend from the auditor list.'
   });
 });

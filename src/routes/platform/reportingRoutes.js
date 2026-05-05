@@ -11,6 +11,7 @@ import {
   getAisPrefill,
   getAcncFinancialPrefill,
   downloadAisPdf,
+  downloadAisDocx,
   downloadAcncFinancialPdf
 } from '../../controllers/reportingController.js';
 
@@ -31,6 +32,13 @@ router.post(
   [query('fyEnd').notEmpty().withMessage('fyEnd is required')],
   validate,
   downloadAisPdf
+);
+
+router.post(
+  '/ais/docx',
+  [query('fyEnd').notEmpty().withMessage('fyEnd is required')],
+  validate,
+  downloadAisDocx
 );
 
 router.get(

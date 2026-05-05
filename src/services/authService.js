@@ -407,7 +407,7 @@ export class AuthService {
 
       // Verify password
       const isPasswordValid = await bcrypt.compare(password, user.password_hash);
-      
+
       if (!isPasswordValid) {
         const userRepo = new UserRepository(tenantDb);
         await userRepo.incrementFailedAttempts(user._id);
@@ -703,7 +703,9 @@ export class AuthService {
       const routerModels = getRouterModels();
       const tenants = await routerModels.Tenant.find({ status: 'active' });
 
-      // Search each tenant DB for the invitation token
+      // Search each tenant DB for the invitation token. Two flavours of
+      // invitation exist: BoardMember invites (positioned staff/volunteers)
+      // and auditor_invites (read-only auditors). Check both per tenant.
       for (const tenant of tenants) {
         try {
           const tenantDb = await getTenantConnection(tenant.orgId);
@@ -725,12 +727,53 @@ export class AuthService {
 
             return {
               valid: true,
+              kind: 'board_member',
               boardMember: {
                 id: boardMember._id.toString(),
                 email: boardMember.email,
                 givenNames: boardMember.given_names,
                 familyName: boardMember.family_name,
                 position: boardMember.custom_position_title || boardMember.position
+              },
+              organization: {
+                id: org?._id?.toString(),
+                name: org?.name || 'Organization'
+              },
+              orgId: tenant.orgId
+            };
+          }
+
+          // Auditor invite check.
+          const auditorInvite = await tenantDb
+            .collection('auditor_invites')
+            .findOne({ invitation_token: token });
+          if (auditorInvite) {
+            if (auditorInvite.invitation_status === 'accepted') {
+              throw new AppError('Invitation has already been accepted', 409, 'INVITATION_ALREADY_ACCEPTED');
+            }
+            if (auditorInvite.invitation_expires_at && new Date(auditorInvite.invitation_expires_at) < new Date()) {
+              throw new AppError('Invitation has expired', 410, 'INVITATION_EXPIRED');
+            }
+            const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+            const orgRepo = new OrganizationRepository(tenantDb);
+            const org = await orgRepo.findOne();
+            return {
+              valid: true,
+              kind: 'auditor',
+              auditor: {
+                id: auditorInvite._id.toString(),
+                email: auditorInvite.email,
+                firstName: auditorInvite.firstName || '',
+                lastName: auditorInvite.lastName || ''
+              },
+              // Mirror the boardMember shape so the existing accept-invitation
+              // page can render the recipient + org without branching.
+              boardMember: {
+                id: auditorInvite._id.toString(),
+                email: auditorInvite.email,
+                givenNames: auditorInvite.firstName || '',
+                familyName: auditorInvite.lastName || '',
+                position: 'Auditor'
               },
               organization: {
                 id: org?._id?.toString(),
@@ -764,9 +807,87 @@ export class AuthService {
       const tokenInfo = await this.verifyInvitationToken(token);
 
       const tenantDb = await getTenantConnection(tokenInfo.orgId);
+      const userRepo = new UserRepository(tenantDb);
+
+      // ---- Auditor invite branch ----
+      // Auditors don't have a BoardMember record — create the User with
+      // `is_auditor: true`, mark the auditor_invite as accepted, and return
+      // an auditor-scoped JWT.
+      if (tokenInfo.kind === 'auditor') {
+        const auditorInvite = await tenantDb
+          .collection('auditor_invites')
+          .findOne({ invitation_token: token });
+        if (!auditorInvite) {
+          throw new AppError('Invalid invitation token', 404, 'INVALID_TOKEN');
+        }
+
+        const existing = await userRepo.findByEmail(auditorInvite.email);
+        let user;
+        if (existing) {
+          await userRepo.update(existing._id, { is_auditor: true, status: 'active' });
+          user = { ...(existing.toObject ? existing.toObject() : existing), is_auditor: true };
+        } else {
+          const password_hash = await bcrypt.hash(password, SALT_ROUNDS);
+          user = await userRepo.create({
+            email: auditorInvite.email,
+            password_hash,
+            first_name: auditorInvite.firstName || '',
+            last_name: auditorInvite.lastName || '',
+            status: 'active',
+            is_auditor: true
+          });
+          try {
+            await userRepo.update(user._id, { created_by: user._id });
+          } catch (_) {
+            // Non-blocking
+          }
+        }
+
+        await tenantDb.collection('auditor_invites').updateOne(
+          { _id: auditorInvite._id },
+          { $set: {
+            invitation_status: 'accepted',
+            invitation_accepted_at: new Date(),
+            invitation_token: null,
+            user_id: user._id
+          } }
+        );
+
+        const normalizedOrgId = tokenInfo.orgId.toLowerCase().trim();
+        const auditorPerms = buildAuditorPermissions();
+        const authToken = generateToken({
+          userId: user._id.toString(),
+          orgId: normalizedOrgId,
+          email: auditorInvite.email,
+          roles: ['auditor'],
+          permissions: auditorPerms,
+          isAuditor: true
+        });
+
+        logInfo('Auditor invitation accepted', { userId: user._id, orgId: normalizedOrgId });
+
+        return {
+          user: {
+            id: user._id.toString(),
+            email: auditorInvite.email,
+            firstName: auditorInvite.firstName || '',
+            lastName: auditorInvite.lastName || '',
+            role: 'auditor',
+            permissions: auditorPerms,
+            is_board_member: false,
+            is_auditor: true,
+            is_org_owner: false,
+            position: 'Auditor',
+            positions: [{ id: null, title: 'Auditor' }]
+          },
+          token: authToken,
+          orgId: normalizedOrgId
+        };
+      }
+
+      // ---- Board member invite branch (existing flow) ----
       const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
       const boardMemberRepo = new BoardMemberRepository(tenantDb);
-      const userRepo = new UserRepository(tenantDb);
 
       const boardMember = await boardMemberRepo.findByInvitationToken(token);
       if (!boardMember) {
@@ -954,6 +1075,38 @@ export class AuthService {
       logError('Failed to send password reset email', emailErr, { email: recipientEmail });
       throw new AppError('Failed to send reset email. Please try again.', 500, 'EMAIL_SEND_FAILED');
     }
+  }
+
+  /**
+   * Validate a password-reset token without consuming it. Used by the
+   * reset-password page on load so we can show "Invalid Reset Link" instead
+   * of the form when the token is missing, garbled, or expired.
+   *
+   * Returns { valid: true } on success, or throws INVALID_RESET_TOKEN.
+   */
+  async verifyResetToken(token) {
+    if (!token || typeof token !== 'string') {
+      throw new AppError('Invalid or expired reset link. Please request a new one.', 400, 'INVALID_RESET_TOKEN');
+    }
+
+    const routerModels = getRouterModels();
+    const tenants = await routerModels.Tenant.find({ status: 'active' });
+
+    for (const tenant of tenants) {
+      try {
+        const tenantDb = await getTenantConnection(tenant.orgId);
+        const userRepo = new UserRepository(tenantDb);
+        const user = await userRepo.findByResetToken(token);
+        if (user) {
+          return { valid: true };
+        }
+      } catch (err) {
+        logError('Failed to search tenant for verify-reset-token', err, { orgId: tenant.orgId });
+        continue;
+      }
+    }
+
+    throw new AppError('Invalid or expired reset link. Please request a new one.', 400, 'INVALID_RESET_TOKEN');
   }
 
   /**

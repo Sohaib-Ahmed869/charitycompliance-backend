@@ -74,6 +74,15 @@ export const resetPassword = asyncHandler(async (req, res) => {
   });
 });
 
+// Validate a password-reset token without consuming it. Called from the
+// reset-password page on load so we can show "Invalid Reset Link" UI when
+// the token is missing, tampered, or expired — before the form is rendered.
+export const verifyResetToken = asyncHandler(async (req, res) => {
+  const token = req.params.token || req.query.token;
+  await authService.verifyResetToken(token);
+  res.json({ success: true, data: { valid: true } });
+});
+
 export const verifyOtp = asyncHandler(async (req, res) => {
   const { userId, code, orgId } = req.body;
   const result = await authService.completeLoginWithOtp(orgId, userId, code);

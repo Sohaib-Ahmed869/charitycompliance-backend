@@ -2,6 +2,8 @@ import projectRefundSchema from '../db/schemas/platform/projectRefundSchema.js';
 import projectRegisterSchema from '../db/schemas/platform/projectRegisterSchema.js';
 import fundingAgreementSchema from '../db/schemas/platform/fundingAgreementSchema.js';
 
+const _repairedDbs = new WeakSet();
+
 export class ProjectRefundRepository {
   constructor(tenantDb) {
     tenantDb.models.ProjectRegister ||
@@ -9,6 +11,24 @@ export class ProjectRefundRepository {
     tenantDb.models.FundingAgreement ||
       tenantDb.model('FundingAgreement', fundingAgreementSchema);
     this.ProjectRefund = tenantDb.models.ProjectRefund || tenantDb.model('ProjectRefund', projectRefundSchema);
+    this._tenantDb = tenantDb;
+
+    if (!_repairedDbs.has(tenantDb)) {
+      _repairedDbs.add(tenantDb);
+      this._repairPromise = this._dropLegacyPaymentAckTokenIndex().catch(() => {});
+    }
+  }
+
+  /**
+   * Drop the legacy unique compound index on (org_key, payment_ack_token).
+   * project_refunds never had a payment_ack_token field — that index was
+   * created by an earlier deployment that copied donorRefundSchema, and it
+   * blocks every second insert because both rows have payment_ack_token=null.
+   */
+  async _dropLegacyPaymentAckTokenIndex() {
+    try {
+      await this._tenantDb.collection('project_refunds').dropIndex('org_key_1_payment_ack_token_1');
+    } catch (_) { /* already gone */ }
   }
 
   async findByOrgId(orgId, projectId) {
@@ -39,6 +59,7 @@ export class ProjectRefundRepository {
   }
 
   async create(data) {
+    if (this._repairPromise) await this._repairPromise;
     const doc = new this.ProjectRefund(data);
     return await doc.save();
   }

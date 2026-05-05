@@ -115,6 +115,11 @@ const chatMessageSchema = new mongoose.Schema({
   edits: {
     type: [messageEditSchema],
     default: []
+  },
+  /** Cached count of replies in this message's thread (only meaningful for parent messages). */
+  thread_reply_count: {
+    type: Number,
+    default: 0
   }
 }, { timestamps: true, collection: 'chat_messages' });
 

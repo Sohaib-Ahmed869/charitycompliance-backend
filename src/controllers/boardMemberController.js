@@ -567,6 +567,8 @@ export const getDepartmentsAndRoles = asyncHandler(async (req, res) => {
           isManagement: pos.is_management,
           // Derived flag: true when at least one active board member holds this position
           is_board_level: boardPositionIds.has(pos._id.toString()),
+          // Parent-position id powers the org-chart tree.
+          reporting_to_position_id: pos.reporting_to_position_id?.toString?.() || null,
           granted_permissions: pos.granted_permissions || [],
           modulePermissions,
           // Active people holding this position; empty = unassigned

@@ -10,7 +10,7 @@ import express from 'express';
 import { param, body } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
-import { uploadMultiple, handleUploadError } from '../../middleware/upload.js';
+import { uploadChatMultiple, handleUploadError } from '../../middleware/upload.js';
 import * as chat from '../../controllers/chatController.js';
 
 const router = express.Router();
@@ -40,9 +40,19 @@ router.post(
 
 router.post(
   '/channels/:channelId/read',
-  [param('channelId').isMongoId().withMessage('Invalid channel id')],
+  [
+    param('channelId').isMongoId().withMessage('Invalid channel id'),
+    body('messageIds').optional().isArray()
+  ],
   validate,
   chat.markRead
+);
+
+router.get(
+  '/messages/:messageId/reads',
+  [param('messageId').isMongoId()],
+  validate,
+  chat.getReadInfo
 );
 
 router.patch(
@@ -99,6 +109,9 @@ router.get('/me/starred', chat.listStarred);
 // Mention picker
 router.get('/users', chat.listMentionableUsers);
 
+// Presence — list of currently-online userIds in this org
+router.get('/presence', chat.getPresence);
+
 // Compliance mention search (modules + entities)
 router.get('/compliance/search', chat.searchCompliance);
 
@@ -107,7 +120,7 @@ router.post(
   '/channels/:channelId/upload',
   [param('channelId').isMongoId()],
   validate,
-  uploadMultiple,
+  uploadChatMultiple,
   handleUploadError,
   chat.uploadAttachments
 );
@@ -144,6 +157,45 @@ router.delete(
   [param('channelId').isMongoId(), param('userId').isMongoId()],
   validate,
   chat.removeMember
+);
+
+// Thread (parent + replies)
+router.get(
+  '/messages/:messageId/thread',
+  [param('messageId').isMongoId()],
+  validate,
+  chat.getThread
+);
+
+// DM creation (find-or-create 1:1)
+router.post(
+  '/dms',
+  [body('otherUserId').isMongoId()],
+  validate,
+  chat.createOrFindDm
+);
+
+// Search across channels the user belongs to
+router.get('/search', chat.searchMessages);
+
+// Archive / leave / notify preference
+router.patch(
+  '/channels/:channelId/archive',
+  [param('channelId').isMongoId(), body('archived').optional().isBoolean()],
+  validate,
+  chat.archiveChannel
+);
+router.post(
+  '/channels/:channelId/leave',
+  [param('channelId').isMongoId()],
+  validate,
+  chat.leaveChannel
+);
+router.patch(
+  '/channels/:channelId/notify',
+  [param('channelId').isMongoId(), body('notify').isIn(['all', 'mentions', 'muted'])],
+  validate,
+  chat.setNotify
 );
 
 export default router;

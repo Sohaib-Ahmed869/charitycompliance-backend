@@ -14,6 +14,7 @@ import departmentSchema from '../db/schemas/platform/departmentSchema.js';
 import boardMemberSchema from '../db/schemas/platform/boardMemberSchema.js';
 import organizationSchema from '../db/schemas/platform/organizationSchema.js';
 import chatMessageStarSchema from '../db/schemas/platform/chatMessageStarSchema.js';
+import chatMessageReadSchema from '../db/schemas/platform/chatMessageReadSchema.js';
 import policySchema from '../db/schemas/platform/policySchema.js';
 import riskSchema from '../db/schemas/platform/riskSchema.js';
 import trainingProgramSchema from '../db/schemas/platform/trainingProgramSchema.js';
@@ -29,6 +30,10 @@ import legalDocumentSchema from '../db/schemas/platform/legalDocumentSchema.js';
 import donorSchema from '../db/schemas/platform/donorSchema.js';
 import { UserRepository } from './userRepository.js';
 import { getFileUrl, deleteFromS3 } from '../services/s3Service.js';
+import {
+  emitNewMessage, emitUpdatedMessage, emitDeletedMessage,
+  emitChannelListChanged, emitMention, emitMessagesRead
+} from '../services/chatSocketService.js';
 
 /**
  * Modules surfaced in the #-mention picker. Each entry is a stable mention
@@ -74,19 +79,19 @@ export const COMPLIANCE_MODULE_TARGETS = [
  * blind index instead of a regex (encrypted fields can only be matched exactly).
  */
 const COMPLIANCE_ENTITY_TARGETS = [
-  { type: 'policy',           label: 'Policy',            modelName: 'Policy',              schema: policySchema,              titleField: 'title',            moduleId: 'policies',                hrefBuilder: (id) => `/policies/${id}` },
-  { type: 'risk',             label: 'Risk',              modelName: 'Risk',                schema: riskSchema,                titleField: 'title',            moduleId: 'risk_mgmt',               hrefBuilder: (id) => `/risk-management/${id}` },
-  { type: 'training',         label: 'Training',          modelName: 'TrainingProgram',     schema: trainingProgramSchema,     titleField: 'title',            moduleId: 'human_resources',         hrefBuilder: (id) => `/human-resources/trainings/${id}` },
-  { type: 'meeting',          label: 'Meeting',           modelName: 'Meeting',             schema: meetingSchema,             titleField: 'title',            moduleId: 'dashboard',               hrefBuilder: (id) => `/meetings/${id}` },
-  { type: 'complaint',        label: 'Complaint',         modelName: 'Complaint',           schema: complaintSchema,           titleField: 'complaint_title',  moduleId: 'complaints',              hrefBuilder: (id) => `/complaints/${id}` },
-  { type: 'expense',          label: 'Expense',           modelName: 'Expense',             schema: expenseSchema,             titleField: 'expense_name',     moduleId: 'financial_mgmt',          hrefBuilder: (id) => `/expenses/${id}` },
-  { type: 'partner',          label: 'Partner',           modelName: 'PartnerVetting',      schema: partnerVettingSchema,      titleField: 'name',             moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/partner-vetting/${id}` },
-  { type: 'funding-agreement',label: 'Funding Agreement', modelName: 'FundingAgreement',    schema: fundingAgreementSchema,    titleField: 'agreement_title',  moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/funding-agreements/${id}` },
-  { type: 'project',          label: 'Project',           modelName: 'ProjectRegister',     schema: projectRegisterSchema,     titleField: 'project_name',     moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/project-monitoring/${id}` },
-  { type: 'social-campaign',  label: 'Marketing Campaign',modelName: 'SocialMediaCampaign', schema: socialMediaCampaignSchema, titleField: 'title',            moduleId: 'social_media_campaigns',  hrefBuilder: (id) => `/social-media-campaigns/${id}` },
-  { type: 'asset',            label: 'IT Asset',          modelName: 'Asset',               schema: assetSchema,               titleField: 'asset_name',       moduleId: 'asset_mgmt',              hrefBuilder: (id) => `/assets/${id}` },
-  { type: 'legal-doc',        label: 'Legal Document',    modelName: 'LegalDocument',       schema: legalDocumentSchema,       titleField: 'document_name',    moduleId: 'legal_docs',              hrefBuilder: () => `/legal-documents` },
-  { type: 'donor',            label: 'Donor',             modelName: 'Donor',               schema: donorSchema,               titleField: 'name',             moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/donors/${id}` }
+  { type: 'policy',           label: 'Policy',            modelName: 'Policy',              schema: policySchema,              titleField: 'title',            statusField: 'status',          moduleId: 'policies',                hrefBuilder: (id) => `/policies/${id}` },
+  { type: 'risk',             label: 'Risk',              modelName: 'Risk',                schema: riskSchema,                titleField: 'title',            statusField: 'status',          moduleId: 'risk_mgmt',               hrefBuilder: (id) => `/risk-management/${id}` },
+  { type: 'training',         label: 'Training',          modelName: 'TrainingProgram',     schema: trainingProgramSchema,     titleField: 'title',            statusField: 'status',          moduleId: 'human_resources',         hrefBuilder: (id) => `/human-resources/trainings/${id}` },
+  { type: 'meeting',          label: 'Meeting',           modelName: 'Meeting',             schema: meetingSchema,             titleField: 'title',            statusField: 'status',          moduleId: 'dashboard',               hrefBuilder: (id) => `/meetings/${id}` },
+  { type: 'complaint',        label: 'Complaint',         modelName: 'Complaint',           schema: complaintSchema,           titleField: 'complaint_title',  statusField: 'status',          moduleId: 'complaints',              hrefBuilder: (id) => `/complaints/${id}` },
+  { type: 'expense',          label: 'Expense',           modelName: 'Expense',             schema: expenseSchema,             titleField: 'expense_name',     statusField: 'status',          moduleId: 'financial_mgmt',          hrefBuilder: (id) => `/expenses/${id}` },
+  { type: 'partner',          label: 'Partner',           modelName: 'PartnerVetting',      schema: partnerVettingSchema,      titleField: 'name',             statusField: 'status',          moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/partner-vetting/${id}` },
+  { type: 'funding-agreement',label: 'Funding Agreement', modelName: 'FundingAgreement',    schema: fundingAgreementSchema,    titleField: 'agreement_title',  statusField: 'status',          moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/funding-agreements/${id}` },
+  { type: 'project',          label: 'Project',           modelName: 'ProjectRegister',     schema: projectRegisterSchema,     titleField: 'project_name',     statusField: 'status',          moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/project-monitoring/${id}` },
+  { type: 'social-campaign',  label: 'Marketing Campaign',modelName: 'SocialMediaCampaign', schema: socialMediaCampaignSchema, titleField: 'title',            statusField: 'status',          moduleId: 'social_media_campaigns',  hrefBuilder: (id) => `/social-media-campaigns/${id}` },
+  { type: 'asset',            label: 'IT Asset',          modelName: 'Asset',               schema: assetSchema,               titleField: 'asset_name',       statusField: 'status',          moduleId: 'asset_mgmt',              hrefBuilder: (id) => `/assets/${id}` },
+  { type: 'legal-doc',        label: 'Legal Document',    modelName: 'LegalDocument',       schema: legalDocumentSchema,       titleField: 'document_name',    statusField: null,              moduleId: 'legal_docs',              hrefBuilder: () => `/legal-documents` },
+  { type: 'donor',            label: 'Donor',             modelName: 'Donor',               schema: donorSchema,               titleField: 'name',             statusField: null,              moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/donors/${id}` }
 ];
 
 /** Module IDs that are always granted to every user (mirrors the frontend ALWAYS_GRANTED set). */
@@ -105,6 +110,19 @@ function canViewModuleSync(permissions, moduleId) {
 
 const toObjectId = (v) => (v instanceof mongoose.Types.ObjectId ? v : new mongoose.Types.ObjectId(String(v)));
 
+/* ------------------------------ Caches ------------------------------ */
+
+// Skip the expensive `ensureCoreChannels` work when the same (org, user) was
+// provisioned recently in this process. New departments / users join the
+// system; the TTL bounds how long they wait to be picked up.
+const PROVISION_TTL_MS = 5 * 60 * 1000;
+const _provisionedAt = new Map(); // key=`${orgSlug}:${userId}` → ts
+
+// S3 signed URLs are valid for a week — re-signing them on every list call
+// is wasted network and money. Cache by s3 key, refresh ~1 day before expiry.
+const SIGNED_URL_TTL_MS = 6 * 24 * 60 * 60 * 1000;
+const _signedUrlCache = new Map();
+
 /**
  * `req.orgId` is the slug used to find the tenant DB (e.g. "compliance_212312"),
  * NOT a Mongo ObjectId. Tenant-DB documents store `org_id` as the Organization
@@ -112,8 +130,10 @@ const toObjectId = (v) => (v instanceof mongoose.Types.ObjectId ? v : new mongoo
  */
 
 export class ChatRepository {
-  constructor(tenantDb) {
+  constructor(tenantDb, orgIdSlug = null) {
     this.tenantDb = tenantDb;
+    /** Tenant slug from req.orgId — used as the socket-room key. Set via constructor or setOrgIdSlug. */
+    this._orgIdSlug = orgIdSlug;
     // Side-effect: register User on this connection so .populate('sender_user_id') decrypts
     // first_name / last_name / email via the encrypt plugin's find post-hook.
     new UserRepository(tenantDb);
@@ -126,6 +146,7 @@ export class ChatRepository {
       tenantDb.model('ChatChannelMembership', chatChannelMembershipSchema);
     this.Message = tenantDb.models.ChatMessage || tenantDb.model('ChatMessage', chatMessageSchema);
     this.Star = tenantDb.models.ChatMessageStar || tenantDb.model('ChatMessageStar', chatMessageStarSchema);
+    this.MessageRead = tenantDb.models.ChatMessageRead || tenantDb.model('ChatMessageRead', chatMessageReadSchema);
     this.Department = tenantDb.model('Department');
     this.BoardMember = tenantDb.model('BoardMember');
     this.Organization = tenantDb.model('Organization');
@@ -150,7 +171,14 @@ export class ChatRepository {
    *
    * Cheap to run on every channel-list read — uses upsert + existence checks.
    */
-  async ensureCoreChannels(_orgIdSlug, currentUserId) {
+  async ensureCoreChannels(orgIdSlugArg, currentUserId) {
+    if (orgIdSlugArg) this._orgIdSlug = orgIdSlugArg;
+    // Hot path: skip the heavy upserts when we provisioned this (org, user)
+    // recently. New departments / users propagate within PROVISION_TTL_MS.
+    const cacheKey = `${this._orgIdSlug || 'unknown'}:${String(currentUserId)}`;
+    const last = _provisionedAt.get(cacheKey);
+    if (last && (Date.now() - last) < PROVISION_TTL_MS) return;
+
     const org = await this._resolveOrgObjectId();
 
     const orgWide = [
@@ -197,6 +225,8 @@ export class ChatRepository {
     //     across all departments).
     await this._addAllActiveUsersToOrgWideChannels(org);
     await this._addAdminsToAllDepartmentChannels(org);
+
+    _provisionedAt.set(cacheKey, Date.now());
   }
 
   async _addAllActiveUsersToOrgWideChannels(orgObjectId) {
@@ -349,11 +379,57 @@ export class ChatRepository {
     }));
     const countByChannel = new Map(counts);
 
-    return channels.map((c) => ({
-      ...c,
-      notify: byChannel.get(String(c._id))?.notify || 'all',
-      unread_count: countByChannel.get(String(c._id)) || 0
-    }));
+    // Member counts so the frontend can render WhatsApp-style "all read" check marks.
+    const memberCountAgg = await this.Membership.aggregate([
+      { $match: { channel_id: { $in: channelIds } } },
+      { $group: { _id: '$channel_id', count: { $sum: 1 } } }
+    ]);
+    const memberCountByChannel = new Map(memberCountAgg.map((r) => [String(r._id), r.count]));
+
+    // Last message preview per channel — drives the two-line sidebar rows.
+    // One aggregation that buckets by channel and grabs the newest non-deleted
+    // top-level message from each.
+    const lastMsgs = await this.Message.aggregate([
+      {
+        $match: {
+          channel_id: { $in: channelIds },
+          is_deleted: false,
+          $or: [{ parent_message_id: null }, { parent_message_id: { $exists: false } }]
+        }
+      },
+      { $sort: { createdAt: -1 } },
+      {
+        $group: {
+          _id: '$channel_id',
+          body: { $first: '$body' },
+          attachments: { $first: '$attachments' },
+          sender_user_id: { $first: '$sender_user_id' },
+          createdAt: { $first: '$createdAt' }
+        }
+      }
+    ]);
+    const lastMsgByChannel = new Map(lastMsgs.map((m) => [String(m._id), m]));
+
+    return channels.map((c) => {
+      const lm = lastMsgByChannel.get(String(c._id)) || null;
+      let preview = null;
+      if (lm) {
+        const hasAttachment = (lm.attachments || []).length > 0;
+        const text = String(lm.body || '').replace(/\s+/g, ' ').trim();
+        preview = {
+          body: text || (hasAttachment ? '📎 Attachment' : ''),
+          sender_user_id: lm.sender_user_id ? String(lm.sender_user_id) : null,
+          createdAt: lm.createdAt
+        };
+      }
+      return {
+        ...c,
+        notify: byChannel.get(String(c._id))?.notify || 'all',
+        unread_count: countByChannel.get(String(c._id)) || 0,
+        member_count: memberCountByChannel.get(String(c._id)) || 0,
+        last_message: preview
+      };
+    });
   }
 
   async getChannelForUser(_orgIdSlug, channelId, userId) {
@@ -369,7 +445,13 @@ export class ChatRepository {
   }
 
   async listMessages(channelId, { limit = 50, beforeId = null } = {}) {
-    const query = { channel_id: toObjectId(channelId), is_deleted: false };
+    // Thread replies (parent_message_id != null) are excluded from the main feed —
+    // they only appear inside the thread panel.
+    const query = {
+      channel_id: toObjectId(channelId),
+      is_deleted: false,
+      $or: [{ parent_message_id: null }, { parent_message_id: { $exists: false } }]
+    };
     if (beforeId) query._id = { $lt: toObjectId(beforeId) };
     const docs = await this._populateForResponse(
       this.Message.find(query).sort({ _id: -1 }).limit(Math.min(limit, 200))
@@ -377,7 +459,23 @@ export class ChatRepository {
     return (docs || []).reverse();
   }
 
-  async createMessage({ orgId: _orgIdSlug, channelId, senderUserId, body, replyToMessageId = null, mentionedUserIds = [], attachments = [] }) {
+  /** Returns the parent message + all its replies in chronological order. */
+  async listThread(parentMessageId) {
+    const parent = await this._populateForResponse(
+      this.Message.findOne({ _id: toObjectId(parentMessageId), is_deleted: false })
+    );
+    if (!parent) return null;
+    const replies = await this._populateForResponse(
+      this.Message.find({
+        parent_message_id: toObjectId(parentMessageId),
+        is_deleted: false
+      }).sort({ _id: 1 })
+    );
+    return { parent, replies: replies || [] };
+  }
+
+  async createMessage({ orgId: orgIdSlugArg, channelId, senderUserId, body, replyToMessageId = null, parentMessageId = null, mentionedUserIds = [], attachments = [] }) {
+    if (orgIdSlugArg) this._orgIdSlug = orgIdSlugArg;
     const orgObjectId = await this._resolveOrgObjectId();
     const channel = await this.Channel.findOne({
       _id: toObjectId(channelId),
@@ -395,13 +493,22 @@ export class ChatRepository {
     const hasAttachments = Array.isArray(attachments) && attachments.length > 0;
     if (!trimmed && !hasAttachments) throw new Error('EMPTY_BODY');
 
+    // Merge explicit mentioned ids with group-mention expansions (@all, @everyone, @<dept>).
+    const groupExpanded = trimmed
+      ? await this.expandGroupMentions({ body: trimmed, channelId: channel._id })
+      : [];
+    const mergedMentionIds = Array.from(new Set(
+      [...(mentionedUserIds || []), ...groupExpanded].map((u) => String(u))
+    )).map((s) => toObjectId(s));
+
     const doc = await this.Message.create({
       org_id: channel.org_id,
       channel_id: channel._id,
       sender_user_id: toObjectId(senderUserId),
       body: trimmed,
       reply_to_message_id: replyToMessageId ? toObjectId(replyToMessageId) : null,
-      mentioned_user_ids: (mentionedUserIds || []).map((u) => toObjectId(u)),
+      parent_message_id: parentMessageId ? toObjectId(parentMessageId) : null,
+      mentioned_user_ids: mergedMentionIds,
       attachments: (attachments || []).map((a) => ({
         s3_key: String(a.s3_key || '').trim(),
         filename: String(a.filename || '').slice(0, 240),
@@ -410,6 +517,14 @@ export class ChatRepository {
       })).filter((a) => a.s3_key)
     });
 
+    // Increment parent's cached reply count when this is a thread reply.
+    if (parentMessageId) {
+      await this.Message.updateOne(
+        { _id: toObjectId(parentMessageId) },
+        { $inc: { thread_reply_count: 1 } }
+      );
+    }
+
     await this.Channel.updateOne({ _id: channel._id }, { $set: { last_message_at: doc.createdAt } });
     // Author has implicitly read their own message.
     await this.Membership.updateOne(
@@ -417,7 +532,23 @@ export class ChatRepository {
       { $set: { last_read_at: doc.createdAt } }
     );
 
-    return await this._populateForResponse(this.Message.findById(doc._id));
+    const populated = await this._populateForResponse(this.Message.findById(doc._id));
+
+    // Thread replies don't fan out to the main channel feed (they appear in the
+    // thread panel), but we re-broadcast the *parent* with its bumped reply count
+    // so the channel feed shows "N replies" updating live.
+    if (parentMessageId) {
+      const parent = await this._populateForResponse(this.Message.findById(toObjectId(parentMessageId)));
+      if (parent) emitUpdatedMessage(this._orgIdSlug, channel._id, parent);
+    } else {
+      emitNewMessage(this._orgIdSlug, channel._id, populated);
+    }
+    for (const uid of (populated?.mentioned_user_ids || [])) {
+      const id = uid?._id || uid;
+      if (id) emitMention(this._orgIdSlug, id, { channelId: String(channel._id), messageId: String(doc._id) });
+    }
+
+    return populated;
   }
 
   async editMessage({ messageId, userId, body }) {
@@ -432,7 +563,9 @@ export class ChatRepository {
     msg.body = trimmed;
     await msg.save();
 
-    return await this._populateForResponse(this.Message.findById(msg._id));
+    const populated = await this._populateForResponse(this.Message.findById(msg._id));
+    emitUpdatedMessage(this._orgIdSlug, msg.channel_id, populated);
+    return populated;
   }
 
   async softDeleteMessage({ messageId, userId, isAdmin }) {
@@ -443,6 +576,7 @@ export class ChatRepository {
     msg.is_deleted = true;
     msg.deleted_at = new Date();
     await msg.save();
+    emitDeletedMessage(this._orgIdSlug, msg.channel_id, msg._id);
     return msg.toObject();
   }
 
@@ -451,6 +585,70 @@ export class ChatRepository {
       { channel_id: toObjectId(channelId), user_id: toObjectId(userId) },
       { $set: { last_read_at: at } }
     );
+  }
+
+  /**
+   * Bulk-record per-message read receipts. Skips messages authored by the
+   * reader (no point recording "you read your own message").
+   */
+  async markMessagesRead({ userId, channelId, messageIds }) {
+    if (!Array.isArray(messageIds) || messageIds.length === 0) return 0;
+    const orgObjectId = await this._resolveOrgObjectId();
+    const userObj = toObjectId(userId);
+    const ids = messageIds.map(toObjectId);
+
+    // Drop self-authored messages so we don't seed read rows for the sender.
+    const eligible = await this.Message.find({
+      _id: { $in: ids },
+      sender_user_id: { $ne: userObj }
+    }).select('_id channel_id').lean();
+    if (eligible.length === 0) return 0;
+
+    const ops = eligible.map((m) => ({
+      updateOne: {
+        filter: { user_id: userObj, message_id: m._id },
+        update: { $setOnInsert: {
+          org_id: orgObjectId,
+          user_id: userObj,
+          message_id: m._id,
+          channel_id: m.channel_id,
+          read_at: new Date()
+        } },
+        upsert: true
+      }
+    }));
+    const r = await this.MessageRead.bulkWrite(ops, { ordered: false });
+
+    // Push the new read state to the channel so senders see "read by N" update live.
+    emitMessagesRead(this._orgIdSlug, channelId, userId, eligible.map((m) => m._id));
+
+    return r?.upsertedCount || 0;
+  }
+
+  /**
+   * For a list of message ids, return a map { messageId → array of reader users }.
+   * Readers come pre-populated with first/last name + email + avatar.
+   */
+  async getReadInfoForMessages(messageIds) {
+    if (!Array.isArray(messageIds) || messageIds.length === 0) return {};
+    const ids = messageIds.map(toObjectId);
+    const rows = await this.MessageRead.find({ message_id: { $in: ids } })
+      .populate('user_id', 'first_name last_name email profile_picture_key')
+      .lean();
+
+    const byMessage = {};
+    for (const r of rows) {
+      const key = String(r.message_id);
+      if (!byMessage[key]) byMessage[key] = [];
+      const u = r.user_id;
+      if (u) {
+        if (u.profile_picture_key) {
+          u.profile_picture_url = await safeFileUrl(u.profile_picture_key);
+        }
+        byMessage[key].push({ user: u, read_at: r.read_at });
+      }
+    }
+    return byMessage;
   }
 
   // ---------- reactions / pin / star ----------
@@ -479,7 +677,9 @@ export class ChatRepository {
     }
 
     await msg.save();
-    return await this._populateForResponse(this.Message.findById(msg._id));
+    const populated = await this._populateForResponse(this.Message.findById(msg._id));
+    emitUpdatedMessage(this._orgIdSlug, msg.channel_id, populated);
+    return populated;
   }
 
   async setPin({ messageId, userId, pinned }) {
@@ -489,7 +689,9 @@ export class ChatRepository {
     msg.pinned_at = pinned ? new Date() : null;
     msg.pinned_by_user_id = pinned ? toObjectId(userId) : null;
     await msg.save();
-    return await this._populateForResponse(this.Message.findById(msg._id));
+    const populated = await this._populateForResponse(this.Message.findById(msg._id));
+    emitUpdatedMessage(this._orgIdSlug, msg.channel_id, populated);
+    return populated;
   }
 
   async listPinnedMessages(channelId) {
@@ -561,13 +763,26 @@ export class ChatRepository {
   // ---------- mention picker ----------
 
   /**
-   * Returns active users for the @-mention picker. The plugin's find post-hook
-   * decrypts first_name/last_name/email; we then resolve a signed avatar URL
-   * for the small subset that has one.
+   * Returns users available as @-mention targets. When a `channelId` is
+   * supplied, results are limited to members of that channel — so a private
+   * or department channel only mentions its actual members.
+   *
+   * The plugin's find post-hook decrypts first_name/last_name/email; we then
+   * resolve a signed avatar URL for the small subset that has one.
    */
-  async listOrgUsersForMention({ search = '', limit = 30 } = {}) {
-    const q = { status: 'active' };
-    const users = await this.User.find(q)
+  async listOrgUsersForMention({ search = '', limit = 30, channelId = null } = {}) {
+    let userQuery = { status: 'active' };
+
+    // Channel-scoped: only members of that specific channel are mentionable.
+    if (channelId) {
+      const memberRows = await this.Membership.find({ channel_id: toObjectId(channelId) })
+        .select('user_id').lean();
+      const memberIds = memberRows.map((m) => m.user_id);
+      if (memberIds.length === 0) return [];
+      userQuery._id = { $in: memberIds };
+    }
+
+    const users = await this.User.find(userQuery)
       .select('_id first_name last_name email profile_picture_key')
       .limit(Math.min(limit, 100))
       .lean();
@@ -589,6 +804,149 @@ export class ChatRepository {
         ? await safeFileUrl(u.profile_picture_key)
         : null
     })));
+  }
+
+  // ---------- DMs ----------
+
+  /**
+   * Find an existing 1:1 DM channel between two users in this org, or create
+   * one. Idempotent — calling twice with the same pair returns the same channel.
+   */
+  async findOrCreateDm({ requesterUserId, otherUserId }) {
+    if (String(requesterUserId) === String(otherUserId)) throw new Error('SELF_DM');
+    const org = await this._resolveOrgObjectId();
+    const a = toObjectId(requesterUserId);
+    const b = toObjectId(otherUserId);
+
+    const existing = await this.Channel.findOne({
+      org_id: org,
+      kind: 'dm',
+      member_user_ids: { $all: [a, b], $size: 2 }
+    })
+      .populate('member_user_ids', 'first_name last_name email profile_picture_key')
+      .lean();
+    if (existing) return existing;
+
+    const created = await this.Channel.create({
+      org_id: org,
+      kind: 'dm',
+      name: '',
+      description: '',
+      member_user_ids: [a, b],
+      posting_open: true,
+      created_by_user_id: a
+    });
+
+    await this.Membership.bulkWrite([
+      { updateOne: { filter: { channel_id: created._id, user_id: a }, update: { $setOnInsert: { org_id: org, channel_id: created._id, user_id: a, joined_at: new Date() } }, upsert: true } },
+      { updateOne: { filter: { channel_id: created._id, user_id: b }, update: { $setOnInsert: { org_id: org, channel_id: created._id, user_id: b, joined_at: new Date() } }, upsert: true } }
+    ], { ordered: false });
+
+    emitChannelListChanged(this._orgIdSlug);
+
+    return await this.Channel.findById(created._id)
+      .populate('member_user_ids', 'first_name last_name email profile_picture_key')
+      .lean();
+  }
+
+  // ---------- search ----------
+
+  /**
+   * Full-text-ish search across messages the requester can see (i.e. channels
+   * they're a member of). Supports filters: senderId, since/until (date), hasAttachment.
+   */
+  async searchMessages({ requesterUserId, q = '', senderId = null, since = null, until = null, hasAttachment = null, limit = 60 }) {
+    const memberRows = await this.Membership.find({ user_id: toObjectId(requesterUserId) })
+      .select('channel_id').lean();
+    if (memberRows.length === 0) return [];
+    const channelIds = memberRows.map((m) => m.channel_id);
+
+    const filter = { channel_id: { $in: channelIds }, is_deleted: false };
+    const trimmed = String(q || '').trim();
+    if (trimmed) {
+      const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.body = new RegExp(escapeRe(trimmed), 'i');
+    }
+    if (senderId) filter.sender_user_id = toObjectId(senderId);
+    if (since || until) {
+      filter.createdAt = {};
+      if (since) filter.createdAt.$gte = new Date(since);
+      if (until) filter.createdAt.$lte = new Date(until);
+    }
+    if (hasAttachment === true || hasAttachment === 'true') {
+      filter['attachments.0'] = { $exists: true };
+    }
+
+    const docs = await this._populateForResponse(
+      this.Message.find(filter).sort({ createdAt: -1 }).limit(Math.min(limit, 200))
+    );
+    return docs || [];
+  }
+
+  // ---------- archive / leave / mute ----------
+
+  async setChannelArchived({ channelId, archived, requesterUserId, isAdmin }) {
+    const ch = await this.Channel.findById(toObjectId(channelId));
+    if (!ch) return null;
+    const isCreator = ch.kind === 'private' && String(ch.created_by_user_id) === String(requesterUserId);
+    if (!isAdmin && !isCreator) throw new Error('FORBIDDEN');
+    ch.is_archived = !!archived;
+    await ch.save();
+    emitChannelListChanged(this._orgIdSlug);
+    return ch.toObject();
+  }
+
+  async setNotifyPreference({ channelId, userId, notify }) {
+    const allowed = ['all', 'mentions', 'muted'];
+    if (!allowed.includes(notify)) throw new Error('INVALID_NOTIFY');
+    const res = await this.Membership.findOneAndUpdate(
+      { channel_id: toObjectId(channelId), user_id: toObjectId(userId) },
+      { $set: { notify } },
+      { new: true }
+    ).lean();
+    return res;
+  }
+
+  // ---------- group mention expansion ----------
+
+  /**
+   * Expand `@everyone`, `@<department-slug>` tokens into a flat list of user
+   * ids. Used at send time to populate `mentioned_user_ids` so the receiving
+   * users get pinged via socket.
+   */
+  async expandGroupMentions({ body, channelId = null }) {
+    const text = String(body || '');
+    const expansions = [];
+    const slugify = (s) => String(s || '').toLowerCase().trim().replace(/\s+/g, '-');
+
+    // `@all` is the channel-scoped flavour — expands to every member of THIS
+    // channel only. Use this for "ping the room" without spamming the whole org.
+    if (channelId && /@all\b/i.test(text)) {
+      const rows = await this.Membership.find({ channel_id: toObjectId(channelId) })
+        .select('user_id').lean();
+      for (const r of rows) if (r.user_id) expansions.push(r.user_id);
+    }
+
+    // `@everyone` stays org-wide — kept for backward compat but rarely the
+    // right pick. Channel `@all` is what the picker offers by default.
+    if (/@everyone\b/i.test(text)) {
+      const users = await this.User.find({ status: 'active' }).select('_id').lean();
+      for (const u of users) expansions.push(u._id);
+    }
+
+    const departments = await this.Department.find({ is_active: true }).select('_id name').lean();
+    for (const d of departments) {
+      const slug = slugify(d.name);
+      const re = new RegExp(`@${slug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      if (re.test(text)) {
+        const members = await this.BoardMember.find({ department: d.name, user_id: { $exists: true } })
+          .select('user_id').lean();
+        for (const m of members) {
+          if (m.user_id) expansions.push(m.user_id);
+        }
+      }
+    }
+    return expansions;
   }
 
   // ---------- compliance mention search ----------
@@ -643,33 +1001,34 @@ export class ChatRepository {
       (t) => canViewModuleSync(permissions, t.moduleId)
     );
 
-    const entityResults = [];
-    for (const t of allowedEntityTargets) {
+    // Run every entity-type search in parallel — each is its own collection
+    // hit. With 13 types this drops picker latency dramatically.
+    const entityResultArrays = await Promise.all(allowedEntityTargets.map(async (t) => {
       const Model = this.tenantDb.models[t.modelName] || this.tenantDb.model(t.modelName, t.schema);
       const filter = re ? { [t.titleField]: re } : {};
-      let docs = [];
+      const select = ['_id', t.titleField, t.statusField].filter(Boolean).join(' ');
       try {
-        docs = await Model.find(filter)
-          .select(`_id ${t.titleField}`)
+        const docs = await Model.find(filter)
+          .select(select)
           .sort({ updatedAt: -1, _id: -1 })
           .limit(ENTITY_PER_TYPE)
           .lean();
-      } catch {
-        // Some collections may not exist yet for a tenant — skip silently rather than 500 the picker.
-        continue;
-      }
-      for (const d of docs) {
-        entityResults.push({
+        return docs.map((d) => ({
           kind: 'entity',
           id: String(d._id),
           type: t.type,
           label: d[t.titleField] || `(untitled ${t.label})`,
           typeLabel: t.label,
           href: t.hrefBuilder(d._id),
-          moduleId: t.moduleId
-        });
+          moduleId: t.moduleId,
+          status: t.statusField ? (d[t.statusField] || null) : null
+        }));
+      } catch {
+        // Collection may not exist yet for a tenant — skip silently.
+        return [];
       }
-    }
+    }));
+    const entityResults = entityResultArrays.flat();
 
     // When the user typed a query, lead with entities (specific). When browsing,
     // lead with modules (overview).
@@ -711,9 +1070,11 @@ export class ChatRepository {
     }));
     if (ops.length) await this.Membership.bulkWrite(ops, { ordered: false });
 
-    return await this.Channel.findById(channel._id)
+    const result = await this.Channel.findById(channel._id)
       .populate('member_user_ids', 'first_name last_name email profile_picture_key')
       .lean();
+    emitChannelListChanged(this._orgIdSlug);
+    return result;
   }
 
   /** Returns true if the given user is allowed to manage members of this channel. */
@@ -756,9 +1117,11 @@ export class ChatRepository {
     }));
     if (ops.length) await this.Membership.bulkWrite(ops, { ordered: false });
 
-    return await this.Channel.findById(ch._id)
+    const out = await this.Channel.findById(ch._id)
       .populate('member_user_ids', 'first_name last_name email profile_picture_key')
       .lean();
+    emitChannelListChanged(this._orgIdSlug);
+    return out;
   }
 
   async removeChannelMember({ channelId, userId, requesterUserId }) {
@@ -771,6 +1134,7 @@ export class ChatRepository {
     ch.member_user_ids = ch.member_user_ids.filter((u) => String(u) !== String(userId));
     await ch.save();
     await this.Membership.deleteOne({ channel_id: ch._id, user_id: toObjectId(userId) });
+    emitChannelListChanged(this._orgIdSlug);
     return ch.toObject();
   }
 
@@ -810,9 +1174,12 @@ export class ChatRepository {
   // ---------- retention cleanup ----------
 
   /**
-   * Permanently deletes attachments older than each channel's retention window
-   * (retention_days = 0 means forever). Returns counts so the scheduler can log.
-   * Soft-deletes message bodies that lose all attachments AND are past retention.
+   * Permanently deletes attachments AND scrubs message bodies older than each
+   * channel's retention window (retention_days = 0 means forever).
+   *
+   * Audit invariant preserved: `sender_user_id`, `createdAt`, `is_deleted: true`
+   * remain so the audit trail can prove a message existed even after content
+   * has been removed.
    */
   async runRetentionSweep() {
     const channels = await this.Channel.find({ retention_days: { $gt: 0 } })
@@ -825,11 +1192,7 @@ export class ChatRepository {
       const cutoff = new Date(Date.now() - c.retention_days * 24 * 60 * 60 * 1000);
       const expired = await this.Message.find({
         channel_id: c._id,
-        createdAt: { $lt: cutoff },
-        $or: [
-          { 'attachments.0': { $exists: true } },
-          { is_deleted: false }
-        ]
+        createdAt: { $lt: cutoff }
       }).select('_id attachments body is_deleted');
 
       for (const m of expired) {
@@ -841,16 +1204,15 @@ export class ChatRepository {
           } catch { /* ignore */ }
         }
         m.attachments = [];
-
-        // If the message has no body either, soft-delete it so the audit trail
-        // (edits[]) is preserved but the content disappears.
-        if (!m.body || !m.body.trim()) {
-          if (!m.is_deleted) {
-            m.is_deleted = true;
-            m.deleted_at = new Date();
-            messagesPurged += 1;
-          }
+        // Past retention — scrub body and soft-delete. Edits[] history is
+        // also wiped because it would otherwise leak prior content.
+        if (!m.is_deleted) {
+          m.is_deleted = true;
+          m.deleted_at = new Date();
+          messagesPurged += 1;
         }
+        m.body = '';
+        m.edits = [];
         await m.save();
       }
     }
@@ -899,10 +1261,19 @@ export class ChatRepository {
   }
 }
 
-/** Never throw out of avatar URL signing — a missing/expired S3 key shouldn't 500 a chat fetch. */
+/**
+ * Cached, throw-safe S3 signed URL. URLs are valid 7 days; we hold them for
+ * ~6 days so the next list call doesn't pay for a fresh sign every avatar.
+ */
 async function safeFileUrl(key) {
+  if (!key) return null;
+  const cached = _signedUrlCache.get(key);
+  const now = Date.now();
+  if (cached && cached.expiresAt > now) return cached.url;
   try {
-    return await getFileUrl(key, 604800);
+    const url = await getFileUrl(key, 604800);
+    _signedUrlCache.set(key, { url, expiresAt: now + SIGNED_URL_TTL_MS });
+    return url;
   } catch {
     return null;
   }

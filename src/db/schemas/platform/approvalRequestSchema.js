@@ -352,5 +352,32 @@ approvalRequestSchema.index({ org_id: 1, submitted_by: 1 });
 approvalRequestSchema.index({ entity_id: 1, entity_type: 1 });
 approvalRequestSchema.index({ 'approval_steps.approver_user_id': 1, 'approval_steps.status': 1 });
 approvalRequestSchema.index({ org_id: 1, created_at: -1 });
+approvalRequestSchema.index({ org_id: 1, completed_at: -1 });
+
+const TERMINAL_STATUSES = new Set(['approved', 'rejected', 'cancelled']);
+
+// Defense-in-depth: any code path that flips status to a terminal value should
+// also stamp completed_at. The repo's updateStatus already does, but a hook
+// guarantees the invariant for direct .save() / findOneAndUpdate writers.
+approvalRequestSchema.pre('save', function presaveStampCompletedAt(next) {
+  if (TERMINAL_STATUSES.has(this.status) && !this.completed_at) {
+    this.completed_at = new Date();
+  }
+  next();
+});
+
+approvalRequestSchema.pre('findOneAndUpdate', function preFindOneAndUpdateStamp() {
+  const update = this.getUpdate() || {};
+  const $set = update.$set || update;
+  const nextStatus = $set.status;
+  if (nextStatus && TERMINAL_STATUSES.has(nextStatus)) {
+    if ($set.completed_at === undefined && update.completed_at === undefined) {
+      const now = new Date();
+      if (update.$set) update.$set.completed_at = now;
+      else update.completed_at = now;
+      this.setUpdate(update);
+    }
+  }
+});
 
 export default approvalRequestSchema;

@@ -11,6 +11,7 @@ import {
   acceptInvitation,
   forgotPassword,
   resetPassword,
+  verifyResetToken,
   verifyOtp,
   sendOtp,
   refreshPermissions,
@@ -39,6 +40,7 @@ router.post('/mfa/disable', authAndResolveTenant, disableMfa);
 // Password reset (public - no auth required)
 router.post('/forgot-password', forgotPasswordValidator, validate, forgotPassword);
 router.post('/reset-password', resetPasswordValidator, validate, resetPassword);
+router.get('/reset-password/verify/:token', verifyResetToken);
 
 // Invitation routes (public - no auth required)
 router.get('/invitation/:token', verifyInvitationToken);
