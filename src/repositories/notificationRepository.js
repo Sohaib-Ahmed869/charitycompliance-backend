@@ -23,13 +23,40 @@ export class NotificationRepository {
   }
 
   async findByUserId(userId, options = {}) {
-    const { limit = 50, unreadOnly = false } = options;
+    const { limit = 50, unreadOnly = false, archived = false } = options;
     const query = { user_id: userId };
     if (unreadOnly) query.read = false;
+    // Archived state — hide archived items from the main list by default,
+    // and surface them only when explicitly requested.
+    if (archived === true) {
+      query.archived = true;
+    } else {
+      query.$or = [{ archived: { $exists: false } }, { archived: false }];
+    }
     return await this.Notification.find(query)
       .sort({ created_at: -1 })
       .limit(limit)
       .lean();
+  }
+
+  async archive(id, userId) {
+    return await this.Notification.findOneAndUpdate(
+      { _id: id, user_id: userId },
+      { $set: { archived: true, archived_at: new Date() } },
+      { new: true }
+    );
+  }
+
+  async unarchive(id, userId) {
+    return await this.Notification.findOneAndUpdate(
+      { _id: id, user_id: userId },
+      { $set: { archived: false }, $unset: { archived_at: 1 } },
+      { new: true }
+    );
+  }
+
+  async deleteById(id, userId) {
+    return await this.Notification.findOneAndDelete({ _id: id, user_id: userId });
   }
 
   async markAsRead(id, userId) {

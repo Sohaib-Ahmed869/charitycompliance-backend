@@ -172,6 +172,30 @@ export class ApprovalWorkflowService {
       if (selectedRule) break;
     }
 
+    // Legacy-data fallback: if no rule matched by action_type but a matrix exists
+    // whose workflow_category corresponds to this action, use its first active rule.
+    // Older onboarding seeds saved rule.action_type='other' even when the user
+    // configured a real category — see the actionTypeMap fix in onboardingService.js.
+    if (!selectedRule && guardCategory) {
+      for (const matrix of matrices) {
+        const matrixCat = String(matrix.workflow_category || '').toLowerCase().trim();
+        if (matrixCat !== guardCategory) continue;
+        for (const rule of matrix.rules) {
+          if (!rule.is_active) continue;
+          if (!Array.isArray(rule.requires_approval_from) || rule.requires_approval_from.length === 0) continue;
+          actionTypeHasAnyRule = true;
+          const minMatch = rule.min_amount === undefined || amount >= rule.min_amount;
+          const maxMatch = rule.max_amount === undefined || amount <= rule.max_amount;
+          if (minMatch && maxMatch) {
+            selectedMatrix = matrix;
+            selectedRule = rule;
+            break;
+          }
+        }
+        if (selectedRule) break;
+      }
+    }
+
     // No matrix has any rule for this action type at all → same UX as "not configured".
     // (A tier-mismatch — rule exists but amount falls outside min/max — is a different
     // problem the user fixes by editing, so we keep NO_MATCHING_RULE for that.)

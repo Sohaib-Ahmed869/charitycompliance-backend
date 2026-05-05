@@ -85,6 +85,17 @@ const notificationSchema = new mongoose.Schema({
     default: false,
     index: true
   },
+  // Archived notifications drop out of the main list but stay in the DB
+  // so they're recoverable from the Archive view. Hard delete still
+  // removes them entirely.
+  archived: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  archived_at: {
+    type: Date
+  },
   created_at: {
     type: Date,
     default: Date.now,

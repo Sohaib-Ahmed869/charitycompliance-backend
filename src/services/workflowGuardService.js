@@ -121,11 +121,36 @@ export const checkWorkflowConfigured = async ({ orgId, category, actionType, asO
   }
 
   const matrixRepo = new ApprovalMatrixRepository(tenantDb);
-  const matrices = await matrixRepo.findEffectiveByOrgId(org._id, asOf || new Date());
+  // Precheck is a UX gate, not the authoritative submission check — be lenient.
+  // findByOrgId (active matrices, ignoring effective_from/effective_to/revoked_at)
+  // is the right tool here: a matrix that's been ended or future-dated still counts
+  // as "the user has configured something" so we don't pop the dialog mid-flow.
+  // The hard gate at submission time (findMatchingRule → findEffectiveByOrgId) will
+  // still reject a genuinely-revoked or out-of-window workflow with a specific error.
+  const matrices = await matrixRepo.findByOrgId(org._id);
 
-  const configured = (matrices || []).some((m) =>
-    (m.rules || []).some((r) => r.is_active !== false && _normalize(r.action_type) === resolved.actionType)
-  );
+  const matchesAction = (r) =>
+    r && r.is_active !== false && _normalize(r.action_type) === resolved.actionType;
+
+  // A matrix is "configured" for this category if either:
+  //   1) it contains an active rule with the expected action_type, OR
+  //   2) its workflow_category matches and it has any active rule with approvers
+  //      — handles legacy onboarding data where action_type was saved as 'other'
+  //      (see the actionTypeMap fix in onboardingService.js).
+  const configured = (matrices || []).some((m) => {
+    const rules = m.rules || [];
+    if (m.revoked_at) return false; // explicitly revoked → don't count
+    if (rules.some(matchesAction)) return true;
+
+    const categoryMatches = _normalize(m.workflow_category) === resolved.category;
+    if (!categoryMatches) return false;
+    return rules.some(
+      (r) =>
+        r.is_active !== false &&
+        Array.isArray(r.requires_approval_from) &&
+        r.requires_approval_from.length > 0
+    );
+  });
 
   return {
     configured,

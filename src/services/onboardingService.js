@@ -578,12 +578,15 @@ export class OnboardingService {
     
     // Map frontend action types to backend enum values.
     // NOTE: We now store UI tags directly (risk/expense/grant/...) so workflows apply correctly.
-    // Legacy values are still supported for older data.
+    // Legacy values are still supported for older data. Missing entries fall through
+    // to 'other', which silently breaks the workflow guard for that module — keep this
+    // list aligned with the action_type enum in approvalMatrixSchema.js.
     const actionTypeMap = {
       'risk': 'risk',
       'risks': 'risk',
       'risk_management': 'risk',
       'risk_approval': 'risk',
+      'risk_treatment': 'risk_treatment',
       'expense': 'expense',
       'expenses': 'expense',
       'grant': 'grant',
@@ -593,11 +596,44 @@ export class OnboardingService {
       'contracts': 'contract',
       'leave': 'leave',
       'hr': 'hr',
+      'hr_approval': 'hr',
       'policy': 'policy',
       'policies': 'policy',
+      'policy_approval': 'policy',
       'purchase': 'purchase',
       'document_approval': 'document_approval',
       'budget_approval': 'budget_approval',
+      'complaint': 'complaint',
+      'complaints': 'complaint',
+      'complaint_resolution': 'complaint',
+      'coi': 'coi',
+      'partner_vetting': 'partner_vetting',
+      'funding_agreement': 'funding_agreement',
+      'donor': 'donor',
+      'donor_review': 'donor',
+      'donation': 'donation',
+      'donation_workflow': 'donation',
+      'donation_agreement': 'donation_agreement',
+      'donation_agreement_workflow': 'donation_agreement',
+      'donation_milestone': 'donation_milestone',
+      'donation_milestone_workflow': 'donation_milestone',
+      'social_media_campaign': 'social_media_campaign',
+      'social_media_campaign_workflow': 'social_media_campaign',
+      'project': 'project',
+      'project_approval': 'project',
+      'project_delivery': 'project_delivery',
+      'project_delivery_approval': 'project_delivery',
+      'project_delivery_changes': 'project_delivery_changes',
+      'project_delivery_changes_approval': 'project_delivery_changes',
+      'emergency': 'emergency',
+      'sweep_funds': 'sweep_funds',
+      'sweep_funds_approval': 'sweep_funds',
+      'bas_lodgement': 'bas_lodgement',
+      'bas_lodgement_approval': 'bas_lodgement',
+      'financial_reporting': 'financial_reporting',
+      'financial_reporting_approval': 'financial_reporting',
+      'refunds': 'refunds',
+      'refunds_approval': 'refunds',
       'other': 'other'
     };
     
@@ -739,13 +775,17 @@ export class OnboardingService {
 
     // Create ONE ApprovalMatrix document per rule/workflow instead of packing all
     // rules into a single "Default Approval Matrix".
-    // Map action types to workflow categories and required workflow types
+    // Map action types to workflow categories and required workflow types.
+    // Keep aligned with CATEGORY_TO_ACTION in workflowGuardService.js — the guard's
+    // precheck uses rule.action_type, but the workflow_category drives which card
+    // the workflow shows under in role-permissions.
     const categoryMapping = {
       risk: 'risk_management',
       risk_management: 'risk_management',
+      risk_treatment: 'risk_treatment',
       expense: 'expense_approval',
       purchase: 'expense_approval',
-      grant: 'funding_agreement',
+      grant: 'grant_approval',
       coi: 'coi',
       partner_vetting: 'partner_vetting',
       policy: 'policy_approval',
@@ -754,8 +794,20 @@ export class OnboardingService {
       contract: 'other',
       leave: 'hr_approval',
       project: 'project_approval',
-      risk_treatment: 'risk_treatment',
+      project_delivery: 'project_delivery_approval',
+      project_delivery_changes: 'project_delivery_changes_approval',
+      complaint: 'complaint_resolution',
       funding_agreement: 'funding_agreement',
+      donor: 'donor_review',
+      donation: 'donation_workflow',
+      donation_agreement: 'donation_agreement_workflow',
+      donation_milestone: 'donation_milestone_workflow',
+      social_media_campaign: 'social_media_campaign_workflow',
+      emergency: 'emergency',
+      sweep_funds: 'sweep_funds_approval',
+      bas_lodgement: 'bas_lodgement_approval',
+      financial_reporting: 'financial_reporting_approval',
+      refunds: 'refunds_approval',
       other: 'other'
     };
 
@@ -767,8 +819,12 @@ export class OnboardingService {
       project_approval: 'moderate_cash'
     };
 
-    // Categories that can only have ONE active workflow per org
-    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'risk_treatment'];
+    // Categories that can only have ONE active workflow per org — must mirror the
+    // approvalController createApprovalMatrix list and the schema-level pre-save check.
+    const singleWorkflowCategories = [
+      'coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'risk_treatment',
+      'complaint_resolution', 'financial_reporting_approval', 'bas_lodgement_approval'
+    ];
 
     const friendlyNames = {
       expense: 'Expense approvals',

@@ -38,4 +38,25 @@ router.patch(
 
 router.post('/read-all', notificationController.markAllAsRead);
 
+router.patch(
+  '/:notificationId/archive',
+  [param('notificationId').isMongoId().withMessage('Invalid notification ID')],
+  validate,
+  notificationController.archiveNotification
+);
+
+router.patch(
+  '/:notificationId/unarchive',
+  [param('notificationId').isMongoId().withMessage('Invalid notification ID')],
+  validate,
+  notificationController.unarchiveNotification
+);
+
+router.delete(
+  '/:notificationId',
+  [param('notificationId').isMongoId().withMessage('Invalid notification ID')],
+  validate,
+  notificationController.deleteNotification
+);
+
 export default router;
