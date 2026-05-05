@@ -17,10 +17,14 @@
   "author": "",
   "license": "ISC",
   "description": "Backend API for Charity Compliance Platform",
+  "engines": {
+    "node": ">=20.11.0"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.972.0",
     "@aws-sdk/client-secrets-manager": "^3.972.0",
     "@aws-sdk/s3-request-presigner": "^3.972.0",
+    "@mongodb-js/saslprep": "^1.1.9",
     "archiver": "^7.0.1",
     "axios": "^1.7.9",
     "bcryptjs": "^2.4.3",
