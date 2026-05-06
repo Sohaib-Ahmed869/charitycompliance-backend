@@ -398,7 +398,7 @@ export class MeetingService {
 
     // Handle both string status and object with completion_audit
     let status, updateData;
-    
+
     if (typeof statusOrData === 'string') {
       status = statusOrData;
       updateData = { status, updated_at: new Date() };
@@ -419,6 +419,228 @@ export class MeetingService {
     }
 
     return await meetingRepo.update(meetingId, updateData);
+  }
+
+  /**
+   * Cancel a meeting. Sets status=cancelled, stores reason + audit fields,
+   * sends a cancellation email to every internal and external attendee.
+   * Refuses to cancel meetings that are already completed or cancelled.
+   */
+  async cancelMeeting(meetingId, reason, userId) {
+    const tenantDb = await this.getTenantDb();
+    const meetingRepo = new MeetingRepository(tenantDb);
+    const userRepo = new UserRepository(tenantDb);
+
+    const meeting = await meetingRepo.findById(meetingId);
+    if (!meeting) {
+      throw new AppError('Meeting not found', 404, 'MEETING_NOT_FOUND');
+    }
+    if (meeting.status === 'completed') {
+      throw new AppError('Completed meetings cannot be cancelled', 400, 'INVALID_STATE');
+    }
+    if (meeting.status === 'cancelled') {
+      throw new AppError('Meeting is already cancelled', 400, 'INVALID_STATE');
+    }
+
+    const trimmedReason = String(reason || '').trim();
+    const now = new Date();
+    const updated = await meetingRepo.update(meetingId, {
+      status: 'cancelled',
+      cancelled_at: now,
+      cancelled_by: userId,
+      cancellation_reason: trimmedReason,
+      updated_at: now
+    });
+
+    logInfo('Meeting cancelled', { meetingId, cancelledBy: userId });
+
+    // Fire-and-log emails — failures don't roll back the cancellation.
+    try {
+      const canceller = userId ? await userRepo.findById(userId) : null;
+      const cancelledByName = canceller
+        ? `${canceller.first_name || ''} ${canceller.last_name || ''}`.trim() || canceller.email || 'The organizer'
+        : 'The organizer';
+
+      const internalAttendeeIds = (meeting.attendees || []).map(a => a.user_id).filter(Boolean);
+      for (const uid of internalAttendeeIds) {
+        const u = await userRepo.findById(uid);
+        if (!u?.email) continue;
+        try {
+          await emailService.sendMeetingCancellationEmail({
+            to: u.email,
+            recipientName: `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Team Member',
+            meetingTitle: meeting.title,
+            meetingDate: meeting.date,
+            durationMinutes: meeting.duration_minutes,
+            location: meeting.location,
+            cancelledByName,
+            reason: trimmedReason,
+            meetingId: meeting._id.toString()
+          });
+        } catch (emailErr) {
+          logError('Failed to send meeting cancellation email', emailErr, { userId: uid, meetingId });
+        }
+      }
+
+      for (const ext of (meeting.external_attendees || [])) {
+        if (!ext.email) continue;
+        try {
+          await emailService.sendMeetingCancellationEmail({
+            to: ext.email,
+            recipientName: ext.name || 'Guest',
+            meetingTitle: meeting.title,
+            meetingDate: meeting.date,
+            durationMinutes: meeting.duration_minutes,
+            location: meeting.location,
+            cancelledByName,
+            reason: trimmedReason,
+            meetingId: meeting._id.toString()
+          });
+        } catch (emailErr) {
+          logError('Failed to send cancellation email to external attendee', emailErr, { email: ext.email, meetingId });
+        }
+      }
+    } catch (notifyErr) {
+      logError('Failed to dispatch meeting cancellation notifications', notifyErr, { meetingId });
+    }
+
+    return updated;
+  }
+
+  /**
+   * Apply organizer-edited details to a scheduled meeting. When the date or
+   * duration changes, we treat it as a reschedule: every attendee's
+   * attendance_status is reset to 'invited' (forcing a fresh RSVP) and the
+   * email includes the Accept/Decline buttons. Pure metadata changes (title,
+   * agenda, location, link) just send a "details updated" notification.
+   */
+  async rescheduleOrUpdateMeeting(meetingId, patch, userId) {
+    const tenantDb = await this.getTenantDb();
+    const meetingRepo = new MeetingRepository(tenantDb);
+    const userRepo = new UserRepository(tenantDb);
+
+    const meeting = await meetingRepo.findById(meetingId);
+    if (!meeting) {
+      throw new AppError('Meeting not found', 404, 'MEETING_NOT_FOUND');
+    }
+    if (meeting.status === 'completed' || meeting.status === 'cancelled') {
+      throw new AppError(`Cannot edit a ${meeting.status} meeting`, 400, 'INVALID_STATE');
+    }
+
+    const editable = ['title', 'agenda', 'date', 'duration_minutes', 'location', 'meeting_link'];
+    const update = {};
+    const changes = [];
+
+    for (const key of editable) {
+      if (!Object.prototype.hasOwnProperty.call(patch, key)) continue;
+      const before = meeting[key];
+      const after = patch[key];
+      // Compare dates as ISO strings so equality survives Date↔string round trips.
+      const beforeNorm = before instanceof Date ? before.toISOString() : before;
+      const afterNorm = after instanceof Date ? after.toISOString() : after;
+      if (beforeNorm === afterNorm) continue;
+      update[key] = after;
+      if (key === 'date') {
+        changes.push(`Date/time changed to ${new Date(after).toLocaleString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}`);
+      } else if (key === 'duration_minutes') {
+        changes.push(`Duration changed to ${after} minutes`);
+      } else if (key === 'title') {
+        changes.push('Title updated');
+      } else if (key === 'agenda') {
+        changes.push('Agenda updated');
+      } else if (key === 'location') {
+        changes.push(after ? `Location updated to ${after}` : 'Location removed');
+      } else if (key === 'meeting_link') {
+        changes.push(after ? 'Meeting link updated' : 'Meeting link removed');
+      }
+    }
+
+    if (Object.keys(update).length === 0) {
+      return meeting;
+    }
+
+    // "Major change" = the schedule moved. Reset RSVPs + reissue tokens so the
+    // accept/decline link in the new email is unambiguous and stale RSVPs
+    // can't pre-confirm a different time slot.
+    const isMajorChange = Object.prototype.hasOwnProperty.call(update, 'date')
+      || Object.prototype.hasOwnProperty.call(update, 'duration_minutes');
+    if (isMajorChange) {
+      update.attendees = (meeting.attendees || []).map((a) => ({
+        ...(a.toObject ? a.toObject() : a),
+        attendance_status: 'invited',
+        rsvp_token: crypto.randomBytes(32).toString('hex')
+      }));
+      update.external_attendees = (meeting.external_attendees || []).map((e) => ({
+        ...(e.toObject ? e.toObject() : e),
+        attendance_status: 'invited',
+        rsvp_token: crypto.randomBytes(32).toString('hex')
+      }));
+      // Clear reminder bookkeeping so reminders fire again for the new schedule.
+      update.reminder_sent = { one_hour_for_date: null, fifteen_min_for_date: null };
+    }
+
+    update.updated_at = new Date();
+    const updated = await meetingRepo.update(meetingId, update);
+
+    logInfo('Meeting updated', { meetingId, isMajorChange, changeKeys: Object.keys(update) });
+
+    try {
+      const editor = userId ? await userRepo.findById(userId) : null;
+      const organizerName = editor
+        ? `${editor.first_name || ''} ${editor.last_name || ''}`.trim() || editor.email || 'The organizer'
+        : 'The organizer';
+
+      const internalRecs = updated.attendees || [];
+      for (const rec of internalRecs) {
+        if (!rec.user_id) continue;
+        const u = await userRepo.findById(rec.user_id);
+        if (!u?.email) continue;
+        try {
+          await emailService.sendMeetingUpdatedEmail({
+            to: u.email,
+            recipientName: `${u.first_name || ''} ${u.last_name || ''}`.trim() || 'Team Member',
+            meetingTitle: updated.title,
+            meetingDate: updated.date,
+            durationMinutes: updated.duration_minutes,
+            location: updated.location,
+            meetingLink: updated.meeting_link,
+            organizerName,
+            meetingId: updated._id.toString(),
+            rsvpToken: rec.rsvp_token,
+            changeSummary: changes,
+            rsvpReset: isMajorChange
+          });
+        } catch (emailErr) {
+          logError('Failed to send meeting update email', emailErr, { userId: rec.user_id, meetingId });
+        }
+      }
+
+      for (const ext of (updated.external_attendees || [])) {
+        if (!ext.email) continue;
+        try {
+          await emailService.sendMeetingUpdatedEmail({
+            to: ext.email,
+            recipientName: ext.name || 'Guest',
+            meetingTitle: updated.title,
+            meetingDate: updated.date,
+            durationMinutes: updated.duration_minutes,
+            location: updated.location,
+            meetingLink: updated.meeting_link,
+            organizerName,
+            meetingId: updated._id.toString(),
+            rsvpToken: ext.rsvp_token,
+            changeSummary: changes,
+            rsvpReset: isMajorChange
+          });
+        } catch (emailErr) {
+          logError('Failed to send meeting update email to external attendee', emailErr, { email: ext.email, meetingId });
+        }
+      }
+    } catch (notifyErr) {
+      logError('Failed to dispatch meeting update notifications', notifyErr, { meetingId });
+    }
+
+    return updated;
   }
 
   /**

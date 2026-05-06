@@ -22,6 +22,19 @@ const donationBoxEntrySchema = new mongoose.Schema(
       required: true,
       min: 0,
     },
+    /**
+     * Optional "expected" amount derived from receipts/banking records, used
+     * for the variance check when cash is counted. If supplied and differs
+     * from `amount` (for boxes) or `gross_amount` (for misc collections), the
+     * UI surfaces a variance alert and we persist the difference for audit.
+     */
+    expected_amount: {
+      type: Number,
+      min: 0,
+    },
+    variance: {
+      type: Number,
+    },
     entry_date: {
       type: Date,
       required: true,

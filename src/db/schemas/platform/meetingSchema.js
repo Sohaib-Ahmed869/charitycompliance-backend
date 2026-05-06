@@ -249,6 +249,8 @@ const meetingSchema = new mongoose.Schema({
     default: Date.now
   },
   cancelled_at: Date,
+  cancelled_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  cancellation_reason: { type: String, trim: true },
   completed_at: Date,
 
   /** Tracks which reminder phase already ran for a given scheduled start (compared to `date`); rescheduling clears mismatch automatically */

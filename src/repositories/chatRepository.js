@@ -410,7 +410,7 @@ export class ChatRepository {
     ]);
     const lastMsgByChannel = new Map(lastMsgs.map((m) => [String(m._id), m]));
 
-    return channels.map((c) => {
+    const enriched = channels.map((c) => {
       const lm = lastMsgByChannel.get(String(c._id)) || null;
       let preview = null;
       if (lm) {
@@ -430,6 +430,8 @@ export class ChatRepository {
         last_message: preview
       };
     });
+    await attachMemberAvatarUrls(enriched);
+    return enriched;
   }
 
   async getChannelForUser(_orgIdSlug, channelId, userId) {
@@ -825,7 +827,7 @@ export class ChatRepository {
     })
       .populate('member_user_ids', 'first_name last_name email profile_picture_key')
       .lean();
-    if (existing) return existing;
+    if (existing) return await attachMemberAvatarUrls(existing);
 
     const created = await this.Channel.create({
       org_id: org,
@@ -844,9 +846,10 @@ export class ChatRepository {
 
     emitChannelListChanged(this._orgIdSlug);
 
-    return await this.Channel.findById(created._id)
+    const out = await this.Channel.findById(created._id)
       .populate('member_user_ids', 'first_name last_name email profile_picture_key')
       .lean();
+    return await attachMemberAvatarUrls(out);
   }
 
   // ---------- search ----------
@@ -1074,7 +1077,7 @@ export class ChatRepository {
       .populate('member_user_ids', 'first_name last_name email profile_picture_key')
       .lean();
     emitChannelListChanged(this._orgIdSlug);
-    return result;
+    return await attachMemberAvatarUrls(result);
   }
 
   /** Returns true if the given user is allowed to manage members of this channel. */
@@ -1121,7 +1124,7 @@ export class ChatRepository {
       .populate('member_user_ids', 'first_name last_name email profile_picture_key')
       .lean();
     emitChannelListChanged(this._orgIdSlug);
-    return out;
+    return await attachMemberAvatarUrls(out);
   }
 
   async removeChannelMember({ channelId, userId, requesterUserId }) {
@@ -1277,4 +1280,31 @@ async function safeFileUrl(key) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Walk one channel or an array of channels and resolve `profile_picture_url`
+ * on every populated `member_user_ids` entry. Without this the frontend
+ * Avatar component falls back to initials for DMs because populate only
+ * returns the S3 key, not a signed URL. Mutates in place and returns input.
+ */
+async function attachMemberAvatarUrls(input) {
+  const channels = Array.isArray(input) ? input : [input];
+  const keys = new Set();
+  for (const c of channels) {
+    for (const u of c?.member_user_ids || []) {
+      if (u && typeof u === 'object' && u.profile_picture_key) keys.add(u.profile_picture_key);
+    }
+  }
+  if (keys.size === 0) return input;
+  const urlByKey = new Map();
+  await Promise.all([...keys].map(async (k) => urlByKey.set(k, await safeFileUrl(k))));
+  for (const c of channels) {
+    for (const u of c?.member_user_ids || []) {
+      if (u && typeof u === 'object' && u.profile_picture_key) {
+        u.profile_picture_url = urlByKey.get(u.profile_picture_key) || null;
+      }
+    }
+  }
+  return input;
 }

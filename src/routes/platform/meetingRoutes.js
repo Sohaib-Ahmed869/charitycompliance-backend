@@ -59,6 +59,17 @@ router.put(
   meetingController.updateMeeting
 );
 
+// Cancel meeting — sets status=cancelled, stores reason, emails attendees
+router.post(
+  '/:meetingId/cancel',
+  [
+    param('meetingId').isMongoId().withMessage('Invalid meeting ID'),
+    body('reason').optional({ nullable: true }).isString()
+  ],
+  validate,
+  meetingController.cancelMeeting
+);
+
 // Add meeting notes
 router.post(
   '/:meetingId/notes',

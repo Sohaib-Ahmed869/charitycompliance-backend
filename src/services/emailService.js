@@ -660,6 +660,131 @@ class EmailService {
   }
 
   /**
+   * Send meeting cancellation email.
+   * Always called when an organizer cancels a scheduled meeting — once per
+   * attendee (internal + external).
+   */
+  async sendMeetingCancellationEmail({ to, recipientName, meetingTitle, meetingDate, durationMinutes, location, cancelledByName, reason, meetingId }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const viewMeetingLink = `${baseUrl}/meetings/${meetingId}`;
+    const formattedDate = new Date(meetingDate).toLocaleDateString('en-AU', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    });
+    const formattedTime = new Date(meetingDate).toLocaleTimeString('en-AU', {
+      hour: '2-digit', minute: '2-digit'
+    });
+    const subject = `Meeting Cancelled: ${meetingTitle}`;
+
+    const reasonHtml = reason && reason.trim()
+      ? `<div style="background: #FEF2F2; border-left: 3px solid #EF4444; border-radius: 6px; padding: 12px 14px; margin: 16px 0; text-align: left;">
+           <p style="margin: 0 0 4px 0; font-size: 11px; font-weight: 700; color: #991B1B; text-transform: uppercase; letter-spacing: 0.06em;">Reason</p>
+           <p style="margin: 0; font-size: 12px; line-height: 18px; color: #333333;">${reason}</p>
+         </div>`
+      : '';
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; text-align: center;">Hi ${recipientName},</p>
+      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; text-align: center;"><strong>${cancelledByName}</strong> has cancelled the following meeting. You no longer need to attend.</p>
+      <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
+        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #0A2E3F; text-decoration: line-through;">${meetingTitle}</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Was scheduled:</strong> ${formattedDate}</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Time:</strong> ${formattedTime} (${durationMinutes} minutes)</p>
+        ${location ? `<p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Location:</strong> ${location}</p>` : ''}
+      </div>
+      ${reasonHtml}
+    `;
+
+    const html = buildEmailTemplate({
+      heading: 'Meeting Cancelled',
+      bodyHtml,
+      buttonText: 'View Meeting',
+      buttonLink: viewMeetingLink,
+      infoBoxLines: ['You can remove this meeting from your calendar.', 'Reach out to the organizer if you have questions.']
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
+   * Send meeting-updated (rescheduled) email. Includes RSVP buttons because
+   * the schedule changed and we treat that as a new ask.
+   */
+  async sendMeetingUpdatedEmail({ to, recipientName, meetingTitle, meetingDate, durationMinutes, location, meetingLink, organizerName, meetingId, rsvpToken, changeSummary, rsvpReset }) {
+    const baseUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+    const viewMeetingLink = `${baseUrl}/meetings/${meetingId}`;
+
+    let rsvpButtonsHtml = '';
+    if (rsvpReset && rsvpToken && meetingId) {
+      const acceptUrl = `${baseUrl}/meetings/rsvp/${meetingId}/${rsvpToken}/accept`;
+      const declineUrl = `${baseUrl}/meetings/rsvp/${meetingId}/${rsvpToken}/decline`;
+      rsvpButtonsHtml = `
+        <table width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr>
+            <td align="center" style="padding-bottom: 28px;">
+              <p style="margin: 0 0 12px 0; font-size: 12px; color: #6B7280;">Please confirm again — the schedule has changed.</p>
+              <table cellpadding="0" cellspacing="0" border="0" align="center" style="border-collapse: separate; border-spacing: 12px;">
+                <tr>
+                  <td align="center" style="background: #10B981; border-radius: 50px;">
+                    <a href="${acceptUrl}" style="display: inline-block; padding: 12px 28px; text-decoration: none; color: #FFFFFF; font-size: 14px; font-weight: 600;">Yes, I'll attend</a>
+                  </td>
+                  <td align="center" style="background: #EF4444; border-radius: 50px;">
+                    <a href="${declineUrl}" style="display: inline-block; padding: 12px 28px; text-decoration: none; color: #FFFFFF; font-size: 14px; font-weight: 600;">No, I can't attend</a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      `;
+    }
+
+    const formattedDate = new Date(meetingDate).toLocaleDateString('en-AU', {
+      weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+    });
+    const formattedTime = new Date(meetingDate).toLocaleTimeString('en-AU', {
+      hour: '2-digit', minute: '2-digit'
+    });
+    const subject = rsvpReset ? `Meeting Rescheduled: ${meetingTitle}` : `Meeting Updated: ${meetingTitle}`;
+
+    const changesHtml = Array.isArray(changeSummary) && changeSummary.length > 0
+      ? `<div style="background: #FFFBEB; border-left: 3px solid #F59E0B; border-radius: 6px; padding: 12px 14px; margin: 16px 0; text-align: left;">
+           <p style="margin: 0 0 4px 0; font-size: 11px; font-weight: 700; color: #92400E; text-transform: uppercase; letter-spacing: 0.06em;">What changed</p>
+           <ul style="margin: 0; padding-left: 18px;">${changeSummary.map((c) => `<li style="font-size: 12px; line-height: 18px; color: #333333;">${c}</li>`).join('')}</ul>
+         </div>`
+      : '';
+
+    const meetingLinkHtml = meetingLink
+      ? `<p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Meeting Link:</strong> <a href="${meetingLink}" style="color: #117A8B; text-decoration: none;">${meetingLink}</a></p>`
+      : '';
+
+    const bodyHtml = `
+      <p style="margin: 0 0 12px 0; font-size: 12px; line-height: 18px; color: #333333; text-align: center;">Hi ${recipientName},</p>
+      <p style="margin: 0 0 16px 0; font-size: 12px; line-height: 18px; color: #333333; text-align: center;"><strong>${organizerName}</strong> has updated the meeting details.</p>
+      <div style="background: #F8F9FA; border-radius: 8px; padding: 16px; margin: 16px 0; text-align: left;">
+        <p style="margin: 0 0 8px 0; font-size: 14px; font-weight: 600; color: #0A2E3F;">${meetingTitle}</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>New date:</strong> ${formattedDate}</p>
+        <p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>New time:</strong> ${formattedTime} (${durationMinutes} minutes)</p>
+        ${location ? `<p style="margin: 8px 0; font-size: 12px; line-height: 18px; color: #333333;"><strong>Location:</strong> ${location}</p>` : ''}
+        ${meetingLinkHtml}
+      </div>
+      ${changesHtml}
+    `;
+
+    const html = buildEmailTemplate({
+      heading: rsvpReset ? 'Meeting Rescheduled' : 'Meeting Updated',
+      bodyHtml,
+      buttonText: 'View Meeting',
+      buttonLink: viewMeetingLink,
+      infoBoxLines: rsvpReset
+        ? ['Your previous RSVP has been reset. Please confirm again above.', 'Update your calendar with the new time.']
+        : ['Update your calendar to reflect these changes.'],
+      rsvpButtonsHtml
+    });
+
+    return this.sendEmail({ to, subject, html });
+  }
+
+  /**
    * Send policy resubmission required email (when decline is upheld)
    * @param {Object} params
    * @param {string} params.to - Recipient email

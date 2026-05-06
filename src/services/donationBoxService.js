@@ -195,11 +195,20 @@ export class DonationBoxService {
       workflowStatus = 'awaiting_second_counter_ack';
     }
 
+    // Optional "expected from receipts" amount — when supplied we persist it
+    // alongside the variance so finance can audit cash count discrepancies
+    // (e.g. counted $400 vs receipts $500 → variance -$100).
+    const expectedNum = toNumber(payload?.expected_amount);
+    const countedAmount = isBox ? amountNum : effectiveNet;
+    const hasExpected = expectedNum !== null && expectedNum >= 0;
+    const variance = hasExpected ? Number((countedAmount - expectedNum).toFixed(2)) : undefined;
+
     const entry = {
       tips_count: isBox ? tipsNum : 0,
       // `amount` stays the authoritative "money in" figure regardless of category so that
       // downstream reports/totals (list cards, CSV export, CSV reporting, etc.) keep working.
-      amount: isBox ? amountNum : effectiveNet,
+      amount: countedAmount,
+      ...(hasExpected ? { expected_amount: expectedNum, variance } : {}),
       entry_date: new Date(entry_date),
       notes: typeof payload?.notes === 'string' ? payload.notes : '',
       box_still_at_location: boxStillFinal,

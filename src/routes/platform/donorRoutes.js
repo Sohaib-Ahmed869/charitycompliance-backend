@@ -5,7 +5,7 @@
 import express from 'express';
 import { body, param, query } from 'express-validator';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
-import { requirePermission, requireAdminOrOwner } from '../../middleware/rbac.js';
+import { requirePermission } from '../../middleware/rbac.js';
 import { validate } from '../../middleware/validation.js';
 import { uploadDonorKycFiles, handleUploadError } from '../../middleware/upload.js';
 import {
@@ -158,10 +158,15 @@ router.get(
   getDonorById
 );
 
+// `requirePermission('module:grants_donors:edit')` already covers admin/owner
+// (their wildcard `*:*` permission satisfies it) AND non-admin users whose
+// position grants module:grants_donors:edit — which is exactly what the FE
+// relies on for the Save button. The earlier `requireAdminOrOwner` gate was
+// stricter than the FE expected, so position-permitted users could open the
+// edit form but their saves came back 403.
 router.put(
   '/:donorId',
   requirePermission('module:grants_donors:edit'),
-  requireAdminOrOwner,
   [param('donorId').isMongoId().withMessage('Invalid donor ID')],
   validate,
   updateDonor

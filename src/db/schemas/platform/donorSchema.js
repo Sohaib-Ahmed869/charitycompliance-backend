@@ -98,6 +98,13 @@ const donorSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  // Marks the donor as a VIP — surfaced in the register UI and required by
+  // the edit form spec so that the toggle persists through a save round-trip.
+  vip: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
 
   metadata: {
     type: mongoose.Schema.Types.Mixed

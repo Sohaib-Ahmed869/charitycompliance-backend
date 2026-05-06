@@ -127,10 +127,26 @@ export const updateMeeting = asyncHandler(async (req, res) => {
     });
   }
 
-  // Non-status patch: write the allowed fields the FE is permitted to update
-  // (currently only board_meeting_info — used for adding agenda items mid-meeting
-  // and toggling `selected` flags on the compliance checklist).
-  const allowedFields = ['board_meeting_info', 'agenda', 'title', 'meeting_link', 'location'];
+  // Reschedule / detail edit path: handles date, duration, title, agenda,
+  // location, meeting_link. The service layer detects "major changes" (date
+  // or duration) and resets RSVPs + emails attendees with new accept/decline
+  // links; non-major changes just send a "details updated" notification.
+  const reschedulableFields = ['title', 'agenda', 'date', 'duration_minutes', 'location', 'meeting_link'];
+  const hasReschedulable = reschedulableFields.some((k) =>
+    Object.prototype.hasOwnProperty.call(updateData, k)
+  );
+  if (hasReschedulable) {
+    const reschedulePatch = {};
+    for (const key of reschedulableFields) {
+      if (Object.prototype.hasOwnProperty.call(updateData, key)) reschedulePatch[key] = updateData[key];
+    }
+    const updated = await meetingService.rescheduleOrUpdateMeeting(meetingId, reschedulePatch, userId);
+    return res.json({ success: true, data: updated });
+  }
+
+  // Non-reschedule patch: structured info fields (board/general/resolution
+  // specific data, e.g. compliance checklist toggles). Goes straight to repo.
+  const allowedFields = ['board_meeting_info', 'general_meeting_info', 'resolution_meeting_info'];
   const patch = {};
   for (const key of allowedFields) {
     if (Object.prototype.hasOwnProperty.call(updateData, key)) patch[key] = updateData[key];
@@ -148,6 +164,18 @@ export const updateMeeting = asyncHandler(async (req, res) => {
   const updated = await meetingRepo.update(meetingId, patch);
 
   return res.json({ success: true, data: updated });
+});
+
+export const cancelMeeting = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user.userId;
+  const { meetingId } = req.params;
+  const { reason } = req.body || {};
+
+  const meetingService = new MeetingService(orgId);
+  const meeting = await meetingService.cancelMeeting(meetingId, reason, userId);
+
+  res.json({ success: true, data: meeting });
 });
 
 export const addMeetingNotes = asyncHandler(async (req, res) => {
