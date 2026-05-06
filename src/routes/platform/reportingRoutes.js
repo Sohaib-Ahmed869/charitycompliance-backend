@@ -12,7 +12,8 @@ import {
   getAcncFinancialPrefill,
   downloadAisPdf,
   downloadAisDocx,
-  downloadAcncFinancialPdf
+  downloadAcncFinancialPdf,
+  downloadAcncFinancialDocx
 } from '../../controllers/reportingController.js';
 
 const router = express.Router();
@@ -53,6 +54,13 @@ router.post(
   [query('fyEnd').notEmpty().withMessage('fyEnd is required')],
   validate,
   downloadAcncFinancialPdf
+);
+
+router.post(
+  '/acnc-financial/docx',
+  [query('fyEnd').notEmpty().withMessage('fyEnd is required')],
+  validate,
+  downloadAcncFinancialDocx
 );
 
 export default router;
