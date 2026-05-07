@@ -1,115 +1,352 @@
 /**
- * SuperAdmin Plan & FeatureFlag routes (read-only — Sprint 1).
+ * SuperAdmin plan & feature-flag endpoints.
  *
- * Mounted at /api/v1/admin under the requireSuperAdmin gate. Returns the
- * Plan catalogue + the FeatureFlag catalogue — the data behind the
- * /calcite-admin pages. Writes (POST/PATCH/PUT) land in Sprint 2 alongside
- * the PlanRevision queue and the two-person approval workflow.
+ * Plans live as a hybrid: in-code defaults (Foundation/Professional/
+ * Enterprise) merged at GET time with whatever real Plan documents exist
+ * in the Router DB. Editing a default materialises it — first save creates
+ * the SubscriptionPlan document and revision 1. Subsequent saves create
+ * incremental PlanRevisions with a computed diff.
  *
- * Kept deliberately small: handlers are inline, no controller layer, no
- * service layer. The admin surface is going to grow (overrides, coupons,
- * audit, impersonation) and we'll grow the file structure when complexity
- * justifies it — not before.
+ * No service or controller layer yet — handlers stay inline. The admin
+ * surface is intentionally small until we earn more complexity.
  */
 
 import express from 'express';
-import { param } from 'express-validator';
+import { body, param } from 'express-validator';
 import { authenticate } from '../../middleware/auth.js';
 import { requireSuperAdmin } from '../../middleware/requireSuperAdmin.js';
 import { validate } from '../../middleware/validation.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import getRouterModels from '../../db/models/routerModels.js';
+import { writeBillingEvent } from '../../utils/writeBillingEvent.js';
+import {
+  DEFAULT_PLANS,
+  DEFAULT_FEATURE_FLAGS,
+  mergePlansWithTemplates,
+  findTemplateByCode,
+  feature_flags_default_map
+} from '../../utils/defaultPlans.js';
 
 const router = express.Router();
 
-// All admin routes require auth + super-admin role. (Whoami lives in
-// authRoutes.js at /admin/auth/me — keeps every public endpoint co-located.)
 router.use(authenticate);
 router.use(requireSuperAdmin);
 
-// ── Plan catalogue ─────────────────────────────────────────────────────
+// ── Plans ─────────────────────────────────────────────────────────────
 
-/**
- * GET /api/v1/admin/plans
- * List every plan in the catalogue. Returns the structured shape only —
- * legacy fields (monthly_price, yearly_price, features Mixed) are stripped
- * so the frontend can't accidentally render stale numbers.
- */
+/** GET /admin/plans — DB plans + templates, sorted by sortOrder. */
 router.get('/plans', asyncHandler(async (req, res) => {
   const { SubscriptionPlan } = getRouterModels();
-  const plans = await SubscriptionPlan
+  const dbPlans = await SubscriptionPlan
     .find({})
     .sort({ 'metadata.sortOrder': 1, plan_code: 1 })
     .lean();
-  res.json({ success: true, data: plans.map(serializePlan) });
+  const merged = mergePlansWithTemplates(dbPlans.map(serializePlan));
+  res.json({ success: true, data: merged });
 }));
 
-/**
- * GET /api/v1/admin/plans/:code
- * Plan detail + revision history. Code is the slug (foundation /
- * professional / enterprise / custom-*).
- */
+/** GET /admin/plans/:code — DB plan + revisions, or template if not yet saved. */
 router.get(
   '/plans/:code',
   [param('code').isString().trim().notEmpty()],
   validate,
   asyncHandler(async (req, res) => {
     const { SubscriptionPlan, PlanRevision } = getRouterModels();
-    const plan = await SubscriptionPlan
-      .findOne({ plan_code: String(req.params.code).toLowerCase() })
-      .lean();
-    if (!plan) {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'PLAN_NOT_FOUND', message: 'No such plan.' }
+    const code = String(req.params.code).toLowerCase();
+    const plan = await SubscriptionPlan.findOne({ plan_code: code }).lean();
+    if (plan) {
+      const revisions = await PlanRevision
+        .find({ plan_id: plan._id })
+        .sort({ revision_number: -1 })
+        .limit(50)
+        .lean();
+      return res.json({
+        success: true,
+        data: { ...serializePlan(plan), is_template: false, revisions: revisions.map(serializeRevision) }
       });
     }
+    // Not yet saved — return the template (if any) so the UI can render it.
+    const template = findTemplateByCode(code);
+    if (template) {
+      return res.json({
+        success: true,
+        data: { ...template, _id: null, is_template: true, current_revision: 0, revisions: [] }
+      });
+    }
+    return res.status(404).json({
+      success: false,
+      error: { code: 'PLAN_NOT_FOUND', message: 'No such plan.' }
+    });
+  })
+);
+
+/**
+ * PATCH /admin/plans/:code — apply a structured patch.
+ *
+ * Body is the full new plan shape (pricing/limits/feature_flags/support/
+ * trial_days/metadata/visibility/status/name). We compute a diff against
+ * the previous snapshot, persist a new PlanRevision, and update the Plan.
+ * If the plan was a template (no DB record yet), this is the
+ * materialisation moment — we create the document and revision 1.
+ */
+router.patch(
+  '/plans/:code',
+  [
+    param('code').isString().trim().notEmpty(),
+    body('reason').optional().isString()
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { SubscriptionPlan, PlanRevision } = getRouterModels();
+    const code = String(req.params.code).toLowerCase();
+    const patch = req.body || {};
+    const reason = String(patch.reason || '').trim();
+    const editorId = req.user?.userId || null;
+
+    const editable = ['name', 'visibility', 'status', 'pricing', 'limits', 'feature_flags', 'support', 'trial_days', 'metadata'];
+    const cleaned = {};
+    for (const k of editable) {
+      if (Object.prototype.hasOwnProperty.call(patch, k)) cleaned[k] = patch[k];
+    }
+
+    // Map structured fields → schema field names.
+    const update = {};
+    if (cleaned.name) update.plan_name = cleaned.name;
+    if (cleaned.visibility) update.visibility = cleaned.visibility;
+    if (cleaned.status) update.status = cleaned.status;
+    if (cleaned.pricing) update.pricing = cleaned.pricing;
+    if (cleaned.limits) update.limits = cleaned.limits;
+    if (cleaned.feature_flags) update.feature_flags = cleaned.feature_flags;
+    if (cleaned.support) update.support = cleaned.support;
+    if (cleaned.trial_days != null) update.trial_days = cleaned.trial_days;
+    if (cleaned.metadata) update.metadata = cleaned.metadata;
+    // Mirror legacy fields so any old reader stays correct.
+    if (cleaned.pricing?.monthlyAUD != null) update.monthly_price = Number(cleaned.pricing.monthlyAUD);
+    if (cleaned.pricing?.annualAUD != null) update.yearly_price = Number(cleaned.pricing.annualAUD);
+
+    let plan = await SubscriptionPlan.findOne({ plan_code: code });
+    let prevSnapshot = null;
+    let nextRevisionNumber = 1;
+
+    if (!plan) {
+      // First materialisation — must come from a template OR be a brand-new
+      // custom plan (handled by POST /plans, not here).
+      const template = findTemplateByCode(code);
+      if (!template) {
+        return res.status(404).json({
+          success: false,
+          error: { code: 'PLAN_NOT_FOUND', message: 'No template or saved plan with that code.' }
+        });
+      }
+      const initial = templateToDocument(template);
+      Object.assign(initial, update);
+      initial.plan_code = code;
+      initial.current_revision = 1;
+      initial.updated_by = editorId;
+      plan = await SubscriptionPlan.create(initial);
+    } else {
+      prevSnapshot = serializePlan(plan.toObject());
+      nextRevisionNumber = (plan.current_revision || 0) + 1;
+      Object.assign(plan, update);
+      plan.current_revision = nextRevisionNumber;
+      plan.updated_by = editorId;
+      await plan.save();
+    }
+
+    const newSnapshot = serializePlan(plan.toObject());
+    const diff = computeDiff(prevSnapshot, newSnapshot);
+
+    await PlanRevision.create({
+      plan_id: plan._id,
+      plan_code: plan.plan_code,
+      revision_number: nextRevisionNumber,
+      snapshot: newSnapshot,
+      diff,
+      reason,
+      changed_by: editorId,
+      changed_at: new Date()
+    });
+
     const revisions = await PlanRevision
       .find({ plan_id: plan._id })
       .sort({ revision_number: -1 })
       .limit(50)
       .lean();
-    res.json({
+
+    // Audit: distinguish materialisation from regular update.
+    await writeBillingEvent(req, {
+      action: prevSnapshot ? 'plan.updated' : 'plan.materialised',
+      targetType: 'plan',
+      targetId: plan.plan_code,
+      targetLabel: plan.plan_name,
+      diff,
+      reason,
+      metadata: { revision: nextRevisionNumber }
+    });
+
+    return res.json({
       success: true,
-      data: { ...serializePlan(plan), revisions: revisions.map(serializeRevision) }
+      data: { ...newSnapshot, is_template: false, revisions: revisions.map(serializeRevision) }
     });
   })
 );
 
-// ── Feature flag catalogue ─────────────────────────────────────────────
+/**
+ * POST /admin/plans — create a brand-new custom plan from scratch (or
+ * forked from another). Body must include at least `code` + `name`.
+ */
+router.post(
+  '/plans',
+  [
+    body('code').isString().trim().isLength({ min: 2, max: 64 }).matches(/^[a-z0-9][a-z0-9_-]*$/),
+    body('name').isString().trim().isLength({ min: 1, max: 80 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { SubscriptionPlan, PlanRevision } = getRouterModels();
+    const code = String(req.body.code).toLowerCase().trim();
+    const name = String(req.body.name).trim();
+
+    const exists = await SubscriptionPlan.findOne({ plan_code: code });
+    if (exists) {
+      return res.status(409).json({
+        success: false,
+        error: { code: 'PLAN_CODE_TAKEN', message: 'A plan with that code already exists.' }
+      });
+    }
+    if (findTemplateByCode(code)) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: 'PLAN_CODE_RESERVED',
+          message: 'That code is reserved for a default template — edit the template instead.'
+        }
+      });
+    }
+
+    // Optional fork: copy fields from another plan (template or DB).
+    const forkFromCode = String(req.body.fork_from || '').toLowerCase().trim();
+    let base = null;
+    if (forkFromCode) {
+      const forkDb = await SubscriptionPlan.findOne({ plan_code: forkFromCode }).lean();
+      base = forkDb ? serializePlan(forkDb) : findTemplateByCode(forkFromCode);
+    }
+    const initial = base ? templateToDocument(base) : blankPlanDocument();
+    initial.plan_code = code;
+    initial.plan_name = name;
+    initial.visibility = req.body.visibility || initial.visibility || 'private';
+    initial.status = 'active';
+    initial.current_revision = 1;
+    initial.updated_by = req.user?.userId || null;
+
+    const created = await SubscriptionPlan.create(initial);
+    const snapshot = serializePlan(created.toObject());
+    await PlanRevision.create({
+      plan_id: created._id,
+      plan_code: created.plan_code,
+      revision_number: 1,
+      snapshot,
+      diff: [],
+      reason: forkFromCode ? `Created (forked from ${forkFromCode}).` : 'Created.',
+      changed_by: req.user?.userId || null,
+      changed_at: new Date()
+    });
+    await writeBillingEvent(req, {
+      action: 'plan.created',
+      targetType: 'plan',
+      targetId: created.plan_code,
+      targetLabel: created.plan_name,
+      reason: forkFromCode ? `Forked from ${forkFromCode}.` : 'Created.',
+      metadata: { fork_from: forkFromCode || null }
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: { ...snapshot, is_template: false, revisions: [] }
+    });
+  })
+);
+
+/** POST /admin/plans/:code/archive — flip status to archived. */
+router.post(
+  '/plans/:code/archive',
+  [param('code').isString().trim().notEmpty()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { SubscriptionPlan, PlanRevision } = getRouterModels();
+    const code = String(req.params.code).toLowerCase();
+    const plan = await SubscriptionPlan.findOne({ plan_code: code });
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'PLAN_NOT_FOUND', message: 'Cannot archive a plan that has never been saved.' }
+      });
+    }
+    const prev = serializePlan(plan.toObject());
+    plan.status = 'archived';
+    plan.is_active = false;
+    plan.current_revision = (plan.current_revision || 0) + 1;
+    plan.updated_by = req.user?.userId || null;
+    await plan.save();
+    const next = serializePlan(plan.toObject());
+    await PlanRevision.create({
+      plan_id: plan._id,
+      plan_code: plan.plan_code,
+      revision_number: plan.current_revision,
+      snapshot: next,
+      diff: computeDiff(prev, next),
+      reason: 'Archived.',
+      changed_by: req.user?.userId || null,
+      changed_at: new Date()
+    });
+    await writeBillingEvent(req, {
+      action: 'plan.archived',
+      targetType: 'plan',
+      targetId: plan.plan_code,
+      targetLabel: plan.plan_name,
+      reason: 'Archived.'
+    });
+    return res.json({ success: true, data: { ...next, is_template: false } });
+  })
+);
+
+// ── Feature flags ─────────────────────────────────────────────────────
 
 /**
- * GET /api/v1/admin/feature-flags
- * The flag catalogue — every gateable capability in Stewardex. Used by
- * the Plan detail Features tab to render the master checklist.
+ * GET /admin/feature-flags — DB-backed catalogue, with the in-code
+ * defaults filling in anything not yet persisted. Same template-merge
+ * pattern as plans, so a fresh DB just shows the canonical 40 flags.
  */
 router.get('/feature-flags', asyncHandler(async (req, res) => {
   const { FeatureFlag } = getRouterModels();
-  const flags = await FeatureFlag
-    .find({})
-    .sort({ category: 1, code: 1 })
-    .lean();
-  res.json({ success: true, data: flags.map((f) => ({
-    code: f.code,
-    category: f.category,
-    name: f.name,
-    description: f.description || '',
-    status: f.status
-  })) });
+  const dbFlags = await FeatureFlag.find({}).sort({ category: 1, code: 1 }).lean();
+  const byCode = new Map(dbFlags.map((f) => [f.code, f]));
+  const merged = DEFAULT_FEATURE_FLAGS.map(([code, category, name]) => {
+    const db = byCode.get(code);
+    return db
+      ? { code: db.code, category: db.category, name: db.name, description: db.description || '', status: db.status, is_template: false }
+      : { code, category, name, description: '', status: 'active', is_template: true };
+  });
+  // Surface any DB-only flags (custom-added beyond the catalogue) at the end.
+  for (const db of dbFlags) {
+    if (!merged.some((m) => m.code === db.code)) {
+      merged.push({ code: db.code, category: db.category, name: db.name, description: db.description || '', status: db.status, is_template: false });
+    }
+  }
+  res.json({ success: true, data: merged });
 }));
 
-// ── Serialisers ────────────────────────────────────────────────────────
-// Return only the structured shape the admin UI consumes. Mongoose Maps
-// are returned as plain objects; legacy fields are dropped.
+// ── Helpers ───────────────────────────────────────────────────────────
 
 function serializePlan(p) {
+  if (!p) return null;
   const featureFlags = p.feature_flags instanceof Map
     ? Object.fromEntries(p.feature_flags)
     : (p.feature_flags || {});
   return {
-    _id: p._id,
-    code: p.plan_code,
-    name: p.plan_name,
+    _id: p._id || null,
+    code: p.plan_code || p.code,
+    name: p.plan_name || p.name,
     visibility: p.visibility || 'public',
     status: p.status || 'active',
     pricing: p.pricing || {},
@@ -133,6 +370,70 @@ function serializeRevision(r) {
     changed_by: r.changed_by,
     changed_at: r.changed_at
   };
+}
+
+/** Convert a template (or another plan) into the SubscriptionPlan document shape. */
+function templateToDocument(t) {
+  return {
+    plan_code: t.code,
+    plan_name: t.name,
+    visibility: t.visibility || 'public',
+    status: t.status || 'active',
+    is_active: (t.status || 'active') === 'active',
+    pricing: { ...(t.pricing || {}) },
+    limits: { ...(t.limits || {}) },
+    feature_flags: { ...(t.feature_flags || {}) },
+    support: { ...(t.support || {}) },
+    trial_days: t.trial_days ?? 14,
+    metadata: { ...(t.metadata || {}) },
+    monthly_price: Number(t.pricing?.monthlyAUD || 0),
+    yearly_price: Number(t.pricing?.annualAUD || 0)
+  };
+}
+
+/** Skeleton for a brand-new custom plan (POST /admin/plans without fork). */
+function blankPlanDocument() {
+  return {
+    plan_code: '',
+    plan_name: '',
+    visibility: 'private',
+    status: 'active',
+    is_active: true,
+    pricing: { monthlyAUD: 0, annualAUD: 0, setupFeeMonthlyAUD: 0, setupFeeAnnualAUD: 0, overagePerWorkflowAUD: null, currency: 'AUD' },
+    limits: { staffSeats: 5, boardSeats: 5, workflowsPerMonth: 50, storageGB: 10, apiCallsPerDay: 0, customWorkflows: 0, childEntities: 0, softCapPct: 80, hardCapPct: 100 },
+    feature_flags: feature_flags_default_map(),
+    support: { channel: 'email', responseSLAHours: 48, uptimeSLAPct: null },
+    trial_days: 14,
+    metadata: { description: '', targetCustomer: '', sortOrder: 100 },
+    monthly_price: 0,
+    yearly_price: 0
+  };
+}
+
+/**
+ * Compute a flat diff list of [path, from, to] tuples between two plan
+ * snapshots. Recursive on nested objects (pricing/limits/etc.); short-
+ * circuits on equal scalars and equal JSON-stringified subtrees.
+ */
+function computeDiff(prev, next, prefix = '') {
+  if (!prev) return [];
+  const out = [];
+  const keys = new Set([...Object.keys(prev || {}), ...Object.keys(next || {})]);
+  for (const k of keys) {
+    if (k === 'revisions' || k === '_id' || k === 'is_template' || k === 'created_at' || k === 'updated_at' || k === 'current_revision') continue;
+    const a = prev?.[k];
+    const b = next?.[k];
+    const path = prefix ? `${prefix}.${k}` : k;
+    const aJson = JSON.stringify(a);
+    const bJson = JSON.stringify(b);
+    if (aJson === bJson) continue;
+    if (a && b && typeof a === 'object' && typeof b === 'object' && !Array.isArray(a) && !Array.isArray(b)) {
+      out.push(...computeDiff(a, b, path));
+    } else {
+      out.push({ path, from: a ?? null, to: b ?? null });
+    }
+  }
+  return out;
 }
 
 export default router;

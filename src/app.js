@@ -168,6 +168,7 @@ import chatRoutes from './routes/platform/chatRoutes.js';
 // Calcite SuperAdmin portal (separate /admin namespace, isolated from tenant routes).
 import adminPlanRoutes from './routes/admin/planRoutes.js';
 import adminAuthRoutes from './routes/admin/authRoutes.js';
+import adminOpsRoutes from './routes/admin/opsRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -221,6 +222,7 @@ if (isModuleEnabled('chat')) app.use('/api/v1/platform/chat', chatRoutes);
 // requireSuperAdmin (Sprint 1: read-only catalogue browsing).
 app.use('/api/v1/admin/auth', adminAuthRoutes);
 app.use('/api/v1/admin', adminPlanRoutes);
+app.use('/api/v1/admin', adminOpsRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

@@ -14,6 +14,9 @@ import websiteLeadSchema from '../schemas/router/websiteLeadSchema.js';
 import planRevisionSchema from '../schemas/router/planRevisionSchema.js';
 import featureFlagSchema from '../schemas/router/featureFlagSchema.js';
 import superAdminSchema from '../schemas/router/superAdminSchema.js';
+import billingEventSchema from '../schemas/router/billingEventSchema.js';
+import couponSchema from '../schemas/router/couponSchema.js';
+import subscriptionOverrideSchema from '../schemas/router/subscriptionOverrideSchema.js';
 
 let routerConnection = null;
 
@@ -28,6 +31,9 @@ const getRouterModels = () => {
     PlanRevision: routerConnection.model('PlanRevision', planRevisionSchema),
     FeatureFlag: routerConnection.model('FeatureFlag', featureFlagSchema),
     SuperAdmin: routerConnection.model('SuperAdmin', superAdminSchema),
+    BillingEvent: routerConnection.model('BillingEvent', billingEventSchema),
+    Coupon: routerConnection.model('Coupon', couponSchema),
+    SubscriptionOverride: routerConnection.model('SubscriptionOverride', subscriptionOverrideSchema),
     OrganizationSubscription: routerConnection.model('OrganizationSubscription', organizationSubscriptionSchema),
     Payment: routerConnection.model('Payment', paymentSchema),
     WebsiteLead: routerConnection.model('WebsiteLead', websiteLeadSchema)
