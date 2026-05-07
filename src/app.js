@@ -165,6 +165,9 @@ import itRegisterRoutes from './routes/platform/itRegisterRoutes.js';
 import offboardingRoutes from './routes/platform/offboardingRoutes.js';
 import sweepFundsRoutes from './routes/platform/sweepFundsRoutes.js';
 import chatRoutes from './routes/platform/chatRoutes.js';
+// Calcite SuperAdmin portal (separate /admin namespace, isolated from tenant routes).
+import adminPlanRoutes from './routes/admin/planRoutes.js';
+import adminAuthRoutes from './routes/admin/authRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -212,6 +215,12 @@ if (isModuleEnabled('it-register')) app.use('/api/v1/platform/it-register', itRe
 if (isModuleEnabled('offboarding')) app.use('/api/v1/platform/offboarding', offboardingRoutes);
 if (isModuleEnabled('sweep-funds')) app.use('/api/v1/platform/sweep-funds', sweepFundsRoutes);
 if (isModuleEnabled('chat')) app.use('/api/v1/platform/chat', chatRoutes);
+
+// Calcite SuperAdmin portal — sits outside the /platform namespace.
+// Auth (login + me) is public; everything else is gated by
+// requireSuperAdmin (Sprint 1: read-only catalogue browsing).
+app.use('/api/v1/admin/auth', adminAuthRoutes);
+app.use('/api/v1/admin', adminPlanRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

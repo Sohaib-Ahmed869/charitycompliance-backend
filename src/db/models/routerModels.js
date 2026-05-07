@@ -11,6 +11,9 @@ import subscriptionPlanSchema from '../schemas/router/subscriptionPlanSchema.js'
 import organizationSubscriptionSchema from '../schemas/router/organizationSubscriptionSchema.js';
 import paymentSchema from '../schemas/router/paymentSchema.js';
 import websiteLeadSchema from '../schemas/router/websiteLeadSchema.js';
+import planRevisionSchema from '../schemas/router/planRevisionSchema.js';
+import featureFlagSchema from '../schemas/router/featureFlagSchema.js';
+import superAdminSchema from '../schemas/router/superAdminSchema.js';
 
 let routerConnection = null;
 
@@ -22,6 +25,9 @@ const getRouterModels = () => {
   return {
     Tenant: routerConnection.model('Tenant', tenantSchema),
     SubscriptionPlan: routerConnection.model('SubscriptionPlan', subscriptionPlanSchema),
+    PlanRevision: routerConnection.model('PlanRevision', planRevisionSchema),
+    FeatureFlag: routerConnection.model('FeatureFlag', featureFlagSchema),
+    SuperAdmin: routerConnection.model('SuperAdmin', superAdminSchema),
     OrganizationSubscription: routerConnection.model('OrganizationSubscription', organizationSubscriptionSchema),
     Payment: routerConnection.model('Payment', paymentSchema),
     WebsiteLead: routerConnection.model('WebsiteLead', websiteLeadSchema)
