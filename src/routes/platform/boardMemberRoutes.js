@@ -12,11 +12,14 @@ import { uploadSingle, handleUploadError } from '../../middleware/upload.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { requireMfa } from '../../middleware/mfa.js';
 import { requireAdminOrOwner } from '../../middleware/rbac.js';
+import { enforceSeatLimit } from '../../middleware/enforceSeatLimit.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 
 const router = express.Router();
 
 // All routes require authentication and tenant resolution
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.organisation'));
 
 // Get departments and roles reference data
 router.get('/departments-roles', boardMemberController.getDepartmentsAndRoles);
@@ -197,6 +200,7 @@ router.post(
       .withMessage('Postcode is required')
   ],
   validate,
+  enforceSeatLimit('boardSeats'),
   boardMemberController.createBoardMember
 );
 

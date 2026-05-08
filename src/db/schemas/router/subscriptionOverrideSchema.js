@@ -33,15 +33,39 @@ const subscriptionOverrideSchema = new mongoose.Schema({
     customWorkflows: { type: Number, default: null },
     childEntities: { type: Number, default: null }
   },
+  // Plain object (not Map) — feature flag codes contain dots
+  // ("governance.organisation"), and Mongoose Maps reject dotted keys.
+  // Resolver handles both shapes, but new writes use plain objects.
   feature_flags: {
-    type: Map,
-    of: Boolean,
-    default: {}
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({})
+  },
+  /**
+   * How feature_flags is interpreted by the resolver:
+   *   'merge'   — override entries are deltas; anything not listed
+   *               inherits from the plan default. (default)
+   *   'replace' — override.feature_flags is the COMPLETE allowed set;
+   *               anything not explicitly set to true here is denied,
+   *               regardless of the plan's defaults.
+   *
+   * Use 'replace' to lock a tenant down to a specific feature subset
+   * regardless of the plan they're on. Useful for compliance reasons
+   * or contractual feature scoping.
+   */
+  feature_flag_mode: {
+    type: String,
+    enum: ['merge', 'replace'],
+    default: 'merge'
   },
   pricing: {
     monthlyAUD: { type: Number, default: null },
     annualAUD: { type: Number, default: null },
-    overagePerWorkflowAUD: { type: Number, default: null }
+    overagePerWorkflowAUD: { type: Number, default: null },
+    // Tenant-specific Stripe Price IDs — created in Stripe dashboard
+    // for this org and linked here. When set, "Apply to Stripe" swaps
+    // their subscription to bill the override amount.
+    stripeMonthlyPriceId: { type: String, default: '' },
+    stripeAnnualPriceId: { type: String, default: '' }
   },
 
   effective_from: { type: Date, default: Date.now },

@@ -17,6 +17,7 @@ const ACTION_CODES = [
   'subscription.changed',
   'subscription.paused',
   'subscription.cancelled',
+  'subscription.revision_migrated',
   'subscription_override.created',
   'subscription_override.updated',
   'subscription_override.cleared',

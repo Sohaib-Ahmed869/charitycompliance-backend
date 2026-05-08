@@ -10,11 +10,14 @@ import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { uploadSingle, handleUploadError } from '../../middleware/upload.js';
+import { enforceLimit } from '../../middleware/enforceLimit.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 
 const router = express.Router();
 
-// All expense routes require authentication and tenant resolution
+// Auth + tenant + feature flag (Foundation tier doesn't include expense workflow).
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('finance.expense_workflow'));
 
 // Upload expense file to S3
 router.post(
@@ -65,6 +68,7 @@ router.post(
       .withMessage('Status must be draft or pending')
   ],
   validate,
+  enforceLimit('workflowsPerMonth'),
   expenseController.createExpense
 );
 

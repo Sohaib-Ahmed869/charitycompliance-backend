@@ -7,6 +7,7 @@ import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { requirePermission, requireAdminOrOwner } from '../../middleware/rbac.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import * as partnerVettingController from '../../controllers/partnerVettingController.js';
 import { uploadPolicySingle, handlePolicyUploadError } from '../../middleware/upload.js';
 
@@ -36,6 +37,7 @@ router.post(
 );
 
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('partner.kyc_aml'));
 
 router.get('/counts', partnerVettingController.getPartnerCounts);
 

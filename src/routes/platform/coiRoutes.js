@@ -9,6 +9,7 @@ import coiController from '../../controllers/coiController.js';
 import { body, param } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 
 const router = express.Router();
 
@@ -48,7 +49,9 @@ router.post(
 );
 
 // AUTHENTICATED ROUTES BELOW
+// (Public submission route above runs without auth and without feature gate.)
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.organisation'));
 
 // Internal user declares a COI for themselves (in-app form).
 router.post(

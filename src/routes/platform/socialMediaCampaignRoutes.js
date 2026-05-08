@@ -1,6 +1,7 @@
 import express from 'express';
 import { body, query, param } from 'express-validator';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { validate } from '../../middleware/validation.js';
 import { uploadSocialCampaignImages, handleUploadError } from '../../middleware/upload.js';
 import { uploadSocialCampaignImages as uploadImagesController } from '../../controllers/socialMediaUploadController.js';
@@ -15,6 +16,7 @@ import {
 
 const router = express.Router();
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.organisation'));
 
 router.get(
   '/',

@@ -13,6 +13,11 @@ import { validate } from '../../middleware/validation.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import getRouterModels from '../../db/models/routerModels.js';
 import { writeBillingEvent } from '../../utils/writeBillingEvent.js';
+import { invalidateEntitlements, invalidateAllEntitlements, resolveEntitlements } from '../../services/entitlementService.js';
+import { validateOverride } from '../../services/overrideValidationService.js';
+import { swapSubscriptionPrice, isStripeConfigured, listInvoicesForCustomer } from '../../services/stripeService.js';
+import { sendPlanChangeNotice } from '../../services/billingEmails.js';
+import { getOrgOwnerEmail } from '../../utils/getOrgOwnerEmail.js';
 
 const router = express.Router();
 
@@ -83,6 +88,10 @@ router.get(
     const recentEvents = await BillingEvent.find({ tenant_id: orgId })
       .sort({ created_at: -1 }).limit(20).lean();
 
+    // Compute the same entitlements the tenant gets so the SuperAdmin can
+    // verify exactly what features / limits are actually being granted.
+    const effectiveEntitlements = await resolveEntitlements(orgId).catch(() => null);
+
     res.json({
       success: true,
       data: {
@@ -102,7 +111,10 @@ router.get(
               current_period_end: sub.current_period_end,
               cancel_at_period_end: sub.cancel_at_period_end,
               stripe_customer_id: sub.stripe_customer_id || null,
-              stripe_subscription_id: sub.stripe_subscription_id || null
+              stripe_subscription_id: sub.stripe_subscription_id || null,
+              is_comp: !!sub.is_comp,
+              comp_reason: sub.comp_reason || '',
+              comp_granted_at: sub.comp_granted_at || null
             }
           : null,
         override: override
@@ -112,13 +124,16 @@ router.get(
               feature_flags: override.feature_flags instanceof Map
                 ? Object.fromEntries(override.feature_flags)
                 : (override.feature_flags || {}),
+              feature_flag_mode: override.feature_flag_mode || 'merge',
               pricing: override.pricing || {},
               effective_from: override.effective_from,
               effective_until: override.effective_until,
               reason: override.reason || ''
             }
           : null,
-        recent_events: recentEvents.map(serializeEvent)
+        recent_events: recentEvents.map(serializeEvent),
+        // What the tenant actually sees (post merge of plan + override + kill-switch).
+        effective: effectiveEntitlements
       }
     });
   })
@@ -134,7 +149,7 @@ router.post(
   ],
   validate,
   asyncHandler(async (req, res) => {
-    const { Tenant, OrganizationSubscription, SubscriptionPlan } = getRouterModels();
+    const { Tenant, OrganizationSubscription, SubscriptionPlan, PlanRevision } = getRouterModels();
     const orgId = String(req.params.orgId).toLowerCase();
     const planCode = String(req.body.plan_code).toLowerCase();
     const billingCycle = req.body.billing_cycle || 'monthly';
@@ -157,6 +172,12 @@ router.post(
       });
     }
 
+    // Pin to the *latest* revision of this plan at assignment time.
+    const latestRevision = await PlanRevision
+      .findOne({ plan_id: plan._id })
+      .sort({ revision_number: -1 })
+      .lean();
+
     const now = new Date();
     const periodEnd = new Date(now);
     if (billingCycle === 'yearly') periodEnd.setFullYear(periodEnd.getFullYear() + 1);
@@ -167,8 +188,15 @@ router.post(
     let prev = null;
     if (existing) {
       action = 'subscription.changed';
-      prev = { plan_id: existing.plan_id, billing_cycle: existing.billing_cycle, status: existing.status };
+      prev = {
+        plan_id: existing.plan_id,
+        plan_revision_number: existing.plan_revision_number,
+        billing_cycle: existing.billing_cycle,
+        status: existing.status
+      };
       existing.plan_id = plan._id;
+      existing.plan_revision_id = latestRevision?._id || null;
+      existing.plan_revision_number = latestRevision?.revision_number || null;
       existing.billing_cycle = billingCycle;
       existing.status = 'active';
       existing.current_period_start = now;
@@ -178,12 +206,17 @@ router.post(
       await OrganizationSubscription.create({
         organization_id: orgId,
         plan_id: plan._id,
+        plan_revision_id: latestRevision?._id || null,
+        plan_revision_number: latestRevision?.revision_number || null,
         billing_cycle: billingCycle,
         status: 'active',
         current_period_start: now,
         current_period_end: periodEnd
       });
     }
+
+    // Bust the entitlement cache so the tenant picks up the new plan.
+    invalidateEntitlements(orgId);
 
     await writeBillingEvent(req, {
       action,
@@ -193,10 +226,215 @@ router.post(
       tenantId: orgId,
       diff: prev ? [{ path: 'plan_id', from: String(prev.plan_id), to: String(plan._id) }] : [],
       reason: req.body.reason || `Assigned ${plan.plan_name}.`,
-      metadata: { plan_code: plan.plan_code, billing_cycle: billingCycle }
+      metadata: {
+        plan_code: plan.plan_code,
+        billing_cycle: billingCycle,
+        revision_number: latestRevision?.revision_number || null
+      }
     });
 
+    // Notify org owner about the assignment.
+    const ownerEmail = await getOrgOwnerEmail(orgId).catch(() => null);
+    if (ownerEmail) {
+      sendPlanChangeNotice({
+        to: ownerEmail,
+        orgName: orgId,
+        planName: plan.plan_name,
+        billingCycle,
+        amountAUD: billingCycle === 'yearly' ? plan.pricing?.annualAUD : plan.pricing?.monthlyAUD,
+        reason: req.body.reason || null
+      });
+    }
+
     res.json({ success: true });
+  })
+);
+
+// ════════════════════════════════════════════════════════════════════
+// PLAN REVISION MIGRATION (Phase 9 — done early so SuperAdmin has
+// a clean way to push a price update to all tenants on a plan).
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /admin/tenants/:orgId/comp — flag this tenant's subscription as
+ * comped (free access, no payment required). Reason is mandatory and
+ * recorded in BillingEvent.
+ *
+ * Body: { is_comp: boolean, reason?: string }
+ */
+router.post(
+  '/tenants/:orgId/comp',
+  [
+    param('orgId').isString().trim().notEmpty(),
+    body('is_comp').isBoolean(),
+    body('reason').optional().isString()
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { OrganizationSubscription } = getRouterModels();
+    const orgId = String(req.params.orgId).toLowerCase();
+    const isComp = !!req.body.is_comp;
+    const reason = String(req.body.reason || '').trim();
+
+    if (isComp && !reason) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'REASON_REQUIRED', message: 'A reason is required to grant comp access.' }
+      });
+    }
+
+    const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+    if (!sub) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'SUBSCRIPTION_NOT_FOUND', message: 'Tenant has no subscription to comp. Assign a plan first.' }
+      });
+    }
+
+    const wasComp = !!sub.is_comp;
+    sub.is_comp = isComp;
+    sub.comp_reason = isComp ? reason : '';
+    sub.comp_granted_by = isComp ? (req.user?.userId || null) : null;
+    sub.comp_granted_at = isComp ? new Date() : null;
+    if (isComp && sub.status !== 'active') sub.status = 'active';
+    await sub.save();
+
+    invalidateEntitlements(orgId);
+
+    await writeBillingEvent(req, {
+      action: isComp ? 'subscription_override.created' : 'subscription_override.cleared',
+      targetType: 'subscription',
+      targetId: orgId,
+      targetLabel: orgId,
+      tenantId: orgId,
+      reason: isComp ? `Comped — ${reason}` : 'Comp removed.',
+      diff: [{ path: 'is_comp', from: wasComp, to: isComp }],
+      metadata: { kind: 'comp_grant' }
+    });
+
+    res.json({ success: true, data: { is_comp: sub.is_comp } });
+  })
+);
+
+router.post(
+  '/plans/:code/migrate-revision',
+  [param('code').isString().trim().notEmpty()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { SubscriptionPlan, PlanRevision, OrganizationSubscription } = getRouterModels();
+    const code = String(req.params.code).toLowerCase();
+    const reason = String(req.body.reason || 'Plan revision migration.').trim();
+
+    const plan = await SubscriptionPlan.findOne({ plan_code: code });
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'PLAN_NOT_FOUND', message: 'No such plan.' }
+      });
+    }
+    const latest = await PlanRevision.findOne({ plan_id: plan._id }).sort({ revision_number: -1 }).lean();
+    if (!latest) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NO_REVISIONS', message: 'Plan has no revisions yet.' }
+      });
+    }
+
+    const stale = await OrganizationSubscription.find({
+      plan_id: plan._id,
+      $or: [
+        { plan_revision_number: { $lt: latest.revision_number } },
+        { plan_revision_id: null }
+      ]
+    });
+
+    // Pick the Stripe Price for the new revision based on each tenant's
+    // billing cycle. Snapshot may include the IDs; otherwise read the live plan.
+    const monthlyPriceId = latest.snapshot?.pricing?.stripeMonthlyPriceId
+      || plan.pricing?.stripeMonthlyPriceId || null;
+    const annualPriceId = latest.snapshot?.pricing?.stripeAnnualPriceId
+      || plan.pricing?.stripeAnnualPriceId || null;
+
+    let migrated = 0;
+    let stripeSynced = 0;
+    let stripeFailed = 0;
+    const stripeErrors = [];
+
+    for (const sub of stale) {
+      const fromRev = sub.plan_revision_number;
+      sub.plan_revision_id = latest._id;
+      sub.plan_revision_number = latest.revision_number;
+      await sub.save();
+      invalidateEntitlements(sub.organization_id);
+
+      // Sync to Stripe if the tenant has a real subscription there.
+      let stripeStatus = 'skipped'; // 'skipped' | 'synced' | 'failed'
+      let stripeError = null;
+      if (isStripeConfigured() && sub.stripe_subscription_id) {
+        const newPriceId = sub.billing_cycle === 'yearly' ? annualPriceId : monthlyPriceId;
+        if (newPriceId) {
+          const result = await swapSubscriptionPrice({
+            subscriptionId: sub.stripe_subscription_id,
+            newPriceId
+          });
+          if (result.ok) {
+            stripeStatus = 'synced';
+            stripeSynced += 1;
+          } else {
+            stripeStatus = 'failed';
+            stripeFailed += 1;
+            stripeError = result.error;
+            stripeErrors.push({ orgId: sub.organization_id, error: result.error });
+          }
+        } else {
+          stripeStatus = 'skipped';
+          stripeErrors.push({ orgId: sub.organization_id, error: 'No Stripe price for cycle on the latest revision' });
+        }
+      }
+
+      await writeBillingEvent(req, {
+        action: 'subscription.revision_migrated',
+        targetType: 'subscription',
+        targetId: sub.organization_id,
+        targetLabel: sub.organization_id,
+        tenantId: sub.organization_id,
+        diff: [{ path: 'plan_revision_number', from: fromRev, to: latest.revision_number }],
+        reason,
+        metadata: {
+          plan_code: plan.plan_code,
+          to_revision: latest.revision_number,
+          stripe_sync: stripeStatus,
+          ...(stripeError ? { stripe_error: stripeError } : {})
+        }
+      });
+
+      // Notify the org owner about the new pricing/plan version.
+      const ownerEmail = await getOrgOwnerEmail(sub.organization_id).catch(() => null);
+      if (ownerEmail) {
+        const newPricing = latest.snapshot?.pricing || plan.pricing || {};
+        sendPlanChangeNotice({
+          to: ownerEmail,
+          orgName: sub.organization_id,
+          planName: plan.plan_name,
+          billingCycle: sub.billing_cycle,
+          amountAUD: sub.billing_cycle === 'yearly' ? newPricing.annualAUD : newPricing.monthlyAUD,
+          reason
+        });
+      }
+
+      migrated += 1;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        migrated,
+        latest_revision: latest.revision_number,
+        stripe_synced: stripeSynced,
+        stripe_failed: stripeFailed,
+        stripe_errors: stripeErrors
+      }
+    });
   })
 );
 
@@ -225,10 +463,24 @@ router.put(
       });
     }
 
+    // Validate against live tenant usage — refuse caps below current usage.
+    const validation = await validateOverride(orgId, req.body);
+    if (!validation.valid) {
+      return res.status(422).json({
+        success: false,
+        error: {
+          code: 'OVERRIDE_BELOW_USAGE',
+          message: 'One or more limits are below current tenant usage.',
+          details: { conflicts: validation.conflicts }
+        }
+      });
+    }
+
     const update = {
       tenant_id: orgId,
       limits: req.body.limits || {},
       feature_flags: req.body.feature_flags || {},
+      feature_flag_mode: req.body.feature_flag_mode === 'replace' ? 'replace' : 'merge',
       pricing: req.body.pricing || {},
       effective_from: req.body.effective_from ? new Date(req.body.effective_from) : new Date(),
       effective_until: req.body.effective_until ? new Date(req.body.effective_until) : null,
@@ -243,6 +495,8 @@ router.put(
       { $set: update },
       { upsert: true, new: true }
     );
+
+    invalidateEntitlements(orgId);
 
     await writeBillingEvent(req, {
       action: before ? 'subscription_override.updated' : 'subscription_override.created',
@@ -261,6 +515,80 @@ router.put(
   })
 );
 
+/**
+ * POST /admin/tenants/:orgId/override/apply-to-stripe
+ *
+ * Push the override's tenant-specific Stripe Price IDs onto the tenant's
+ * actual Stripe subscription so future invoices bill the override amount,
+ * not the plan default. No-op if no override / no Stripe sub / no price IDs.
+ */
+router.post(
+  '/tenants/:orgId/override/apply-to-stripe',
+  [param('orgId').isString().trim().notEmpty()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { OrganizationSubscription, SubscriptionOverride } = getRouterModels();
+    const orgId = String(req.params.orgId).toLowerCase();
+
+    if (!isStripeConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not configured.' }
+      });
+    }
+
+    const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+    if (!sub?.stripe_subscription_id) {
+      return res.status(409).json({
+        success: false,
+        error: { code: 'NO_STRIPE_SUBSCRIPTION', message: 'Tenant has no Stripe subscription to update.' }
+      });
+    }
+    const override = await SubscriptionOverride.findOne({ tenant_id: orgId });
+    if (!override) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'OVERRIDE_NOT_FOUND', message: 'No override saved for this tenant.' }
+      });
+    }
+    const newPriceId = sub.billing_cycle === 'yearly'
+      ? override.pricing?.stripeAnnualPriceId
+      : override.pricing?.stripeMonthlyPriceId;
+    if (!newPriceId) {
+      return res.status(409).json({
+        success: false,
+        error: {
+          code: 'OVERRIDE_PRICE_MISSING',
+          message: `Override has no Stripe ${sub.billing_cycle === 'yearly' ? 'annual' : 'monthly'} price configured.`
+        }
+      });
+    }
+
+    const result = await swapSubscriptionPrice({
+      subscriptionId: sub.stripe_subscription_id,
+      newPriceId
+    });
+    if (!result.ok) {
+      return res.status(502).json({
+        success: false,
+        error: { code: 'STRIPE_UPDATE_FAILED', message: result.error }
+      });
+    }
+
+    await writeBillingEvent(req, {
+      action: 'subscription_override.updated',
+      targetType: 'subscription_override',
+      targetId: orgId,
+      targetLabel: orgId,
+      tenantId: orgId,
+      reason: 'Override pricing applied to Stripe subscription.',
+      metadata: { stripe_price_id: newPriceId, stripe_subscription_id: sub.stripe_subscription_id }
+    });
+
+    res.json({ success: true, data: { stripe_price_id: newPriceId } });
+  })
+);
+
 /** DELETE /admin/tenants/:orgId/override — clear the tenant's override. */
 router.delete(
   '/tenants/:orgId/override',
@@ -271,6 +599,7 @@ router.delete(
     const orgId = String(req.params.orgId).toLowerCase();
     const result = await SubscriptionOverride.findOneAndDelete({ tenant_id: orgId });
     if (result) {
+      invalidateEntitlements(orgId);
       await writeBillingEvent(req, {
         action: 'subscription_override.cleared',
         targetType: 'subscription_override',
@@ -367,6 +696,167 @@ router.post(
 );
 
 // ════════════════════════════════════════════════════════════════════
+// INVOICES (Payment records — populated by Stripe invoice.paid webhook)
+// ════════════════════════════════════════════════════════════════════
+
+router.get(
+  '/invoices',
+  [
+    query('tenantId').optional().isString().trim(),
+    query('status').optional().isIn(['succeeded', 'failed', 'pending', 'refunded']),
+    query('limit').optional().isInt({ min: 1, max: 200 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { Payment } = getRouterModels();
+    const limit = parseInt(req.query.limit || '100', 10);
+    const filter = {};
+    if (req.query.tenantId) filter.organization_id = String(req.query.tenantId).toLowerCase();
+    if (req.query.status) filter.status = String(req.query.status);
+    const payments = await Payment
+      .find(filter)
+      .sort({ payment_date: -1 })
+      .limit(limit)
+      .lean();
+    res.json({
+      success: true,
+      data: payments.map((p) => ({
+        _id: p._id,
+        organization_id: p.organization_id,
+        amount: p.amount,
+        currency: p.currency || 'AUD',
+        status: p.status,
+        description: p.description || '',
+        invoice_number: p.metadata?.invoice_number || null,
+        hosted_invoice_url: p.metadata?.hosted_invoice_url || null,
+        invoice_pdf: p.metadata?.invoice_pdf || null,
+        stripe_invoice_id: p.stripe_invoice_id || null,
+        stripe_payment_intent_id: p.stripe_payment_intent_id || null,
+        stripe_subscription_id: p.metadata?.stripe_subscription_id || null,
+        payment_date: p.payment_date,
+        failure_reason: p.failure_reason || null
+      }))
+    });
+  })
+);
+
+/**
+ * POST /admin/invoices/backfill
+ *
+ * Reconcile missing Payment records by pulling every Stripe customer's
+ * invoice history and upserting any we haven't already stored. Idempotent
+ * via the unique index on `stripe_invoice_id`.
+ *
+ * Body (optional):
+ *   - tenantId — restrict backfill to one tenant
+ *   - limit    — max invoices per customer (default 100)
+ */
+router.post(
+  '/invoices/backfill',
+  [
+    body('tenantId').optional().isString().trim(),
+    body('limit').optional().isInt({ min: 1, max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not configured.' }
+      });
+    }
+
+    const { OrganizationSubscription, Payment } = getRouterModels();
+    const tenantFilter = req.body.tenantId ? { organization_id: String(req.body.tenantId).toLowerCase() } : {};
+    const limit = parseInt(req.body.limit || '100', 10);
+
+    // Find tenants with a Stripe customer to backfill against.
+    const subs = await OrganizationSubscription
+      .find({ ...tenantFilter, stripe_customer_id: { $exists: true, $ne: null, $nin: ['', null] } })
+      .lean();
+
+    if (subs.length === 0) {
+      return res.json({
+        success: true,
+        data: { tenants_scanned: 0, inserted: 0, already_present: 0, errors: [] }
+      });
+    }
+
+    let inserted = 0;
+    let alreadyPresent = 0;
+    const errors = [];
+
+    for (const sub of subs) {
+      try {
+        const invoices = await listInvoicesForCustomer({ customerId: sub.stripe_customer_id, limit });
+        for (const inv of invoices) {
+          // Skip drafts and uncollected invoices — only persist things that
+          // represent actual money state changes.
+          if (!['paid', 'uncollectible', 'void', 'open'].includes(inv.status)) continue;
+
+          // Map Stripe invoice status → local Payment status.
+          let localStatus = 'pending';
+          if (inv.status === 'paid')          localStatus = 'succeeded';
+          else if (inv.status === 'uncollectible') localStatus = 'failed';
+          else if (inv.status === 'void')     localStatus = 'failed';
+
+          try {
+            const created = await Payment.create({
+              organization_id: sub.organization_id,
+              stripe_payment_id: inv.payment_intent || inv.id,
+              stripe_payment_intent_id: inv.payment_intent || null,
+              stripe_invoice_id: inv.id,
+              amount: (inv.amount_paid || inv.amount_due || 0) / 100,
+              currency: (inv.currency || 'aud').toUpperCase(),
+              status: localStatus,
+              description: inv.description || `Stripe invoice ${inv.number || inv.id}`,
+              metadata: {
+                hosted_invoice_url: inv.hosted_invoice_url,
+                invoice_pdf: inv.invoice_pdf,
+                invoice_number: inv.number,
+                stripe_subscription_id: inv.subscription,
+                backfilled: true
+              },
+              payment_date: inv.status_transitions?.paid_at
+                ? new Date(inv.status_transitions.paid_at * 1000)
+                : new Date(inv.created * 1000)
+            });
+            if (created) inserted += 1;
+          } catch (err) {
+            if (err?.code === 11000) {
+              alreadyPresent += 1; // unique index hit — already stored
+            } else {
+              errors.push({ orgId: sub.organization_id, invoiceId: inv.id, error: err?.message || String(err) });
+            }
+          }
+        }
+      } catch (err) {
+        errors.push({ orgId: sub.organization_id, error: err?.message || String(err) });
+      }
+    }
+
+    await writeBillingEvent(req, {
+      action: 'plan.updated', // generic catch-all; invoice backfill doesn't have a dedicated action
+      targetType: 'invoices',
+      targetId: 'backfill',
+      targetLabel: req.body.tenantId || 'all-tenants',
+      reason: `Invoice backfill: ${inserted} inserted, ${alreadyPresent} already present, ${errors.length} errors.`,
+      metadata: { kind: 'invoice_backfill', inserted, already_present: alreadyPresent, errors_count: errors.length }
+    });
+
+    res.json({
+      success: true,
+      data: {
+        tenants_scanned: subs.length,
+        inserted,
+        already_present: alreadyPresent,
+        errors
+      }
+    });
+  })
+);
+
+// ════════════════════════════════════════════════════════════════════
 // AUDIT (BillingEvent stream)
 // ════════════════════════════════════════════════════════════════════
 
@@ -435,6 +925,9 @@ router.patch(
     }
     const before = await col.findOne({ key: 'global' });
     await col.updateOne({ key: 'global' }, { $set: { key: 'global', ...update } }, { upsert: true });
+
+    // Bust every tenant's entitlement cache — settings changes are global.
+    invalidateAllEntitlements();
 
     // Special audit: kill-switch toggles get their own action codes.
     if (Object.prototype.hasOwnProperty.call(req.body, 'overagesGloballyDisabled')) {

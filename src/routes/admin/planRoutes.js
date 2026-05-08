@@ -19,6 +19,9 @@ import { validate } from '../../middleware/validation.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import getRouterModels from '../../db/models/routerModels.js';
 import { writeBillingEvent } from '../../utils/writeBillingEvent.js';
+// NOTE: Plan PATCH does NOT bust tenant entitlement caches by design —
+// pinning means existing tenants keep their old revision until a SuperAdmin
+// runs POST /admin/plans/:code/migrate-revision (see opsRoutes.js).
 import {
   DEFAULT_PLANS,
   DEFAULT_FEATURE_FLAGS,
@@ -150,6 +153,8 @@ router.patch(
       Object.assign(plan, update);
       plan.current_revision = nextRevisionNumber;
       plan.updated_by = editorId;
+      // feature_flags is Mixed — Mongoose doesn't auto-detect deep replacement.
+      if (cleaned.feature_flags) plan.markModified('feature_flags');
       await plan.save();
     }
 
@@ -321,11 +326,11 @@ router.get('/feature-flags', asyncHandler(async (req, res) => {
   const { FeatureFlag } = getRouterModels();
   const dbFlags = await FeatureFlag.find({}).sort({ category: 1, code: 1 }).lean();
   const byCode = new Map(dbFlags.map((f) => [f.code, f]));
-  const merged = DEFAULT_FEATURE_FLAGS.map(([code, category, name]) => {
+  const merged = DEFAULT_FEATURE_FLAGS.map(([code, category, name, , description]) => {
     const db = byCode.get(code);
     return db
-      ? { code: db.code, category: db.category, name: db.name, description: db.description || '', status: db.status, is_template: false }
-      : { code, category, name, description: '', status: 'active', is_template: true };
+      ? { code: db.code, category: db.category, name: db.name, description: db.description || description || '', status: db.status, is_template: false }
+      : { code, category, name, description: description || '', status: 'active', is_template: true };
   });
   // Surface any DB-only flags (custom-added beyond the catalogue) at the end.
   for (const db of dbFlags) {

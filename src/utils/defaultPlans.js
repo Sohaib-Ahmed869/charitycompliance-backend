@@ -15,51 +15,57 @@
 // Feature flag catalogue — the 30+ gateable capabilities. Tier letters
 // say which default plan(s) include the flag by default.
 //   F = Foundation, P = Professional, E = Enterprise
+//
+// Tuple: [code, category, name, tiers, description]
+//   name        — short label used in the SuperAdmin override panel + tier pill
+//   description — one-line plain-English of what the feature does, shown
+//                 below the name on the override panel so the operator
+//                 understands what they're toggling.
 export const DEFAULT_FEATURE_FLAGS = [
   // Governance — every tier
-  ['governance.organisation',          'governance', 'Organisation & Responsible Persons register', ['F','P','E']],
-  ['governance.board_portal',          'governance', 'Agendas, packs, minutes, decision register', ['F','P','E']],
-  ['governance.policy_management',     'governance', 'Policy lifecycle, acknowledge, version', ['F','P','E']],
-  ['governance.risk_register',         'governance', 'Risk register & matrix', ['F','P','E']],
-  ['governance.complaints',            'governance', 'Complaints register', ['F','P','E']],
-  ['governance.incidents',             'governance', 'Incidents register', ['F','P','E']],
-  ['governance.compliance_checklist',  'governance', 'ACNC GS 1–6 checklists', ['F','P','E']],
-  ['governance.ais_workflow',          'governance', 'Annual Information Statement workflow', ['F','P','E']],
+  ['governance.organisation',          'governance', 'Charity Administration',          ['F','P','E'], 'Responsible persons register, organisation chart, registrations & licenses, governing documents.'],
+  ['governance.board_portal',          'governance', 'Meetings & Board Portal',         ['F','P','E'], 'Schedule meetings, build agendas + packs, capture minutes and decisions.'],
+  ['governance.policy_management',     'governance', 'Policies & Procedures',           ['F','P','E'], 'Policy lifecycle — draft, publish, version, distribute and acknowledge.'],
+  ['governance.risk_register',         'governance', 'Risk Management',                 ['F','P','E'], 'Risk register, risk matrix, controls and treatment plans.'],
+  ['governance.complaints',            'governance', 'Complaints Register',             ['F','P','E'], 'Receive complaints across channels, assign owners, track resolution.'],
+  ['governance.incidents',             'governance', 'Incidents Register',              ['F','P','E'], 'Log safeguarding / operational incidents and track follow-up actions.'],
+  ['governance.compliance_checklist',  'governance', 'Reporting & Compliance',          ['F','P','E'], 'ACNC Governance Standard 1–6 checklists and compliance reporting.'],
+  ['governance.ais_workflow',          'governance', 'AIS Workflow',                    ['F','P','E'], 'Annual Information Statement preparation, board approval and ACNC submission.'],
   // Security — every tier
-  ['security.audit_log',               'security',   'Immutable audit log', ['F','P','E']],
-  ['security.mfa',                     'security',   'Multi-factor authentication', ['F','P','E']],
-  ['security.rbac',                    'security',   'Role-based permissions', ['F','P','E']],
+  ['security.audit_log',               'security',   'Audit Trail',                     ['F','P','E'], 'Immutable record of every change made in the system, who and when.'],
+  ['security.mfa',                     'security',   'Multi-Factor Authentication',     ['F','P','E'], 'Time-based 6-digit codes on every login. Mandatory for org owners.'],
+  ['security.rbac',                    'security',   'Role-Based Permissions',          ['F','P','E'], 'Position-based permissions; staff only see what their role allows.'],
   // Finance — Professional + Enterprise
-  ['finance.expense_workflow',         'finance',    'Expense workflow with dual approval', ['P','E']],
-  ['finance.invoice_workflow',         'finance',    'Invoice approval with compliance check', ['P','E']],
-  ['finance.budget',                   'finance',    'Budget entry & variance reporting', ['P','E']],
-  ['finance.cash_handling',            'finance',    'Cash handling & donation-box tracking', ['P','E']],
-  ['finance.statements',               'finance',    'Financial statements + board approval', ['P','E']],
-  ['finance.bas_lodgement',            'finance',    'BAS / GST / PAYG quarterly workflow', ['P','E']],
-  ['finance.month_end_checklist',      'finance',    'Month-end & year-end checklists', ['P','E']],
-  ['finance.insurance_register',       'finance',    'Insurance tracking integration', ['P','E']],
+  ['finance.expense_workflow',         'finance',    'Expense Workflows',               ['P','E'],     'Submit expenses, dual approval, attach receipts, audit trail.'],
+  ['finance.invoice_workflow',         'finance',    'Invoice Approvals',               ['P','E'],     'Supplier invoice intake, compliance check, multi-step approval.'],
+  ['finance.budget',                   'finance',    'Budgets & Variance',              ['P','E'],     'Budget entry, period roll-up, variance reporting against actuals.'],
+  ['finance.cash_handling',            'finance',    'Cash Handling & Sweep Funds',     ['P','E'],     'Donation box counting, sweep funds workflow with reconciliation.'],
+  ['finance.statements',               'finance',    'Financial Controls',              ['P','E'],     'Financial controls register, statements, board approval workflow.'],
+  ['finance.bas_lodgement',            'finance',    'BAS / GST / PAYG',                ['P','E'],     'Quarterly Business Activity Statement preparation and lodgement.'],
+  ['finance.month_end_checklist',      'finance',    'Month-end Checklist',             ['P','E'],     'Auto-generated month-end and year-end close checklists per fiscal calendar.'],
+  ['finance.insurance_register',       'finance',    'Insurance Register',              ['P','E'],     'Track policy renewals, premiums, certificates of currency.'],
   // Partner / People / AI — Professional + Enterprise
-  ['partner.kyc_aml',                  'partner',    'KYC / AML / GDPR partner & donor vetting', ['P','E']],
-  ['meeting.esignature',               'governance', 'Meeting minutes with e-signature', ['P','E']],
-  ['auditor.read_only_access',         'governance', 'External auditor scoped read-only role', ['P','E']],
-  ['ai.compliance_assistant',          'ai',         'OpenAI-backed AI compliance chatbot', ['P','E']],
-  ['people.hr',                        'hr',         'Induction, offboarding, access revocation', ['P','E']],
-  ['it.register',                      'operations', 'IT subscriptions & web admin register', ['P','E']],
+  ['partner.kyc_aml',                  'partner',    'Partner Vetting (KYC/AML)',       ['P','E'],     'Vet partners and donors via KYC / AML checks; capture COI declarations.'],
+  ['meeting.esignature',               'governance', 'Meeting E-Signature',             ['P','E'],     'Electronically sign meeting minutes — board / sub-committee.'],
+  ['auditor.read_only_access',         'governance', 'External Auditor Access',         ['P','E'],     'Time-limited read-only seat for an external auditor across modules.'],
+  ['ai.compliance_assistant',          'ai',         'AI Compliance Assistant',         ['P','E'],     'Floating chatbot that answers compliance questions using your data.'],
+  ['people.hr',                        'hr',         'People & HR',                     ['P','E'],     'Employees, training register, induction, disciplinary records, offboarding.'],
+  ['it.register',                      'operations', 'IT Systems Register',             ['P','E'],     'Track IT subscriptions, web admin accounts, MFA status, access logs.'],
   // Enterprise-only
-  ['group.multi_entity',               'enterprise', 'Parent / subsidiary multi-entity management', ['E']],
-  ['workflow.custom_builder',          'enterprise', 'No-code custom workflow builder', ['E']],
-  ['governance.bcp_vault',             'enterprise', 'Business Continuity Plan vault', ['E']],
-  ['security.credential_vault',        'enterprise', 'Secure Credential Vault', ['E']],
-  ['governance.regulatory_radar',      'enterprise', 'AU + intl regulator change monitoring', ['E']],
-  ['sso.saml_oidc',                    'security',   'SAML / OIDC single sign-on', ['E']],
-  ['sso.scim',                         'security',   'SCIM user provisioning', ['E']],
-  ['api.rest',                         'integration','Public REST API', ['E']],
-  ['api.webhooks',                     'integration','Outbound webhooks', ['E']],
-  ['branding.white_label',             'branding',   'Organisation branding on reports & portal', ['E']],
-  ['data.residency_choice',            'compliance', 'AU primary / EU on request', ['E']],
-  ['compliance.iso_soc2_pack',         'compliance', 'Compliance evidence pack', ['E']],
-  ['support.dedicated_csm',            'support',    'Dedicated Customer Success Manager', ['E']],
-  ['support.sla_99_9',                 'support',    'Contractual 99.9% uptime SLA', ['E']]
+  ['group.multi_entity',               'enterprise', 'Multi-entity Management',         ['E'],         'Parent / subsidiary structure with consolidated reporting.'],
+  ['workflow.custom_builder',          'enterprise', 'Custom Workflow Builder',         ['E'],         'No-code builder for custom approval flows beyond the defaults.'],
+  ['governance.bcp_vault',             'enterprise', 'Business Continuity Plan',        ['E'],         'BCP vault, emergency teams, recovery procedures, asset inventory.'],
+  ['security.credential_vault',        'enterprise', 'Credential Vault',                ['E'],         'Secure storage for org credentials with break-glass access controls.'],
+  ['governance.regulatory_radar',      'enterprise', 'Regulatory Radar',                ['E'],         'Australian + international regulator change monitoring with alerts.'],
+  ['sso.saml_oidc',                    'security',   'SAML / OIDC SSO',                 ['E'],         'Single sign-on via your identity provider (Okta, Azure AD, Google).'],
+  ['sso.scim',                         'security',   'SCIM Provisioning',               ['E'],         'Automatic user provisioning / deprovisioning from your IdP.'],
+  ['api.rest',                         'integration','Public REST API',                 ['E'],         'Authenticated REST API for custom integrations with your other tools.'],
+  ['api.webhooks',                     'integration','Outbound Webhooks',               ['E'],         'Subscribe to platform events; we POST them to your endpoints.'],
+  ['branding.white_label',             'branding',   'White-label Branding',            ['E'],         'Your logo & colours on the portal, exports, emails to staff and donors.'],
+  ['data.residency_choice',            'compliance', 'Data Residency Choice',           ['E'],         'Default AU; EU residency on request for international compliance.'],
+  ['compliance.iso_soc2_pack',         'compliance', 'Compliance Evidence Pack',        ['E'],         'Pre-built evidence pack for ISO 27001 / SOC2 audit responses.'],
+  ['support.dedicated_csm',            'support',    'Dedicated CSM',                   ['E'],         'Named Customer Success Manager with regular check-ins.'],
+  ['support.sla_99_9',                 'support',    'Contractual 99.9% SLA',           ['E'],         'Contractually guaranteed uptime with credits if missed.']
 ];
 
 const flagsForTier = (tier) => {

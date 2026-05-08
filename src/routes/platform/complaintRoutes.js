@@ -9,6 +9,7 @@ import * as complaintController from '../../controllers/complaintController.js';
 import { body, param } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 
 const router = express.Router();
 
@@ -57,6 +58,7 @@ router.get(
 
 // All authenticated routes require auth and tenant resolution
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.complaints'));
 
 // Get all complaints
 router.get(

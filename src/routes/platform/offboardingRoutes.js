@@ -2,12 +2,14 @@ import express from 'express';
 import { param } from 'express-validator';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { requireMfa } from '../../middleware/mfa.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { validate } from '../../middleware/validation.js';
 import * as itAccessController from '../../controllers/itAccessController.js';
 
 const router = express.Router();
 
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('people.hr'));
 
 router.get('/', itAccessController.listOffboardingRequests);
 

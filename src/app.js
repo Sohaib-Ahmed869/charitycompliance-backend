@@ -81,6 +81,12 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
+// Stripe webhook MUST be mounted BEFORE express.json() — Stripe signs
+// the raw bytes, so the JSON parser would invalidate the signature.
+// The webhook router uses express.raw() locally to keep req.body as Buffer.
+import stripeWebhookRoutes from './routes/webhooks/stripeWebhookRoutes.js';
+app.use('/api/v1/webhooks/stripe', express.raw({ type: 'application/json' }), stripeWebhookRoutes);
+
 // Body Parser
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '50mb';
 app.use(express.json({ limit: requestBodyLimit }));
@@ -169,6 +175,7 @@ import chatRoutes from './routes/platform/chatRoutes.js';
 import adminPlanRoutes from './routes/admin/planRoutes.js';
 import adminAuthRoutes from './routes/admin/authRoutes.js';
 import adminOpsRoutes from './routes/admin/opsRoutes.js';
+import billingRoutes from './routes/platform/billingRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -223,6 +230,7 @@ if (isModuleEnabled('chat')) app.use('/api/v1/platform/chat', chatRoutes);
 app.use('/api/v1/admin/auth', adminAuthRoutes);
 app.use('/api/v1/admin', adminPlanRoutes);
 app.use('/api/v1/admin', adminOpsRoutes);
+app.use('/api/v1/platform/billing', billingRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

@@ -38,6 +38,8 @@ const [{ default: app, initializeApp }, { closeRouterDB }, { closeAllConnections
   import('./src/services/chatMentionDigestService.js')
 ]);
 
+const { startTrialReminderScheduler } = await import('./src/services/trialReminderService.js');
+
 const PORT = process.env.PORT || 5000;
 const isDevelopment = String(process.env.NODE_ENV || '').toLowerCase() === 'development';
 const backgroundJobsEnabled =
@@ -67,6 +69,9 @@ const startServer = async () => {
         startFiscalReportReminderScheduler();
         startSuitabilityRenewalScheduler();
         startSubscriptionMaintenanceReminderScheduler();
+        // Trial-ending reminders — sweep hourly, email tenants 3 days before
+        // their trial ends. Idempotent via trial_reminder_sent_for.
+        startTrialReminderScheduler();
         // Chat retention: daily sweep that purges expired attachments per channel.retention_days
         startChatRetentionScheduler();
         // Chat mention digest: emails users any unread @mention older than the threshold (default 30 min).

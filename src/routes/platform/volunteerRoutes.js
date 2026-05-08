@@ -13,6 +13,7 @@ import {
   acknowledgeVolunteerPolicy,
 } from '../../controllers/volunteerController.js';
 import { validate } from '../../middleware/validation.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 
 const router = express.Router();
@@ -103,7 +104,9 @@ router.post(
 );
 
 // Authenticated actions
+// (Public volunteer-action routes above run without auth + without gate.)
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('people.hr'));
 
 router.get('/submissions/stats', getVolunteerSubmissionsStats);
 

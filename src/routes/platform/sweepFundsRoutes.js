@@ -1,12 +1,14 @@
 import express from 'express';
 import { body, param } from 'express-validator';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { validate } from '../../middleware/validation.js';
 import * as sweepFundsController from '../../controllers/sweepFundsController.js';
 
 const router = express.Router();
 
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('finance.cash_handling'));
 
 router.get('/workflows', sweepFundsController.getSweepFundsWorkflows);
 router.get('/history', sweepFundsController.getSweepFundsHistory);

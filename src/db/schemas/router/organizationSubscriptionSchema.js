@@ -19,6 +19,19 @@ const organizationSubscriptionSchema = new mongoose.Schema({
     ref: 'SubscriptionPlan',
     required: true
   },
+  // Pin the exact PlanRevision the tenant is bound to. SuperAdmin price
+  // edits write a new revision but DO NOT touch any pinned subscription
+  // unless the operator explicitly migrates them. See migrateRevision().
+  plan_revision_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PlanRevision',
+    default: null,
+    index: true
+  },
+  plan_revision_number: {
+    type: Number,
+    default: null
+  },
   billing_cycle: {
     type: String,
     enum: ['monthly', 'yearly'],
@@ -57,6 +70,19 @@ const organizationSubscriptionSchema = new mongoose.Schema({
   cancelled_at: {
     type: Date
   },
+  // SuperAdmin "comped" subscriptions get full access without paying
+  // (free trials, partner deals, internal accounts). Set explicitly via
+  // /admin/tenants/:orgId/comp endpoint — tracks who/why for audit.
+  is_comp: {
+    type: Boolean,
+    default: false
+  },
+  comp_reason: { type: String, default: '' },
+  comp_granted_by: { type: mongoose.Schema.Types.ObjectId, default: null },
+  comp_granted_at: { type: Date, default: null },
+  // Stores the ISO of `current_period_end` we last sent a trial-ending
+  // reminder for. Lets the scheduler stay idempotent across runs.
+  trial_reminder_sent_for: { type: String, default: '' },
   created_at: {
     type: Date,
     default: Date.now

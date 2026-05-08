@@ -7,11 +7,13 @@ import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { requirePermission } from '../../middleware/rbac.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import * as donationBoxController from '../../controllers/donationBoxController.js';
 
 const router = express.Router();
 
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('finance.cash_handling'));
 
 // List donation boxes
 router.get(

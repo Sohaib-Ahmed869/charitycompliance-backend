@@ -1,5 +1,6 @@
 import express from 'express';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import * as itAccessController from '../../controllers/itAccessController.js';
 import { body, param } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
@@ -7,6 +8,7 @@ import { validate } from '../../middleware/validation.js';
 const router = express.Router();
 
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('it.register'));
 
 router.get('/mfa-status', itAccessController.getMfaStatus);
 router.post('/access-log', itAccessController.createAccessLogEntry);

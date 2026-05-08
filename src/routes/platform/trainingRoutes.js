@@ -9,6 +9,7 @@ import * as trainingController from '../../controllers/trainingController.js';
 import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { uploadTrainingSingle, handleTrainingUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
@@ -63,6 +64,7 @@ router.get(
 
 // Authenticated routes
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('people.hr'));
 
 // --- Upload resource file (from PC) ---
 router.post(

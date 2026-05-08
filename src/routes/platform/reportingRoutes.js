@@ -6,6 +6,7 @@ import express from 'express';
 import { query } from 'express-validator';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { requirePermission } from '../../middleware/rbac.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { validate } from '../../middleware/validation.js';
 import {
   getAisPrefill,
@@ -19,6 +20,7 @@ import {
 const router = express.Router();
 
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.compliance_checklist'));
 router.use(requirePermission('module:reporting:view'));
 
 router.get(

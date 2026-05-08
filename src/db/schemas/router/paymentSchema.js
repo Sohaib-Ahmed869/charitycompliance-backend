@@ -41,10 +41,22 @@ const paymentSchema = new mongoose.Schema({
     index: true,
     sparse: true
   },
+  // Stripe invoice id — distinct from payment_intent. Used by SuperAdmin
+  // invoice browser to dedupe + link out to Stripe-hosted invoice page.
+  stripe_invoice_id: {
+    type: String,
+    unique: true,
+    sparse: true,
+    index: true
+  },
   payment_date: {
     type: Date,
-    required: true,
+    default: Date.now,
     index: true
+  },
+  description: {
+    type: String,
+    default: ''
   },
   failure_reason: {
     type: String

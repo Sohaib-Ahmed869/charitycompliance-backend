@@ -70,8 +70,18 @@ export const resolveTenant = async (req, res, next) => {
 };
 
 /**
- * Combined middleware: Authenticate + Resolve Tenant
- * Use this when you need both authentication and tenant resolution
+ * Combined middleware: Authenticate + Resolve Tenant + Paywall + Meter.
+ *
+ * Mounted on every /platform route. Order matters:
+ *   1. authenticate           — populate req.user
+ *   2. resolveTenant          — populate req.tenantDb / req.orgId
+ *   3. requirePaidSubscription — gate by entitlements.payment_required
+ *   4. trackApiCall            — fire-and-forget metering bump
+ *
+ * The paywall step short-circuits a curated allow-list (billing,
+ * onboarding, dashboard reads) so a tenant can still reach the page
+ * they need to pay on. Calcite admins + auditors bypass paywall.
+ * Metering also skips Calcite/billing routes to avoid feedback loops.
  */
 export const authAndResolveTenant = [
   // Import authenticate dynamically to avoid circular dependencies
@@ -79,7 +89,15 @@ export const authAndResolveTenant = [
     const { authenticate } = await import('./auth.js');
     return authenticate(req, res, next);
   },
-  resolveTenant
+  resolveTenant,
+  async (req, res, next) => {
+    const { requirePaidSubscription } = await import('./requirePaidSubscription.js');
+    return requirePaidSubscription(req, res, next);
+  },
+  async (req, res, next) => {
+    const { trackApiCall } = await import('./trackApiCall.js');
+    return trackApiCall(req, res, next);
+  }
 ];
 
 export default {

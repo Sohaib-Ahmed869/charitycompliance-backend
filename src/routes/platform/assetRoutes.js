@@ -9,6 +9,7 @@ import * as assetController from '../../controllers/assetController.js';
 import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { uploadAssetSingle, handleUploadError } from '../../middleware/upload.js';
 import { requirePermission } from '../../middleware/rbac.js';
 import { requireMfa } from '../../middleware/mfa.js';
@@ -17,6 +18,7 @@ const router = express.Router();
 
 // All asset routes require authentication and tenant resolution
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('it.register'));
 
 // Create asset
 router.post(

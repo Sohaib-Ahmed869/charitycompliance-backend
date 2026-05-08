@@ -65,7 +65,11 @@ const subscriptionPlanSchema = new mongoose.Schema({
     stripeProductId: { type: String, default: '' },
     stripeMonthlyPriceId: { type: String, default: '' },
     stripeAnnualPriceId: { type: String, default: '' },
-    stripeOverageMeterId: { type: String, default: '' }
+    stripeOverageMeterId: { type: String, default: '' },
+    // One-time setup fee Price IDs (created in Stripe as one-time prices).
+    // Appended as a line_item on Checkout when set.
+    stripeSetupMonthlyPriceId: { type: String, default: '' },
+    stripeSetupAnnualPriceId: { type: String, default: '' }
   },
 
   // ── Limits block (handbook §5.1) ───────────────────────────────────────
@@ -82,14 +86,15 @@ const subscriptionPlanSchema = new mongoose.Schema({
     hardCapPct: { type: Number, default: 100, min: 0, max: 200 }
   },
 
-  // ── Feature flag inclusion (Map — flag code → boolean) ─────────────────
-  // Resolved against the FeatureFlag catalogue at runtime; missing keys are
-  // treated as `false`. Renamed from legacy `features` to avoid the Mixed
-  // shape and to surface explicit intent in the dashboard.
+  // ── Feature flag inclusion (object — flag code → boolean) ─────────────
+  // Plain object (not Map) because feature flag codes are namespaced with
+  // dots ("governance.organisation") and Mongoose Maps reject dotted keys.
+  // Resolved against the FeatureFlag catalogue at runtime; missing keys
+  // are treated as `false`. Renamed from legacy `features` to surface
+  // explicit intent in the dashboard.
   feature_flags: {
-    type: Map,
-    of: Boolean,
-    default: {}
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({})
   },
 
   // ── Support / SLA ──────────────────────────────────────────────────────

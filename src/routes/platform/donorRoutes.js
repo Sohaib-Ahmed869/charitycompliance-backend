@@ -6,6 +6,7 @@ import express from 'express';
 import { body, param, query } from 'express-validator';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { requirePermission } from '../../middleware/rbac.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { validate } from '../../middleware/validation.js';
 import { uploadDonorKycFiles, handleUploadError } from '../../middleware/upload.js';
 import {
@@ -80,6 +81,7 @@ router.post(
 );
 
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.organisation'));
 
 router.post(
   '/',

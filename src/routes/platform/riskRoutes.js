@@ -9,11 +9,13 @@ import * as riskController from '../../controllers/riskController.js';
 import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { uploadPolicySingle, handlePolicyUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
 
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.risk_register'));
 
 router.get('/counts', riskController.getRiskCounts);
 
