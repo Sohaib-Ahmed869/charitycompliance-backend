@@ -22,6 +22,11 @@ const SALT_ROUNDS = 12;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
+// MFA-on-login is currently disabled. Flip to true to re-introduce the OTP step.
+// Flag-gates only the login challenge — MFA enrollment fields and other MFA-protected
+// endpoints (mfa middleware, sensitive routes) are untouched so re-enabling is one-line.
+const MFA_LOGIN_ENABLED = false;
+
 /**
  * Load permissions granted by the user's position (if they are a board member with position_id).
  * Shared helper used by login, OTP completion and runtime permission refresh.
@@ -514,7 +519,7 @@ export class AuthService {
       }
 
       // Check if MFA is enabled
-      if (user.mfa_enabled) {
+      if (MFA_LOGIN_ENABLED && user.mfa_enabled) {
         // Send OTP and return flag for frontend to redirect to OTP verification
         try {
           await this.sendOtpEmail(tenantDb, user);
