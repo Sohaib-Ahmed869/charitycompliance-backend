@@ -240,17 +240,21 @@ router.post(
       }
     });
 
+    // Map DB role → JWT role name. Existing accounts default to super_admin.
+    const dbRole = admin.role || 'super_admin';
+    const calciteRole = `calcite.${dbRole}`;
+
     const token = generateToken({
       userId: admin._id.toString(),
       email: admin.email,
-      roles: ['calcite.super_admin'],
-      // Intentionally no orgId — super-admins don't belong to a tenant.
+      roles: [calciteRole, dbRole],
+      // Intentionally no orgId — Calcite staff don't belong to a tenant.
       // The existing `authenticate` middleware skips every tenant-DB check
       // when orgId is absent, so this token "just works" against /admin/*.
       permissions: []
     });
 
-    logInfo('SuperAdmin login', { email: admin.email });
+    logInfo('SuperAdmin login', { email: admin.email, role: dbRole });
 
     return res.json({
       success: true,
@@ -260,7 +264,8 @@ router.post(
           userId: admin._id.toString(),
           email: admin.email,
           fullName: admin.full_name,
-          roles: ['calcite.super_admin']
+          role: dbRole,
+          roles: [calciteRole, dbRole]
         }
       }
     });
@@ -272,12 +277,20 @@ router.post(
  * Auth-protected echo of the current super-admin session. Used by the
  * frontend route guard to confirm the token is still valid + super-admin.
  */
-router.get('/me', authenticate, requireSuperAdmin, (req, res) => {
+import { requireCalciteStaff } from '../../middleware/requireSuperAdmin.js';
+
+router.get('/me', authenticate, requireCalciteStaff, (req, res) => {
+  // Derive the friendly role name from the JWT roles array.
+  const roles = Array.isArray(req.user.roles) ? req.user.roles : [];
+  let role = 'super_admin';
+  if (roles.includes('calcite.billing_operator') || roles.includes('billing_operator')) role = 'billing_operator';
+  else if (roles.includes('calcite.support_agent') || roles.includes('support_agent')) role = 'support_agent';
   res.json({
     success: true,
     data: {
       userId: req.user.userId,
       email: req.user.email,
+      role,
       roles: req.user.roles
     }
   });

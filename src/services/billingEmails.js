@@ -51,6 +51,47 @@ export async function sendSubscriptionWelcome({ to, orgName, planName, amountAUD
   await trySend({ to, subject: isTrial ? `Your ${planName} trial has started` : `Welcome to Stewardex ${planName}`, html });
 }
 
+/* ── Payment receipt — fires on invoice.paid ─────────────────────── */
+export async function sendPaymentReceipt({
+  to, orgName, planName, amountAUD, currency = 'AUD',
+  invoiceNumber, invoiceUrl, invoicePdfUrl,
+  billingCycle, periodEndAt, paidAt
+}) {
+  if (!to) return;
+  const cycleLabel = billingCycle === 'yearly' ? 'year' : 'month';
+  const subject = invoiceNumber
+    ? `Payment received — invoice ${invoiceNumber}`
+    : `Payment received — Stewardex ${planName || ''}`.trim();
+
+  const html = buildEmailTemplate({
+    heading: 'Payment received',
+    headingHighlight: 'Payment',
+    bodyHtml: `
+      <p style="margin: 0 0 14px 0;">Hi${orgName ? ` ${orgName}` : ''},</p>
+      <p style="margin: 0 0 14px 0;">
+        We've received <strong>${fmtMoney(amountAUD, currency)}</strong>
+        ${planName ? `for your ${planName} subscription` : ''}${billingCycle ? ` (per ${cycleLabel})` : ''}.
+        Your account is active and your next renewal is on
+        <strong>${fmtDate(periodEndAt)}</strong>.
+      </p>
+      <p style="margin: 0 0 14px 0;">
+        Keep this email for your records — the receipt details are below.
+      </p>
+    `,
+    buttonText: invoiceUrl ? 'View invoice' : 'Open billing',
+    buttonLink: invoiceUrl || `${FRONTEND_URL}/billing`,
+    infoBoxLines: [
+      `Amount: ${fmtMoney(amountAUD, currency)}`,
+      planName ? `Plan: ${planName}` : null,
+      invoiceNumber ? `Invoice: ${invoiceNumber}` : null,
+      paidAt ? `Paid on: ${fmtDate(paidAt)}` : null,
+      periodEndAt ? `Next renewal: ${fmtDate(periodEndAt)}` : null,
+      invoicePdfUrl ? `Download PDF: ${invoicePdfUrl}` : null
+    ].filter(Boolean)
+  });
+  await trySend({ to, subject, html });
+}
+
 /* ── Past-due — fires on invoice.payment_failed ──────────────────── */
 export async function sendPastDueAlert({ to, orgName, planName, amountAUD, attemptCount }) {
   if (!to) return;

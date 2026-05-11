@@ -1516,6 +1516,26 @@ export class ApprovalWorkflowService {
 
       await approvalRequestRepo.updateStatus(approvalRequestId, 'approved');
 
+      // Architecture §2.3 — emit a metering event at the workflow's
+      // terminal state. Idempotent on (org_id, event_id) so a retry
+      // won't double-count. Fire-and-forget; never blocks the caller.
+      try {
+        const { publishUsageEvent } = await import('../utils/publishUsageEvent.js');
+        await publishUsageEvent({
+          tenantDb,
+          orgId: request.org_id,
+          eventCode: `${request.entity_type || 'workflow'}.approved`,
+          eventId: `approval:${String(approvalRequestId)}:approved`,
+          countsAsWorkflow: true,
+          payload: {
+            approval_request_id: String(approvalRequestId),
+            entity_type: request.entity_type,
+            entity_id: String(request.entity_id || ''),
+            approval_type: request.approval_type
+          }
+        });
+      } catch (_) { /* metering must never fail the approval */ }
+
       // If this approval corresponds to a project refund sign-off, close the project after approval.
       // We correlate using ProjectRefund.internal_approval_request_id.
       try {

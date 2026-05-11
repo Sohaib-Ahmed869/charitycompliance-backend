@@ -6,23 +6,38 @@
  */
 
 import express from 'express';
+import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import { body, param, query } from 'express-validator';
 import { authenticate } from '../../middleware/auth.js';
-import { requireSuperAdmin } from '../../middleware/requireSuperAdmin.js';
+import { requireSuperAdmin, requireCalciteStaff, requireBillingStaff, requireSupportStaff } from '../../middleware/requireSuperAdmin.js';
 import { validate } from '../../middleware/validation.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import getRouterModels from '../../db/models/routerModels.js';
 import { writeBillingEvent } from '../../utils/writeBillingEvent.js';
 import { invalidateEntitlements, invalidateAllEntitlements, resolveEntitlements } from '../../services/entitlementService.js';
 import { validateOverride } from '../../services/overrideValidationService.js';
-import { swapSubscriptionPrice, isStripeConfigured, listInvoicesForCustomer } from '../../services/stripeService.js';
+import {
+  swapSubscriptionPrice,
+  isStripeConfigured,
+  listInvoicesForCustomer,
+  createCreditNote,
+  voidInvoice,
+  retryInvoicePayment,
+  applyCouponToSubscription,
+  removeCouponFromSubscription,
+  pauseSubscription,
+  resumeSubscription
+} from '../../services/stripeService.js';
 import { sendPlanChangeNotice } from '../../services/billingEmails.js';
 import { getOrgOwnerEmail } from '../../utils/getOrgOwnerEmail.js';
 
 const router = express.Router();
 
 router.use(authenticate);
-router.use(requireSuperAdmin);
+// Default gate is "any Calcite staff can read" — sensitive write endpoints
+// add stricter middleware (requireSuperAdmin / requireBillingStaff) per-route.
+router.use(requireCalciteStaff);
 
 // ════════════════════════════════════════════════════════════════════
 // TENANTS
@@ -139,13 +154,170 @@ router.get(
   })
 );
 
+// ════════════════════════════════════════════════════════════════════
+// SUPPORT IMPERSONATION ("Act as support")
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /admin/tenants/:orgId/act-as
+ *
+ * Mints a short-lived tenant-scoped JWT so a Calcite super-admin or
+ * support agent can operate inside any tenant exactly like an org admin
+ * (workflows, checklists, members, etc.). The token carries:
+ *
+ *   - userId:    the agent's SuperAdmin id (preserved for audit)
+ *   - orgId:     the target tenant
+ *   - roles:     ['admin']    — bypasses runtime per-position recompute
+ *   - permissions: ['*:*']    — full admin within the tenant app
+ *   - support_session:  true
+ *   - support_agent_id, support_agent_email, support_session_id, reason
+ *
+ * Auth middleware sees `support_session=true` and skips the
+ * position-transferred + account-inactive checks (the agent has no
+ * tenant user record). Every session start writes a BillingEvent so
+ * there's an immutable paper trail of who opened which tenant and why.
+ *
+ * Token TTL is 1h — short enough to limit damage from a leaked token,
+ * long enough to fix a real issue without re-auth churn.
+ */
+router.post(
+  '/tenants/:orgId/act-as',
+  requireSupportStaff,
+  [
+    param('orgId').isString().trim().notEmpty(),
+    body('reason').optional().isString().trim().isLength({ max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { Tenant } = getRouterModels();
+    const orgId = String(req.params.orgId).toLowerCase();
+
+    const tenant = await Tenant.findOne({ orgId }).lean();
+    if (!tenant) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'TENANT_NOT_FOUND', message: 'No such tenant.' }
+      });
+    }
+
+    const sessionId = crypto.randomUUID();
+    const reason = (req.body?.reason || '').trim();
+    const agentId = req.user?.userId || null;
+    const agentEmail = req.user?.email || '';
+
+    const payload = {
+      userId: agentId,
+      orgId,
+      email: agentEmail,
+      roles: ['admin'],
+      permissions: ['*:*'],
+      support_session: true,
+      support_agent_id: agentId,
+      support_agent_email: agentEmail,
+      support_session_id: sessionId,
+      support_reason: reason || null
+    };
+
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: '1h',
+      issuer: 'charity-compliance-api',
+      audience: 'charity-compliance-client'
+    });
+
+    await writeBillingEvent(req, {
+      action: 'support.session_started',
+      targetType: 'tenant',
+      targetId: orgId,
+      targetLabel: tenant.dbName || orgId,
+      tenantId: orgId,
+      reason,
+      metadata: {
+        session_id: sessionId,
+        agent_id: agentId,
+        agent_email: agentEmail,
+        ttl_seconds: 3600
+      }
+    });
+
+    // Mirror the shape the tenant /auth/login endpoint returns so the
+    // frontend can drop this user into authStore unchanged.
+    const userPayload = {
+      userId: agentId,
+      id: agentId,
+      orgId,
+      email: agentEmail,
+      first_name: 'Calcite',
+      last_name: 'Support',
+      fullName: agentEmail || 'Calcite Support',
+      roles: ['admin'],
+      role: 'admin',
+      permissions: ['*:*'],
+      is_org_owner: false,
+      is_auditor: false,
+      support_session: true,
+      support_agent_id: agentId,
+      support_agent_email: agentEmail,
+      support_session_id: sessionId,
+      support_reason: reason || null
+    };
+
+    res.json({
+      success: true,
+      data: {
+        token,
+        orgId,
+        user: userPayload,
+        expires_in: 3600,
+        session_id: sessionId
+      }
+    });
+  })
+);
+
+/** POST /admin/support-session/end — write the session-ended audit row. */
+router.post(
+  '/support-session/end',
+  requireSupportStaff,
+  [
+    body('session_id').optional().isString().trim(),
+    body('orgId').optional().isString().trim(),
+    body('reason').optional().isString().trim().isLength({ max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    await writeBillingEvent(req, {
+      action: 'support.session_ended',
+      targetType: 'tenant',
+      targetId: String(req.body?.orgId || '').toLowerCase(),
+      targetLabel: req.body?.orgId || '',
+      tenantId: String(req.body?.orgId || '').toLowerCase(),
+      reason: req.body?.reason || '',
+      metadata: {
+        session_id: req.body?.session_id || null,
+        agent_id: req.user?.userId || null,
+        agent_email: req.user?.email || ''
+      }
+    });
+    res.json({ success: true });
+  })
+);
+
 /** POST /admin/tenants/:orgId/assign-plan — set/change the tenant's plan. */
 router.post(
   '/tenants/:orgId/assign-plan',
+  requireBillingStaff,
   [
     param('orgId').isString().trim().notEmpty(),
     body('plan_code').isString().trim().notEmpty(),
-    body('billing_cycle').optional().isIn(['monthly', 'yearly'])
+    body('billing_cycle').optional().isIn(['monthly', 'yearly']),
+    // Migration mode (handbook §3.1):
+    //  - 'at_renewal' (default, safe) — change locally now; Stripe swap
+    //    happens at the cycle anchor with no proration.
+    //  - 'immediately_prorated' — swap Stripe price now with prorated
+    //    refund/charge for the unused/used portion.
+    //  - 'no_migrate' — change the future-cycles config locally without
+    //    touching Stripe at all.
+    body('mode').optional().isIn(['at_renewal', 'immediately_prorated', 'no_migrate'])
   ],
   validate,
   asyncHandler(async (req, res) => {
@@ -218,6 +390,28 @@ router.post(
     // Bust the entitlement cache so the tenant picks up the new plan.
     invalidateEntitlements(orgId);
 
+    // Stripe swap based on migration mode. Existing tenants with a live
+    // Stripe subscription get their price item moved to the new plan's
+    // price; mode controls the proration behaviour.
+    const mode = req.body.mode || 'at_renewal';
+    let stripeSwap = null;
+    if (existing?.stripe_subscription_id && mode !== 'no_migrate' && isStripeConfigured()) {
+      const newPriceId = billingCycle === 'yearly'
+        ? plan.pricing?.stripeAnnualPriceId
+        : plan.pricing?.stripeMonthlyPriceId;
+      if (newPriceId) {
+        const proration = mode === 'immediately_prorated' ? 'create_prorations' : 'none';
+        const swap = await swapSubscriptionPrice({
+          subscriptionId: existing.stripe_subscription_id,
+          newPriceId,
+          proration
+        });
+        stripeSwap = { ok: swap.ok, error: swap.error || null, mode, proration };
+      } else {
+        stripeSwap = { ok: false, error: 'No Stripe price for the chosen cycle on the new plan.' };
+      }
+    }
+
     await writeBillingEvent(req, {
       action,
       targetType: 'subscription',
@@ -229,7 +423,9 @@ router.post(
       metadata: {
         plan_code: plan.plan_code,
         billing_cycle: billingCycle,
-        revision_number: latestRevision?.revision_number || null
+        revision_number: latestRevision?.revision_number || null,
+        migration_mode: mode,
+        stripe_swap: stripeSwap
       }
     });
 
@@ -264,6 +460,7 @@ router.post(
  */
 router.post(
   '/tenants/:orgId/comp',
+  requireSuperAdmin,
   [
     param('orgId').isString().trim().notEmpty(),
     body('is_comp').isBoolean(),
@@ -318,6 +515,7 @@ router.post(
 
 router.post(
   '/plans/:code/migrate-revision',
+  requireSuperAdmin,
   [param('code').isString().trim().notEmpty()],
   validate,
   asyncHandler(async (req, res) => {
@@ -441,6 +639,7 @@ router.post(
 /** PUT /admin/tenants/:orgId/override — create or replace per-tenant override. */
 router.put(
   '/tenants/:orgId/override',
+  requireSuperAdmin,
   [param('orgId').isString().trim().notEmpty()],
   validate,
   asyncHandler(async (req, res) => {
@@ -524,6 +723,7 @@ router.put(
  */
 router.post(
   '/tenants/:orgId/override/apply-to-stripe',
+  requireBillingStaff,
   [param('orgId').isString().trim().notEmpty()],
   validate,
   asyncHandler(async (req, res) => {
@@ -592,6 +792,7 @@ router.post(
 /** DELETE /admin/tenants/:orgId/override — clear the tenant's override. */
 router.delete(
   '/tenants/:orgId/override',
+  requireSuperAdmin,
   [param('orgId').isString().trim().notEmpty()],
   validate,
   asyncHandler(async (req, res) => {
@@ -625,6 +826,7 @@ router.get('/coupons', asyncHandler(async (req, res) => {
 
 router.post(
   '/coupons',
+  requireBillingStaff,
   [
     body('code').isString().trim().isLength({ min: 2, max: 64 }).matches(/^[A-Za-z0-9][A-Za-z0-9_-]*$/),
     body('percent_off').optional().isFloat({ min: 0, max: 100 }),
@@ -671,6 +873,7 @@ router.post(
 
 router.post(
   '/coupons/:code/archive',
+  requireBillingStaff,
   [param('code').isString().trim().notEmpty()],
   validate,
   asyncHandler(async (req, res) => {
@@ -753,6 +956,7 @@ router.get(
  */
 router.post(
   '/invoices/backfill',
+  requireBillingStaff,
   [
     body('tenantId').optional().isString().trim(),
     body('limit').optional().isInt({ min: 1, max: 500 })
@@ -857,6 +1061,687 @@ router.post(
 );
 
 // ════════════════════════════════════════════════════════════════════
+// INVOICE ACTIONS — credit / void / retry (handbook §3.2 + §5.2 + §5.10)
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * Look up a Payment row + its Stripe invoice id from either:
+ *   - Payment._id (Mongo)             — what InvoicesPage rows use
+ *   - Payment.stripe_invoice_id (str) — the in_… id directly
+ *
+ * Returns null if nothing matches.
+ */
+async function loadInvoiceRow(idOrStripeId) {
+  const { Payment } = getRouterModels();
+  const id = String(idOrStripeId || '');
+  if (!id) return null;
+  if (/^in_/.test(id) || /^pi_/.test(id)) {
+    return await Payment.findOne({ stripe_invoice_id: id }).lean();
+  }
+  if (/^[0-9a-fA-F]{24}$/.test(id)) {
+    return await Payment.findById(id).lean();
+  }
+  return null;
+}
+
+/**
+ * POST /admin/invoices/:id/credit
+ * Issue a Stripe credit note. `:id` is either the Payment._id or the
+ * Stripe `in_…` invoice id. Reason is required (audited).
+ *
+ * Body:
+ *   - amountAUD?  (optional — defaults to crediting the full invoice)
+ *   - reason       string, written to BillingEvent and stripe memo
+ *   - stripeReason 'duplicate' | 'fraudulent' | 'order_change' | 'product_unsatisfactory'
+ */
+router.post(
+  '/invoices/:id/credit',
+  requireBillingStaff,
+  [
+    param('id').isString().trim().notEmpty(),
+    body('amountAUD').optional().isFloat({ min: 0.01 }),
+    body('reason').isString().trim().isLength({ min: 1, max: 500 }),
+    body('stripeReason').optional().isIn(['duplicate', 'fraudulent', 'order_change', 'product_unsatisfactory'])
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({ success: false, error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not configured.' } });
+    }
+    const payment = await loadInvoiceRow(req.params.id);
+    if (!payment || !payment.stripe_invoice_id) {
+      return res.status(404).json({ success: false, error: { code: 'INVOICE_NOT_FOUND', message: 'No matching invoice.' } });
+    }
+
+    const { ok, creditNote, error } = await createCreditNote({
+      invoiceId: payment.stripe_invoice_id,
+      amountAUD: req.body.amountAUD,
+      memo: req.body.reason,
+      reason: req.body.stripeReason || 'order_change'
+    });
+    if (!ok) {
+      return res.status(502).json({ success: false, error: { code: 'STRIPE_ERROR', message: error || 'Stripe rejected the request.' } });
+    }
+
+    await writeBillingEvent(req, {
+      action: 'invoice.credit_issued',
+      targetType: 'invoice',
+      targetId: payment.stripe_invoice_id,
+      targetLabel: payment.metadata?.invoice_number || payment.stripe_invoice_id,
+      tenantId: payment.organization_id,
+      reason: req.body.reason,
+      metadata: {
+        amount_aud: req.body.amountAUD ?? null,
+        stripe_credit_note_id: creditNote?.id,
+        stripe_reason: req.body.stripeReason || 'order_change'
+      }
+    });
+
+    res.json({ success: true, data: { credit_note_id: creditNote?.id, amount_aud: (creditNote?.amount || 0) / 100 } });
+  })
+);
+
+/**
+ * POST /admin/invoices/:id/void
+ * Void a finalised-but-unpaid invoice. For paid invoices, /credit instead.
+ */
+router.post(
+  '/invoices/:id/void',
+  requireBillingStaff,
+  [
+    param('id').isString().trim().notEmpty(),
+    body('reason').isString().trim().isLength({ min: 1, max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({ success: false, error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not configured.' } });
+    }
+    const payment = await loadInvoiceRow(req.params.id);
+    if (!payment || !payment.stripe_invoice_id) {
+      return res.status(404).json({ success: false, error: { code: 'INVOICE_NOT_FOUND', message: 'No matching invoice.' } });
+    }
+    const { ok, invoice, error } = await voidInvoice(payment.stripe_invoice_id);
+    if (!ok) {
+      return res.status(502).json({ success: false, error: { code: 'STRIPE_ERROR', message: error } });
+    }
+    await writeBillingEvent(req, {
+      action: 'invoice.voided',
+      targetType: 'invoice',
+      targetId: payment.stripe_invoice_id,
+      targetLabel: payment.metadata?.invoice_number || payment.stripe_invoice_id,
+      tenantId: payment.organization_id,
+      reason: req.body.reason,
+      metadata: { stripe_status: invoice?.status }
+    });
+    res.json({ success: true, data: { invoice_id: invoice?.id, status: invoice?.status } });
+  })
+);
+
+/**
+ * POST /admin/invoices/:id/retry
+ * Retry a past_due invoice's payment using the customer's default method.
+ */
+router.post(
+  '/invoices/:id/retry',
+  requireBillingStaff,
+  [param('id').isString().trim().notEmpty()],
+  validate,
+  asyncHandler(async (req, res) => {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({ success: false, error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not configured.' } });
+    }
+    const payment = await loadInvoiceRow(req.params.id);
+    if (!payment || !payment.stripe_invoice_id) {
+      return res.status(404).json({ success: false, error: { code: 'INVOICE_NOT_FOUND', message: 'No matching invoice.' } });
+    }
+    const { ok, invoice, error } = await retryInvoicePayment(payment.stripe_invoice_id);
+    if (!ok) {
+      return res.status(502).json({ success: false, error: { code: 'STRIPE_ERROR', message: error } });
+    }
+    await writeBillingEvent(req, {
+      action: 'invoice.payment_retried',
+      targetType: 'invoice',
+      targetId: payment.stripe_invoice_id,
+      targetLabel: payment.metadata?.invoice_number || payment.stripe_invoice_id,
+      tenantId: payment.organization_id,
+      metadata: { stripe_status: invoice?.status, paid: invoice?.paid === true }
+    });
+    res.json({ success: true, data: { invoice_id: invoice?.id, status: invoice?.status, paid: invoice?.paid === true } });
+  })
+);
+
+/**
+ * POST /admin/invoices/bulk-retry-past-due
+ * Iterate every Payment with status='failed' (Stripe past_due) and call
+ * retryInvoicePayment on each. Returns per-row results so the operator
+ * sees what worked and what didn't.
+ */
+router.post(
+  '/invoices/bulk-retry-past-due',
+  requireBillingStaff,
+  asyncHandler(async (req, res) => {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({ success: false, error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not configured.' } });
+    }
+    const { Payment } = getRouterModels();
+    const failing = await Payment.find({ status: 'failed', stripe_invoice_id: { $ne: null } })
+      .sort({ payment_date: 1 })
+      .limit(200)
+      .lean();
+    const results = [];
+    for (const p of failing) {
+      const { ok, invoice, error } = await retryInvoicePayment(p.stripe_invoice_id);
+      results.push({
+        invoice_id: p.stripe_invoice_id,
+        organization_id: p.organization_id,
+        ok,
+        paid: invoice?.paid === true,
+        error: error || null
+      });
+    }
+    await writeBillingEvent(req, {
+      action: 'invoice.bulk_retry_run',
+      targetType: 'invoice',
+      targetId: 'bulk',
+      reason: `Bulk retry across ${failing.length} past_due invoices`,
+      metadata: {
+        attempted: results.length,
+        succeeded: results.filter((r) => r.ok && r.paid).length,
+        failed: results.filter((r) => !r.ok || !r.paid).length
+      }
+    });
+    res.json({ success: true, data: { attempted: results.length, results } });
+  })
+);
+
+// ════════════════════════════════════════════════════════════════════
+// COUPON ATTACH / REMOVE on a subscription (handbook §3.2 + §5.3)
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /admin/tenants/:orgId/coupon
+ * Attach a Stripe coupon to a tenant's active subscription.
+ *
+ * Body: { coupon_code, reason }
+ */
+router.post(
+  '/tenants/:orgId/coupon',
+  requireBillingStaff,
+  [
+    param('orgId').isString().trim().notEmpty(),
+    body('coupon_code').isString().trim().notEmpty(),
+    body('reason').isString().trim().isLength({ min: 1, max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({ success: false, error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not configured.' } });
+    }
+    const { OrganizationSubscription, Coupon } = getRouterModels();
+    const orgId = String(req.params.orgId).toLowerCase();
+
+    const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+    if (!sub || !sub.stripe_subscription_id) {
+      return res.status(404).json({ success: false, error: { code: 'SUBSCRIPTION_NOT_FOUND', message: 'No Stripe subscription linked to this tenant.' } });
+    }
+
+    const couponCode = String(req.body.coupon_code).trim();
+    const coupon = await Coupon.findOne({ code: couponCode });
+    if (!coupon || coupon.archived) {
+      return res.status(404).json({ success: false, error: { code: 'COUPON_NOT_FOUND', message: 'Coupon does not exist or is archived.' } });
+    }
+
+    const stripeCouponId = coupon.stripe_coupon_id || couponCode;
+    const { ok, error } = await applyCouponToSubscription({
+      subscriptionId: sub.stripe_subscription_id,
+      couponCode: stripeCouponId
+    });
+    if (!ok) {
+      return res.status(502).json({ success: false, error: { code: 'STRIPE_ERROR', message: error } });
+    }
+
+    await writeBillingEvent(req, {
+      action: 'coupon.applied',
+      targetType: 'subscription',
+      targetId: orgId,
+      targetLabel: orgId,
+      tenantId: orgId,
+      reason: req.body.reason,
+      metadata: { coupon_code: couponCode, stripe_subscription_id: sub.stripe_subscription_id }
+    });
+
+    invalidateEntitlements(orgId);
+    res.json({ success: true, data: { coupon_code: couponCode, applied: true } });
+  })
+);
+
+/**
+ * DELETE /admin/tenants/:orgId/coupon
+ * Remove the currently-attached coupon from a tenant's subscription.
+ */
+router.delete(
+  '/tenants/:orgId/coupon',
+  requireBillingStaff,
+  [
+    param('orgId').isString().trim().notEmpty(),
+    body('reason').optional().isString().trim().isLength({ max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({ success: false, error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not configured.' } });
+    }
+    const { OrganizationSubscription } = getRouterModels();
+    const orgId = String(req.params.orgId).toLowerCase();
+    const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+    if (!sub || !sub.stripe_subscription_id) {
+      return res.status(404).json({ success: false, error: { code: 'SUBSCRIPTION_NOT_FOUND', message: 'No Stripe subscription linked to this tenant.' } });
+    }
+    const { ok, error } = await removeCouponFromSubscription({ subscriptionId: sub.stripe_subscription_id });
+    if (!ok) {
+      return res.status(502).json({ success: false, error: { code: 'STRIPE_ERROR', message: error } });
+    }
+    await writeBillingEvent(req, {
+      action: 'coupon.removed',
+      targetType: 'subscription',
+      targetId: orgId,
+      targetLabel: orgId,
+      tenantId: orgId,
+      reason: req.body?.reason || '',
+      metadata: { stripe_subscription_id: sub.stripe_subscription_id }
+    });
+    invalidateEntitlements(orgId);
+    res.json({ success: true, data: { removed: true } });
+  })
+);
+
+// ════════════════════════════════════════════════════════════════════
+// PROMO PROGRAM FLOWS (handbook §3.1, arch §11)
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * Helper: ensure a Coupon doc exists in our local catalogue with the
+ * given shape, creating it if absent. Returns the doc.
+ */
+async function ensureLocalCoupon(code, shape) {
+  const { Coupon } = getRouterModels();
+  let c = await Coupon.findOne({ code });
+  if (!c) c = await Coupon.create({ code, ...shape });
+  return c;
+}
+
+/**
+ * POST /admin/tenants/:orgId/promo/community-impact
+ * Body: { abn?, reason }
+ * Verifies ABN (best-effort), creates COMMUNITY60 coupon if absent,
+ * attaches it to the tenant's subscription, applies a Foundation-tier
+ * override that auto-expires after 12 cycles.
+ */
+router.post(
+  '/tenants/:orgId/promo/community-impact',
+  requireSuperAdmin,
+  [
+    param('orgId').isString().trim().notEmpty(),
+    body('abn').optional().isString().trim(),
+    body('reason').isString().trim().isLength({ min: 1, max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { OrganizationSubscription, SubscriptionOverride, SubscriptionPlan } = getRouterModels();
+    const orgId = String(req.params.orgId).toLowerCase();
+
+    // 1. Ensure COMMUNITY60 coupon exists.
+    const coupon = await ensureLocalCoupon('COMMUNITY60', {
+      name: 'Community Impact — 60% off for 12 months',
+      percent_off: 60,
+      duration: 'repeating',
+      duration_in_months: 12,
+      applies_to_plan_codes: [],
+      status: 'active'
+    });
+
+    // 2. Build a Foundation-tier override with the same feature set.
+    const foundation = await SubscriptionPlan.findOne({ plan_code: 'foundation' }).lean();
+    const foundationFlags = foundation?.feature_flags
+      ? (foundation.feature_flags instanceof Map
+          ? Object.fromEntries(foundation.feature_flags)
+          : foundation.feature_flags)
+      : {};
+    const expiresAt = new Date();
+    expiresAt.setMonth(expiresAt.getMonth() + 12);
+    await SubscriptionOverride.findOneAndUpdate(
+      { tenant_id: orgId },
+      {
+        $set: {
+          feature_flags: foundationFlags,
+          feature_flag_mode: 'replace',
+          effective_until: expiresAt,
+          status: 'active',
+          reason: req.body.reason
+        }
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    // 3. Attach the coupon to the tenant's Stripe subscription if any.
+    const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+    let stripeApplied = false;
+    if (sub?.stripe_subscription_id && isStripeConfigured()) {
+      const sync = await (await import('../../services/stripeService.js')).ensureStripeCouponForLocal(coupon, { currency: 'aud' });
+      if (sync.ok) {
+        const apply = await applyCouponToSubscription({
+          subscriptionId: sub.stripe_subscription_id,
+          couponCode: sync.stripe_coupon_id
+        });
+        stripeApplied = apply.ok;
+      }
+    }
+
+    await writeBillingEvent(req, {
+      action: 'promo.community_impact_applied',
+      targetType: 'tenant',
+      targetId: orgId,
+      targetLabel: orgId,
+      tenantId: orgId,
+      reason: req.body.reason,
+      metadata: { abn: req.body.abn || null, expires_at: expiresAt, stripe_applied: stripeApplied, coupon_code: 'COMMUNITY60' }
+    });
+    invalidateEntitlements(orgId);
+    res.json({
+      success: true,
+      data: { coupon_code: 'COMMUNITY60', expires_at: expiresAt, stripe_applied: stripeApplied }
+    });
+  })
+);
+
+/**
+ * POST /admin/tenants/:orgId/promo/founding-customer
+ * 15% off forever + 24-month price-lock flag in tenant metadata.
+ */
+router.post(
+  '/tenants/:orgId/promo/founding-customer',
+  requireSuperAdmin,
+  [
+    param('orgId').isString().trim().notEmpty(),
+    body('reason').isString().trim().isLength({ min: 1, max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { OrganizationSubscription, Tenant } = getRouterModels();
+    const orgId = String(req.params.orgId).toLowerCase();
+
+    const coupon = await ensureLocalCoupon('FOUNDING15', {
+      name: 'Founding Customer — 15% off',
+      percent_off: 15,
+      duration: 'forever',
+      applies_to_plan_codes: [],
+      status: 'active'
+    });
+
+    const lockUntil = new Date();
+    lockUntil.setMonth(lockUntil.getMonth() + 24);
+    await Tenant.updateOne(
+      { orgId },
+      { $set: { 'metadata.founding_customer': true, 'metadata.price_locked_until': lockUntil } }
+    );
+
+    const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+    let stripeApplied = false;
+    if (sub?.stripe_subscription_id && isStripeConfigured()) {
+      const sync = await (await import('../../services/stripeService.js')).ensureStripeCouponForLocal(coupon, { currency: 'aud' });
+      if (sync.ok) {
+        const apply = await applyCouponToSubscription({
+          subscriptionId: sub.stripe_subscription_id,
+          couponCode: sync.stripe_coupon_id
+        });
+        stripeApplied = apply.ok;
+      }
+    }
+
+    await writeBillingEvent(req, {
+      action: 'promo.founding_customer_applied',
+      targetType: 'tenant',
+      targetId: orgId,
+      targetLabel: orgId,
+      tenantId: orgId,
+      reason: req.body.reason,
+      metadata: { price_locked_until: lockUntil, stripe_applied: stripeApplied, coupon_code: 'FOUNDING15' }
+    });
+    invalidateEntitlements(orgId);
+    res.json({ success: true, data: { coupon_code: 'FOUNDING15', price_locked_until: lockUntil, stripe_applied: stripeApplied } });
+  })
+);
+
+/**
+ * POST /admin/tenants/:orgId/promo/volume-group
+ * Body: { child_org_ids: string[] (>=4 to qualify, parent + 5 total), reason }
+ * Tags the parent tenant + each child with a "volume group" link and
+ * attaches a 15% coupon to each subscription.
+ */
+router.post(
+  '/tenants/:orgId/promo/volume-group',
+  requireSuperAdmin,
+  [
+    param('orgId').isString().trim().notEmpty(),
+    body('child_org_ids').isArray({ min: 4 }).withMessage('At least 4 children (5 total with parent) required.'),
+    body('reason').isString().trim().isLength({ min: 1, max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { Tenant, OrganizationSubscription } = getRouterModels();
+    const parentOrgId = String(req.params.orgId).toLowerCase();
+    const children = (req.body.child_org_ids || []).map((s) => String(s).toLowerCase());
+
+    const coupon = await ensureLocalCoupon('VOLUME15', {
+      name: 'Volume / Group — 15% off',
+      percent_off: 15,
+      duration: 'forever',
+      applies_to_plan_codes: [],
+      status: 'active'
+    });
+
+    const allOrgs = [parentOrgId, ...children];
+    const results = [];
+
+    // Tag tenant docs with the volume-group link.
+    await Tenant.updateMany(
+      { orgId: { $in: allOrgs } },
+      { $set: { 'metadata.volume_group_parent': parentOrgId } }
+    );
+
+    // Attach the coupon to each tenant's Stripe subscription if any.
+    if (isStripeConfigured()) {
+      const stripeSync = await (await import('../../services/stripeService.js')).ensureStripeCouponForLocal(coupon, { currency: 'aud' });
+      if (stripeSync.ok) {
+        for (const orgId of allOrgs) {
+          const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+          if (sub?.stripe_subscription_id) {
+            const apply = await applyCouponToSubscription({
+              subscriptionId: sub.stripe_subscription_id,
+              couponCode: stripeSync.stripe_coupon_id
+            });
+            results.push({ orgId, ok: apply.ok, error: apply.error || null });
+          } else {
+            results.push({ orgId, ok: false, error: 'No Stripe subscription' });
+          }
+        }
+      }
+    }
+
+    await writeBillingEvent(req, {
+      action: 'promo.volume_group_applied',
+      targetType: 'tenant',
+      targetId: parentOrgId,
+      targetLabel: parentOrgId,
+      tenantId: parentOrgId,
+      reason: req.body.reason,
+      metadata: {
+        children,
+        member_count: allOrgs.length,
+        coupon_code: 'VOLUME15',
+        results
+      }
+    });
+    allOrgs.forEach(invalidateEntitlements);
+    res.json({ success: true, data: { parent: parentOrgId, members: allOrgs, results } });
+  })
+);
+
+// ════════════════════════════════════════════════════════════════════
+// TRIAL EXTENSION (handbook §11 — set tenant's trial_ends_at)
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /admin/tenants/:orgId/trial-extend
+ * Body: { trial_ends_at (ISO date), reason }
+ * Stores the new trial end on the tenant's override and (if a Stripe
+ * subscription exists) pushes it to Stripe via subscription.trial_end.
+ */
+router.post(
+  '/tenants/:orgId/trial-extend',
+  requireSuperAdmin,
+  [
+    param('orgId').isString().trim().notEmpty(),
+    body('trial_ends_at').isISO8601(),
+    body('reason').isString().trim().isLength({ min: 1, max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { SubscriptionOverride, OrganizationSubscription } = getRouterModels();
+    const orgId = String(req.params.orgId).toLowerCase();
+    const trialEndsAt = new Date(req.body.trial_ends_at);
+    if (Number.isNaN(trialEndsAt.getTime()) || trialEndsAt.getTime() < Date.now()) {
+      return res.status(400).json({
+        success: false,
+        error: { code: 'INVALID_TRIAL_DATE', message: 'trial_ends_at must be a future date.' }
+      });
+    }
+
+    const ov = await SubscriptionOverride.findOneAndUpdate(
+      { tenant_id: orgId },
+      { $set: { trial_ends_at: trialEndsAt, status: 'active', reason: req.body.reason } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    // Push to Stripe if there's a live subscription.
+    const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+    let stripeUpdated = false;
+    if (sub?.stripe_subscription_id && isStripeConfigured()) {
+      try {
+        const Stripe = await import('stripe');
+        const client = new Stripe.default(process.env.STRIPE_SECRET_KEY, { apiVersion: '2024-10-28.acacia' });
+        await client.subscriptions.update(sub.stripe_subscription_id, {
+          trial_end: Math.floor(trialEndsAt.getTime() / 1000),
+          proration_behavior: 'none'
+        });
+        stripeUpdated = true;
+      } catch (err) {
+        // Surface non-fatal — the override is saved either way.
+        console.error('[trial-extend] Stripe update failed:', err?.message || err);
+      }
+    }
+
+    await writeBillingEvent(req, {
+      action: 'subscription.trial_extended',
+      targetType: 'subscription',
+      targetId: orgId,
+      targetLabel: orgId,
+      tenantId: orgId,
+      reason: req.body.reason,
+      metadata: { trial_ends_at: trialEndsAt, stripe_updated: stripeUpdated }
+    });
+    invalidateEntitlements(orgId);
+    res.json({ success: true, data: { trial_ends_at: trialEndsAt, stripe_updated: stripeUpdated, override_id: ov._id } });
+  })
+);
+
+// ════════════════════════════════════════════════════════════════════
+// SUBSCRIPTION PAUSE / RESUME (handbook §3.1, §3.2, §5.9)
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /admin/tenants/:orgId/pause
+ * Body: { days (1..90), reason }
+ * Pauses Stripe billing for N days. Customer keeps access; Stripe
+ * stops invoicing. Auto-resumes after the window.
+ */
+router.post(
+  '/tenants/:orgId/pause',
+  requireBillingStaff,
+  [
+    param('orgId').isString().trim().notEmpty(),
+    body('days').isInt({ min: 1, max: 90 }),
+    body('reason').isString().trim().isLength({ min: 1, max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({ success: false, error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not configured.' } });
+    }
+    const { OrganizationSubscription } = getRouterModels();
+    const orgId = String(req.params.orgId).toLowerCase();
+    const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+    if (!sub?.stripe_subscription_id) {
+      return res.status(404).json({ success: false, error: { code: 'SUBSCRIPTION_NOT_FOUND', message: 'No Stripe subscription linked to this tenant.' } });
+    }
+    const days = Number(req.body.days);
+    const result = await pauseSubscription({ subscriptionId: sub.stripe_subscription_id, days });
+    if (!result.ok) {
+      return res.status(502).json({ success: false, error: { code: 'STRIPE_ERROR', message: result.error } });
+    }
+    await writeBillingEvent(req, {
+      action: 'subscription.paused',
+      targetType: 'subscription',
+      targetId: orgId,
+      targetLabel: orgId,
+      tenantId: orgId,
+      reason: req.body.reason,
+      metadata: { days, resumes_at: result.resumes_at, stripe_subscription_id: sub.stripe_subscription_id }
+    });
+    invalidateEntitlements(orgId);
+    res.json({ success: true, data: { paused: true, resumes_at: result.resumes_at, days } });
+  })
+);
+
+/** POST /admin/tenants/:orgId/resume — resume a paused subscription immediately. */
+router.post(
+  '/tenants/:orgId/resume',
+  requireBillingStaff,
+  [
+    param('orgId').isString().trim().notEmpty(),
+    body('reason').optional().isString().trim().isLength({ max: 500 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({ success: false, error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not configured.' } });
+    }
+    const { OrganizationSubscription } = getRouterModels();
+    const orgId = String(req.params.orgId).toLowerCase();
+    const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+    if (!sub?.stripe_subscription_id) {
+      return res.status(404).json({ success: false, error: { code: 'SUBSCRIPTION_NOT_FOUND', message: 'No Stripe subscription linked to this tenant.' } });
+    }
+    const result = await resumeSubscription({ subscriptionId: sub.stripe_subscription_id });
+    if (!result.ok) {
+      return res.status(502).json({ success: false, error: { code: 'STRIPE_ERROR', message: result.error } });
+    }
+    await writeBillingEvent(req, {
+      action: 'subscription.resumed',
+      targetType: 'subscription',
+      targetId: orgId,
+      targetLabel: orgId,
+      tenantId: orgId,
+      reason: req.body?.reason || '',
+      metadata: { stripe_subscription_id: sub.stripe_subscription_id }
+    });
+    invalidateEntitlements(orgId);
+    res.json({ success: true, data: { resumed: true } });
+  })
+);
+
+// ════════════════════════════════════════════════════════════════════
 // AUDIT (BillingEvent stream)
 // ════════════════════════════════════════════════════════════════════
 
@@ -909,6 +1794,7 @@ router.get('/settings', asyncHandler(async (req, res) => {
 
 router.patch(
   '/settings',
+  requireSuperAdmin,
   [
     body('stripeMode').optional().isIn(['test', 'live']),
     body('defaultSoftCapPct').optional().isInt({ min: 50, max: 95 }),

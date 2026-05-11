@@ -31,6 +31,20 @@ const superAdminSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  /**
+   * Calcite-side role:
+   *   super_admin     — full access (plans, billing, tenants, invoices, audit, staff)
+   *   billing_operator — invoices, payments, refunds, coupons; READ-ONLY on plans
+   *   support_agent   — tickets, kanban boards, tenant read-only; cannot touch money
+   *
+   * Existing accounts default to 'super_admin' so the migration is safe.
+   */
+  role: {
+    type: String,
+    enum: ['super_admin', 'billing_operator', 'support_agent'],
+    default: 'super_admin',
+    index: true
+  },
   status: {
     type: String,
     enum: ['active', 'disabled'],

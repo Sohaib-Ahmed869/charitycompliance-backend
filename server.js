@@ -39,6 +39,8 @@ const [{ default: app, initializeApp }, { closeRouterDB }, { closeAllConnections
 ]);
 
 const { startTrialReminderScheduler } = await import('./src/services/trialReminderService.js');
+const { startOverrideExpiryScheduler } = await import('./src/services/overrideExpiryService.js');
+const { startUsageAggregator } = await import('./src/services/usageAggregator.js');
 
 const PORT = process.env.PORT || 5000;
 const isDevelopment = String(process.env.NODE_ENV || '').toLowerCase() === 'development';
@@ -72,6 +74,8 @@ const startServer = async () => {
         // Trial-ending reminders — sweep hourly, email tenants 3 days before
         // their trial ends. Idempotent via trial_reminder_sent_for.
         startTrialReminderScheduler();
+        startOverrideExpiryScheduler();
+        startUsageAggregator();
         // Chat retention: daily sweep that purges expired attachments per channel.retention_days
         startChatRetentionScheduler();
         // Chat mention digest: emails users any unread @mention older than the threshold (default 30 min).

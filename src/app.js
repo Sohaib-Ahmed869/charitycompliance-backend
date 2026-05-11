@@ -175,6 +175,9 @@ import chatRoutes from './routes/platform/chatRoutes.js';
 import adminPlanRoutes from './routes/admin/planRoutes.js';
 import adminAuthRoutes from './routes/admin/authRoutes.js';
 import adminOpsRoutes from './routes/admin/opsRoutes.js';
+import adminStaffRoutes from './routes/admin/staffRoutes.js';
+import adminTicketsRoutes from './routes/admin/ticketsRoutes.js';
+import adminApprovalsRoutes from './routes/admin/approvalsRoutes.js';
 import billingRoutes from './routes/platform/billingRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
@@ -230,6 +233,9 @@ if (isModuleEnabled('chat')) app.use('/api/v1/platform/chat', chatRoutes);
 app.use('/api/v1/admin/auth', adminAuthRoutes);
 app.use('/api/v1/admin', adminPlanRoutes);
 app.use('/api/v1/admin', adminOpsRoutes);
+app.use('/api/v1/admin', adminStaffRoutes);
+app.use('/api/v1/admin', adminTicketsRoutes);
+app.use('/api/v1/admin', adminApprovalsRoutes);
 app.use('/api/v1/platform/billing', billingRoutes);
 
 // API info route

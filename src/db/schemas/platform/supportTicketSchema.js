@@ -107,6 +107,31 @@ const supportTicketSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Calcite-side triage — how SuperAdmin / Support Agent classified the
+  // ticket. Drives the bug + feature kanban boards in the SuperAdmin portal.
+  // Tenant-side controllers don't read these fields.
+  triage: {
+    type: String,
+    enum: ['unclassified', 'bug', 'feature', 'invalid', 'duplicate'],
+    default: 'unclassified',
+    index: true
+  },
+  kanban_status: {
+    type: String,
+    enum: ['todo', 'in_progress', 'done'],
+    default: 'todo',
+    index: true
+  },
+  triage_notes: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  triaged_by: {
+    type: mongoose.Schema.Types.ObjectId, // SuperAdmin id (Router DB)
+    default: null
+  },
+  triaged_at: { type: Date, default: null },
   // Timestamps
   created_at: {
     type: Date,

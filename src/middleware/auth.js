@@ -239,10 +239,16 @@ export const authenticate = async (req, res, next) => {
     const decodedRoles = decoded.roles || [];
     let effectivePermissions = decoded.permissions || [];
     const isAuditor = decoded.isAuditor === true;
+    const isSupportSession = decoded.support_session === true;
 
     // Auditors: fixed view-only permissions; never merge position-based runtime perms
     if (isAuditor) {
       effectivePermissions = buildAuditorPermissions();
+    } else if (isSupportSession) {
+      // Support sessions: trust the token's permissions (full *:* admin
+      // inside the tenant). Do NOT recompute from the tenant's BoardMember
+      // table — the agent has no User document there.
+      effectivePermissions = decoded.permissions || ['*:*'];
     } else if (!decodedRoles.includes('admin') && decoded.orgId && decoded.userId) {
       // For non-admin users, recompute permissions from DB on each request so that
       // changes to position/module permissions take effect without requiring re-login.
@@ -260,11 +266,29 @@ export const authenticate = async (req, res, next) => {
       email: decoded.email,
       roles: decodedRoles,
       permissions: effectivePermissions,
-      isAuditor
+      isAuditor,
+      // When set, downstream code knows this request is a Calcite support
+      // agent acting inside a tenant — useful for audit tagging and for
+      // hiding tenant-only nag UI from the support session.
+      supportSession: isSupportSession
+        ? {
+            agentId: decoded.support_agent_id || decoded.userId,
+            agentEmail: decoded.support_agent_email || decoded.email,
+            sessionId: decoded.support_session_id || null,
+            reason: decoded.support_reason || null
+          }
+        : null
     };
 
     // Attach token for potential refresh
     req.token = token;
+
+    // Position-transferred + account-inactive checks compare against the
+    // tenant's BoardMember/User collections. A support session has neither,
+    // so skip both — the JWT itself is the gate (1h TTL, audited at issue).
+    if (isSupportSession) {
+      return next();
+    }
 
     // Check if user's position has been fully transferred (non-admin only; auditors skip)
     if (!isAuditor && !decoded.roles?.includes('admin') && decoded.orgId) {

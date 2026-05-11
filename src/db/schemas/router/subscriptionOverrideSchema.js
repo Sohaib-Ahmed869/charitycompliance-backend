@@ -72,6 +72,23 @@ const subscriptionOverrideSchema = new mongoose.Schema({
   effective_until: { type: Date, default: null }, // null = no expiry
   reason: { type: String, default: '', trim: true },
 
+  // Set by the override-expiry sweeper when `effective_until` passes.
+  // The entitlement resolver already excludes expired overrides at read
+  // time; this field exists so the audit screen can distinguish
+  // "manually cleared" from "auto-expired".
+  status: {
+    type: String,
+    enum: ['active', 'expired'],
+    default: 'active',
+    index: true
+  },
+  expired_at: { type: Date, default: null },
+
+  // Trial-extension override (handbook §11). When set, the entitlement
+  // resolver surfaces this as the effective trial end date and the
+  // billing route mirrors it into Stripe via subscription.trial_end.
+  trial_ends_at: { type: Date, default: null },
+
   approved_by: { type: mongoose.Schema.Types.ObjectId, default: null },
   approved_at: { type: Date, default: null },
 

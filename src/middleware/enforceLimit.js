@@ -53,6 +53,7 @@ export function enforceLimit(metric) {
       //   - overagePerWorkflowAUD set + Stripe configured → REPORT usage,
       //     don't block. Stripe bills the overage at period end.
       //   - kill-switch engaged → don't block, don't report (incident mode).
+      //   - tenant's self-serve hard_cap_aud reached → 402 + helpful msg.
       //   - otherwise → 402 LIMIT_EXCEEDED.
       if (ratio >= hardPct) {
         if (ent.overage_kill_switch) {
@@ -60,7 +61,26 @@ export function enforceLimit(metric) {
           return next();
         }
 
-        const overageRate = ent.pricing?.overagePerWorkflowAUD;
+        // Tenant self-serve overage cap (handbook §3.4). If the next
+        // billed overage event would push the cycle's overage cost past
+        // the tenant-set ceiling, refuse with an explicit "you set this
+        // cap" message rather than letting Stripe bill them.
+        const overageRate = Number(ent.pricing?.overagePerWorkflowAUD) || 0;
+        if (ent.hard_cap_aud != null && overageRate > 0 && metric === 'workflowsPerMonth') {
+          const overageCount = Math.max(0, newCount - limit);
+          const projectedOverageAud = overageCount * overageRate;
+          if (projectedOverageAud > Number(ent.hard_cap_aud)) {
+            return res.status(402).json({
+              success: false,
+              error: {
+                code: 'HARD_CAP_REACHED',
+                message: `You've reached your self-set $${ent.hard_cap_aud} overage cap. Raise it on /billing to continue.`,
+                details: { cap_aud: ent.hard_cap_aud, projected_aud: projectedOverageAud }
+              }
+            });
+          }
+        }
+
         const overageEnabled = overageRate != null && Number(overageRate) > 0;
 
         if (overageEnabled && metric === 'workflowsPerMonth' && isStripeConfigured()) {

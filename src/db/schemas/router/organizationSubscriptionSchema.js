@@ -83,6 +83,21 @@ const organizationSubscriptionSchema = new mongoose.Schema({
   // Stores the ISO of `current_period_end` we last sent a trial-ending
   // reminder for. Lets the scheduler stay idempotent across runs.
   trial_reminder_sent_for: { type: String, default: '' },
+  /**
+   * Self-serve overage cap (handbook §3.4 / arch §11). Tenant says
+   * "never bill me more than $X in overages this month". `enforceLimit`
+   * checks this before allowing usage past the included quota; once hit,
+   * the request returns 402 LIMIT_EXCEEDED.
+   *
+   * null = no self-cap (only the global hardCapPct on the plan applies).
+   */
+  hard_cap_aud: { type: Number, default: null, min: 0 },
+  /**
+   * One-shot flag — set true after we issue the first-overage credit
+   * note for this tenant (handbook §5.2). Stops repeat credits on
+   * subsequent overage cycles.
+   */
+  first_overage_credited: { type: Boolean, default: false },
   created_at: {
     type: Date,
     default: Date.now

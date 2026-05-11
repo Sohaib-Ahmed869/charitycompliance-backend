@@ -24,11 +24,16 @@ import { getTenantConnection } from '../db/connectionManager.js';
  */
 export const resolveTenant = async (req, res, next) => {
   try {
-    // Extract orgId from various sources
+    // Extract orgId from various sources. `req.body` can be undefined
+    // when express.json() didn't parse anything (e.g. a GET with no body
+    // and no Content-Type: application/json), so guard with optional
+    // chaining — accessing .orgId on undefined throws a TypeError that
+    // surfaces upstream as "Cannot read properties of undefined (reading
+    // 'orgId')".
     let orgId = req.headers['x-org-id'] ||
                 req.user?.orgId ||
-                req.params.orgId ||
-                req.body.orgId;
+                req.params?.orgId ||
+                req.body?.orgId;
 
     // In development, allow skipping tenant validation
     if (!orgId && process.env.SKIP_TENANT_VALIDATION === 'true' && process.env.NODE_ENV === 'development') {

@@ -80,12 +80,16 @@ async function computeEntitlements(orgId) {
   const overrideDoc = await SubscriptionOverride.findOne({ tenant_id: orgId }).lean();
   const settings = await loadSettings();
 
-  // Apply override only if it's within its effective window. Outside the
-  // window, the tenant gets the plan defaults — but we still surface the
-  // override's existence (has_override) so the UI can hint "scheduled" /
-  // "expired" states.
+  // Apply override only if it's within its effective window AND not
+  // marked expired by the sweeper. Outside the window OR if expired,
+  // the tenant gets the plan defaults — but we still surface the
+  // override's existence (has_override) so the UI can hint "scheduled"
+  // / "expired" states.
   const now = new Date();
-  const overrideActive = overrideDoc && isOverrideActiveAt(overrideDoc, now);
+  const overrideActive =
+    overrideDoc &&
+    overrideDoc.status !== 'expired' &&
+    isOverrideActiveAt(overrideDoc, now);
   const override = overrideActive ? overrideDoc : null;
 
   // No subscription yet — return a "noSubscription" shape with empty grants.
@@ -161,6 +165,11 @@ async function computeEntitlements(orgId) {
     override_effective_until: overrideDoc?.effective_until || null,
     overage_kill_switch: !!settings.overagesGloballyDisabled,
     trial_days: snapshot.trial_days ?? 14,
+    // Trial-extension override (handbook §11). Falls through to the
+    // plan-default when no override is present.
+    trial_ends_at: override?.trial_ends_at || null,
+    // Self-serve hard overage cap — set by the tenant on /billing.
+    hard_cap_aud: sub.hard_cap_aud ?? null,
     billing_cycle: sub.billing_cycle,
     current_period_end: sub.current_period_end || null,
     cancel_at_period_end: !!sub.cancel_at_period_end,

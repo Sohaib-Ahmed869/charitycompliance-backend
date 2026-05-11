@@ -49,6 +49,10 @@ export async function requirePaidSubscription(req, res, next) {
     if (Array.isArray(req.user?.roles) && (req.user.roles.includes('calcite.super_admin') || req.user.roles.includes('super_admin'))) {
       return next();
     }
+    // Support sessions bypass — fixing payment issues is a key reason
+    // support would be in here in the first place; paywalling support out
+    // of a delinquent tenant defeats the purpose.
+    if (req.user?.supportSession) return next();
     // Auditors bypass — they're already read-only and don't pay.
     if (req.user?.is_auditor === true) return next();
 

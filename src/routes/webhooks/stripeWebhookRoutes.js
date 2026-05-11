@@ -26,7 +26,8 @@ import { writeBillingEvent } from '../../utils/writeBillingEvent.js';
 import {
   sendSubscriptionWelcome,
   sendPastDueAlert,
-  sendCancellationConfirmation
+  sendCancellationConfirmation,
+  sendPaymentReceipt
 } from '../../services/billingEmails.js';
 import { getOrgOwnerEmail } from '../../utils/getOrgOwnerEmail.js';
 
@@ -202,6 +203,83 @@ async function handleInvoicePaid(invoice, req) {
     local.status = 'active';
     await local.save();
     invalidateEntitlements(orgId);
+  }
+
+  // Payment receipt email — fires on every successful charge so the
+  // tenant has a record of what was paid. Best-effort; failures don't
+  // block the webhook (Stripe retries the webhook itself if we 500).
+  try {
+    const ownerEmail = await getOrgOwnerEmail(orgId).catch(() => null);
+    if (ownerEmail && invoice.amount_paid > 0) {
+      const { SubscriptionPlan } = getRouterModels();
+      const plan = local?.plan_id
+        ? await SubscriptionPlan.findById(local.plan_id).lean().catch(() => null)
+        : null;
+      sendPaymentReceipt({
+        to: ownerEmail,
+        orgName: orgId,
+        planName: plan?.plan_name || 'your subscription',
+        amountAUD: invoice.amount_paid / 100,
+        currency: (invoice.currency || 'aud').toUpperCase(),
+        invoiceNumber: invoice.number || null,
+        invoiceUrl: invoice.hosted_invoice_url || null,
+        invoicePdfUrl: invoice.invoice_pdf || null,
+        billingCycle: local?.billing_cycle || null,
+        periodEndAt: local?.current_period_end || (invoice.period_end ? new Date(invoice.period_end * 1000) : null),
+        paidAt: invoice.status_transitions?.paid_at
+          ? new Date(invoice.status_transitions.paid_at * 1000)
+          : new Date()
+      });
+    }
+  } catch (err) {
+    console.error('[stripe webhook] payment receipt email failed:', err?.message || err);
+  }
+
+  // First-overage auto-credit (handbook §5.2). If this invoice contains
+  // an overage line AND the tenant hasn't yet had their first-overage
+  // credit, issue a credit note for the overage portion and flag them.
+  if (local && !local.first_overage_credited) {
+    const overageLines = (invoice.lines?.data || []).filter((line) => {
+      // Stripe meter usage lines have a `price.recurring.usage_type === 'metered'`,
+      // OR carry `metadata.kind = 'overage'` if we tagged them ourselves.
+      const isMeterLine = line?.price?.recurring?.usage_type === 'metered';
+      const taggedOverage = line?.metadata?.kind === 'overage';
+      return (isMeterLine || taggedOverage) && (line.amount || 0) > 0;
+    });
+    const overageAmount = overageLines.reduce((sum, l) => sum + (l.amount || 0), 0);
+    if (overageAmount > 0) {
+      try {
+        const { createCreditNote } = await import('../../services/stripeService.js');
+        const credit = await createCreditNote({
+          invoiceId: invoice.id,
+          amountAUD: overageAmount / 100,
+          memo: 'First-overage goodwill credit',
+          reason: 'order_change'
+        });
+        if (credit.ok) {
+          local.first_overage_credited = true;
+          await local.save();
+          await writeBillingEvent(req, {
+            action: 'invoice.first_overage_credit',
+            targetType: 'invoice',
+            targetId: invoice.id,
+            targetLabel: invoice.number || invoice.id,
+            tenantId: orgId,
+            reason: 'Automatic — first overage on subscription',
+            metadata: {
+              amount_aud: overageAmount / 100,
+              credit_note_id: credit.creditNote?.id || null,
+              line_count: overageLines.length
+            }
+          });
+          console.log('[first-overage-credit] issued for', orgId, 'amount:', overageAmount / 100);
+        } else {
+          console.error('[first-overage-credit] Stripe rejected credit note:', credit.error);
+        }
+      } catch (err) {
+        console.error('[first-overage-credit] error:', err?.message || err);
+      }
+    }
   }
 }
 
