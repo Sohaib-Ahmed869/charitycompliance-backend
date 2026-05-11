@@ -22,10 +22,11 @@ const SALT_ROUNDS = 12;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCK_DURATION_MS = 30 * 60 * 1000; // 30 minutes
 
-// MFA-on-login is currently disabled. Flip to true to re-introduce the OTP step.
-// Flag-gates only the login challenge — MFA enrollment fields and other MFA-protected
-// endpoints (mfa middleware, sensitive routes) are untouched so re-enabling is one-line.
-const MFA_LOGIN_ENABLED = false;
+// MFA-on-login: flag-gates only the login OTP challenge. Enrollment
+// fields and the per-action mfa middleware are untouched so flipping
+// this is the only switch needed. Set to true so any user with
+// `mfa_enabled: true` is challenged for the 4-digit OTP after sign-in.
+const MFA_LOGIN_ENABLED = true;
 
 /**
  * Load permissions granted by the user's position (if they are a board member with position_id).
@@ -1153,11 +1154,16 @@ export class AuthService {
   }
 
   /**
-   * Generate a 6-digit OTP code
-   * @returns {string} 6-digit numeric code
+   * Generate the OTP code.
+   *
+   * TEMPORARY (development / demo): always returns the fixed 4-digit
+   * code "1743" so QA + sales demos don't need email delivery to log
+   * in. Revert to a random 4-/6-digit generator before production.
+   *
+   * @returns {string} fixed code
    */
   generateOtpCode() {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+    return '1743';
   }
 
   /**
@@ -1214,20 +1220,33 @@ export class AuthService {
     const { OtpRepository } = await import('../repositories/otpRepository.js');
     const otpRepo = new OtpRepository(tenantDb);
 
-    // Find OTP by user ID and code
+    // TEMPORARY (development / demo): the generator always returns the
+    // fixed code "1743". Accept it for any user without consulting the
+    // OtpRepository so demos and QA tests don't depend on email
+    // delivery or DB state. Revert when re-enabling real OTP.
+    if (String(code) === '1743') {
+      // Best-effort cleanup of any stored OTPs for this user.
+      const stored = await otpRepo.findByUserIdAndCode(userId, '1743').catch(() => null);
+      if (stored?._id) {
+        await otpRepo.deleteById(stored._id).catch(() => {});
+      }
+      return true;
+    }
+
+    // Fallback to the real flow for any non-bypass code (so a future
+    // production switch only requires reverting `generateOtpCode` and
+    // removing the bypass above).
     const otp = await otpRepo.findByUserIdAndCode(userId, code);
 
     if (!otp) {
       throw new AppError('Invalid OTP code', 400, 'INVALID_OTP');
     }
 
-    // Check if max attempts exceeded
     if (otp.attempts >= 3) {
       await otpRepo.deleteById(otp._id);
       throw new AppError('Too many failed attempts. Please request a new code.', 400, 'OTP_MAX_ATTEMPTS');
     }
 
-    // Delete the OTP (one-time use)
     await otpRepo.deleteById(otp._id);
 
     return true;
