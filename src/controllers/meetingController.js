@@ -109,9 +109,22 @@ export const updateMeeting = asyncHandler(async (req, res) => {
   // Handle status update with completion audit
   if (updateData.status) {
     let statusUpdateData = { status: updateData.status };
-    
-    // If completing meeting, add completion audit with signature
+
+    // If completing meeting, gate it on Minutes of Meeting being captured.
+    // The minutes (stored in `internal_notes` for legacy reasons) are the
+    // legal artifact a board needs to refer back to — signing off on an
+    // empty meeting is not allowed.
     if (updateData.status === 'completed') {
+      const minutesCount = Array.isArray(meeting?.internal_notes) ? meeting.internal_notes.length : 0;
+      if (minutesCount === 0) {
+        return res.status(422).json({
+          success: false,
+          error: {
+            code: 'MINUTES_REQUIRED',
+            message: 'Capture at least one Minutes of Meeting entry before you can sign off and mark this meeting complete.'
+          }
+        });
+      }
       statusUpdateData.completion_audit = {
         completed_by: userId,
         completed_at: new Date(),
@@ -119,7 +132,7 @@ export const updateMeeting = asyncHandler(async (req, res) => {
         completion_checklist_snapshot: updateData.completion_checklist_snapshot || []
       };
     }
-    
+
     const updated = await meetingService.updateMeetingStatus(meetingId, statusUpdateData);
     return res.json({
       success: true,

@@ -450,164 +450,104 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
     }
 
     const htmlContent = `
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
-  <meta charset="UTF-8">
+  <meta charset="utf-8" />
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&family=Inter:wght@400;500;600&display=swap');
-    
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    
-    body {
-      font-family: 'Inter', sans-serif;
-      background: linear-gradient(180deg, #E8E0F5 0%, #FFFFFF 50%, #E8E0F5 100%);
-      padding: 60px 40px;
-      color: #2D3748;
-      line-height: 1.6;
-      min-height: 100vh;
-    }
-    
-    .container { max-width: 900px; margin: 0 auto; }
-    
+    /* Match the AIS / ACNC report style: monochrome, 1px black borders,
+       Poppins, no gradients, no shadows. This produces a tight audit-
+       style document — same chrome as the Annual Information Statement
+       and Annual Financial Report exports so all reports look like
+       one family. */
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+
+    body { font-family: Poppins, sans-serif; margin: 0; padding: 0; color: #111827; }
+    .container { padding: 22px; }
+
     .header {
-      text-align: center;
-      margin-bottom: 40px;
-      padding-bottom: 30px;
-      border-bottom: 3px solid #3485FF;
+      border: 1px solid #111;
+      border-radius: 0;
+      padding: 14px 16px;
+      background: #fff;
+      color: #111;
+      margin-bottom: 16px;
     }
-    
-    .logo {
-      max-height: 100px;
-      max-width: 250px;
-      margin-bottom: 20px;
-      display: block;
-      margin-left: auto;
-      margin-right: auto;
-    }
-    
-    h1 {
-      font-family: 'Poppins', sans-serif;
-      color: #132E5E;
-      font-size: 32px;
-      font-weight: 700;
-      margin-bottom: 10px;
-    }
-    
-    .subtitle { color: #4A5568; font-size: 14px; }
-    
-    h2 {
-      font-family: 'Poppins', sans-serif;
-      color: #132E5E;
-      font-size: 14px;
-      font-weight: 600;
-      margin: 25px 0 12px 0;
-      padding-bottom: 8px;
-      border-bottom: 2px solid #3485FF;
-    }
-    
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-bottom: 25px;
-      font-size: 10px;
-      background: rgba(255, 255, 255, 0.9);
-      border-radius: 8px;
-      overflow: hidden;
-    }
-    
-    th {
-      background-color: #EDF2F7;
-      padding: 10px;
-      text-align: left;
-      font-weight: 600;
-      color: #2D3748;
-      border: 1px solid #CBD5E0;
-      font-size: 10px;
-    }
-    
-    td {
-      padding: 8px;
-      border: 1px solid #E2E8F0;
-      color: #4A5568;
-      background: white;
-      font-size: 10px;
-    }
-    
-    tr:nth-child(even) td { background-color: #F7FAFC; }
-    
-    .info-table td:first-child {
-      background-color: #F7FAFC;
-      font-weight: 600;
-      width: 25%;
-    }
-    
-    .info-table { background: rgba(255, 255, 255, 0.95); }
-    
+    .header-top { display: flex; align-items: center; gap: 12px; }
+    .logo { height: 42px; max-width: 160px; object-fit: contain; background: #fff; padding: 0; }
+    h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
+    .subtitle { margin-top: 6px; font-size: 11px; color: #374151; line-height: 1.5; }
+
+    h2 { margin: 18px 0 8px; font-size: 13px; color: #111; border-bottom: 1px solid #111; padding-bottom: 3px; }
+    h3 { margin: 14px 0 8px; font-size: 12px; color: #111; }
+    h4 { margin: 10px 0 6px; font-size: 11px; color: #111; }
+
+    table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; }
+    th { background: #fff; color: #111; font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; text-align: left; padding: 8px; border: 1px solid #111; }
+    td { font-size: 10px; padding: 7px; border: 1px solid #111; vertical-align: top; color: #111; }
+    .info-table td:first-child { font-weight: 600; width: 30%; }
+    .no-data { color: #374151; font-size: 10px; padding: 10px; border: 1px solid #111; }
+    .callout { border: 1px solid #111; background: #fff; padding: 10px; font-size: 10px; color: #111; line-height: 1.6; }
+
+    /* Status chip — solid black border, no background colour. Keeps the
+       monochrome look but still distinguishable from regular text. */
     .status-badge {
       display: inline-block;
-      padding: 3px 8px;
-      border-radius: 4px;
+      padding: 2px 8px;
+      border: 1px solid #111;
       font-weight: 600;
       font-size: 9px;
       text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: #111;
+      background: #fff;
     }
-    
-    .status-approved { background-color: #D1FAE5; color: #065F46; }
-    .status-rejected { background-color: #FEE2E2; color: #7F1D1D; }
-    .status-pending { background-color: #E0E7FF; color: #3730A3; }
-    
+
     .signature-img {
       max-width: 260px;
       height: auto;
-      border-bottom: 1px solid #CBD5E0;
+      border-bottom: 1px solid #111;
       margin-top: 6px;
     }
-    
-    .footer {
-      margin-top: 40px;
-      padding: 15px 0;
-      border-top: 2px solid #E2E8F0;
-      text-align: center;
-      color: #718096;
-      font-size: 9px;
-      line-height: 1.8;
-    }
-    
-    .footer p { margin: 5px 0; }
-    
-    /* Flowchart styles */
-    svg {
-      display: block;
-      margin: 15px auto;
-      background: white;
-      border-radius: 8px;
-      overflow: visible;
-    }
-    
+
+    /* Flowchart wrapper — single-line border to match the rest. */
+    svg { display: block; margin: 8px auto; overflow: visible; }
     .flowchart-container {
       overflow-x: auto;
-      margin: 15px 0;
+      margin: 8px 0 14px;
       padding: 10px;
-      background: #fafbfc;
-      border-radius: 8px;
-      border: 1px solid #e2e8f0;
+      background: #fff;
+      border: 1px solid #111;
+    }
+
+    .footer {
+      margin-top: 18px;
+      padding-top: 12px;
+      border-top: 1px solid #111;
+      font-size: 9px;
+      color: #111;
+      text-align: center;
+      line-height: 1.6;
     }
   </style>
 </head>
 <body>
-    <div class="container">
+  <div class="container">
     <div class="header">
-      ${logoSrc ? `<img src=${JSON.stringify(logoSrc)} alt="Logo" class="logo" />` : ''}
-      <h1>Approval Workflow Report</h1>
-      <p class="subtitle">${esc(title)} — ${esc(category)}</p>
+      <div class="header-top">
+        ${logoSrc ? `<img class="logo" src=${JSON.stringify(logoSrc)} alt="Logo" />` : ''}
+        <div>
+          <h1>Approval Workflow Report</h1>
+          <div class="subtitle">${esc(title)} — ${esc(category)}</div>
+        </div>
+      </div>
     </div>
 
     <h2>Approval Summary</h2>
     <table class="info-table">
       <tr><td>Request Type</td><td>${esc(title)}</td></tr>
       <tr><td>Category</td><td>${esc(category)}</td></tr>
-      <tr><td>Status</td><td>${esc(statusLabel)}</td></tr>
+      <tr><td>Status</td><td><span class="status-badge">${esc(statusLabel)}</span></td></tr>
       <tr><td>Requested By</td><td>${esc(submittedBy)}</td></tr>
       <tr><td>Created Date</td><td>${formatDate(approvalRequest.created_at)}</td></tr>
       <tr><td>Approval Type</td><td>${esc(approvalType)}</td></tr>
@@ -639,9 +579,7 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
     ${finalSignatureHTML}
 
     <div class="footer">
-      <p><strong>Generated on:</strong> ${formatDate(new Date())} at ${formatTime(new Date())}</p>
-      <p>This approval workflow report contains a comprehensive log of all steps, decisions, acknowledgements, and checklist progress related to this request.</p>
-      <p>Charity Compliance Management System | Confidential Document</p>
+      Generated on ${formatDate(new Date())} at ${formatTime(new Date())}. Confidential internal report export.
     </div>
   </div>
 </body>
