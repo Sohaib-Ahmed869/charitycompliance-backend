@@ -1,17 +1,22 @@
 /**
- * enforceSeatLimit — gate user/board-member creation behind the tenant's
- * seat cap. Reads current active count from the tenant DB and refuses the
- * new addition if it would exceed the cap.
+ * enforceSeatLimit — gate user / board-member creation behind the tenant's
+ * seat cap, with overage support.
  *
  *   router.post('/board-members', enforceSeatLimit('boardSeats'), createBoardMember);
  *
- * Returns 402 SEAT_LIMIT_REACHED when capped (so the FE interceptor routes
- * to /billing automatically). Calcite admins + unlimited (-1) plans pass.
- * On metering errors, degrades open (don't break tenant operations because
- * a counter query failed).
+ * Behaviour (mirrors enforceLimit so the FE handles them with one code path):
+ *   - cap=0 / cap=null → no seats included → 402 SEAT_LIMIT_REACHED.
+ *   - within cap → pass.
+ *   - over cap, no overage rate configured → 402 LIMIT_EXCEEDED.
+ *   - over cap, overage rate set, within tenant's hard_cap_aud →
+ *     report usage to Stripe, allow.
+ *   - over cap, overage available, projected cost > tenant cap →
+ *     402 HARD_CAP_REACHED.
+ *   - On metering / Stripe errors, degrades open so operational
+ *     issues never lock a tenant out of seat management.
  */
 
-import { resolveEntitlements } from '../services/entitlementService.js';
+import { checkAllocation } from './enforceLimit.js';
 
 const SEAT_TO_COLLECTION = {
   staffSeats: { collection: 'users',         filter: { status: 'active' }, label: 'staff seats' },
@@ -31,29 +36,15 @@ export function enforceSeatLimit(metric) {
       if (Array.isArray(req.user?.roles) && (req.user.roles.includes('calcite.super_admin') || req.user.roles.includes('super_admin'))) {
         return next();
       }
-      const ent = await resolveEntitlements(orgId);
-      const cap = ent?.limits?.[metric];
-      if (cap === -1 || cap === undefined || cap === null) return next();
-      if (cap <= 0) {
-        return res.status(402).json({
-          success: false,
-          error: {
-            code: 'SEAT_LIMIT_REACHED',
-            message: `Your plan does not include ${cfg.label}.`,
-            details: { limit: metric, cap, plan: ent.plan_code }
-          }
-        });
-      }
       const current = await req.tenantDb.collection(cfg.collection).countDocuments(cfg.filter).catch(() => 0);
-      if (current >= cap) {
-        return res.status(402).json({
-          success: false,
-          error: {
-            code: 'SEAT_LIMIT_REACHED',
-            message: `You've used all ${cap} ${cfg.label}. Upgrade your plan or remove an inactive member to add more.`,
-            details: { limit: metric, used: current, cap, plan: ent.plan_code }
-          }
-        });
+      const proposedNewCount = current + 1;
+
+      const decision = await checkAllocation({ orgId, metric, proposedNewCount });
+      if (!decision.allow) {
+        return res.status(decision.status || 402).json({ success: false, error: decision.error });
+      }
+      if (decision.overageBilled) {
+        res.setHeader('X-Usage-Overage', `${metric}:${proposedNewCount}:billed`);
       }
       return next();
     } catch (err) {

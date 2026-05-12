@@ -57,6 +57,12 @@ const superAdminSchema = new mongoose.Schema({
   failed_login_attempts: { type: Number, default: 0 },
   locked_until: { type: Date, default: null },
 
+  // TOTP MFA for the Calcite admin portal (handbook §7).
+  // mfa_secret is a base32 string from speakeasy; mfa_enabled flips
+  // true after the operator confirms a code from their authenticator.
+  mfa_enabled: { type: Boolean, default: false },
+  mfa_secret:  { type: String,  default: '' },
+
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },
   // Who created this admin — null for the bootstrap account, otherwise

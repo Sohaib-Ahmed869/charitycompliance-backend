@@ -236,8 +236,24 @@ function mergePricing(planPricing = {}, overridePricing) {
   const base = { ...(planPricing || {}) };
   if (!overridePricing) return base;
   for (const [k, v] of Object.entries(overridePricing)) {
-    if (v === null || v === undefined) continue;
-    base[k] = Number(v);
+    if (v === null || v === undefined || v === '') continue;
+    // The pricing block is mixed: numeric fields (monthlyAUD, …) AND
+    // string fields (currency, stripe*PriceId). The old code ran
+    // Number() on every value, which silently turned strings like
+    // "price_abc" or "AUD" into NaN. Preserve string types as-is and
+    // only coerce numeric-looking values.
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (trimmed) base[k] = trimmed;
+      continue;
+    }
+    if (typeof v === 'object') {
+      // Nested objects like `overageRatesAUD` — shallow-merge so a
+      // partial override doesn't wipe the plan's other entries.
+      base[k] = { ...(base[k] || {}), ...v };
+      continue;
+    }
+    if (!Number.isNaN(Number(v))) base[k] = Number(v);
   }
   return base;
 }

@@ -21,6 +21,7 @@ import { asyncHandler } from '../../middleware/errorHandler.js';
 import getRouterModels from '../../db/models/routerModels.js';
 import { getTenantConnection } from '../../db/connectionManager.js';
 import supportTicketSchema from '../../db/schemas/platform/supportTicketSchema.js';
+import organizationSchema from '../../db/schemas/platform/organizationSchema.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -34,10 +35,31 @@ function ticketModelFor(tenantDb) {
   return tenantDb.models.SupportTicket || tenantDb.model('SupportTicket', supportTicketSchema);
 }
 
-function serializeTicket(t, orgId) {
+function organizationModelFor(tenantDb) {
+  return tenantDb.models.Organization || tenantDb.model('Organization', organizationSchema);
+}
+
+/**
+ * Fetch the organisation's display name from the tenant's own DB.
+ * Returns null when the org doc is missing or the lookup fails — the
+ * frontend then falls back to the orgId so we never render a blank
+ * tenant column.
+ */
+async function getOrgDisplayName(tenantDb) {
+  try {
+    const Org = organizationModelFor(tenantDb);
+    const org = await Org.findOne({}).select('name trading_name').lean();
+    return org?.name || org?.trading_name || null;
+  } catch {
+    return null;
+  }
+}
+
+function serializeTicket(t, orgId, tenantName) {
   return {
     _id: t._id,
     tenant_id: orgId,
+    tenant_name: tenantName || null,
     ticket_number: t.ticket_number,
     summary: t.summary,
     description: t.description,
@@ -66,8 +88,11 @@ async function aggregateTickets({ filter = {} } = {}) {
     try {
       const tenantDb = await getTenantConnection(String(t.orgId).toLowerCase());
       const Ticket = ticketModelFor(tenantDb);
-      const docs = await Ticket.find(filter).sort({ created_at: -1 }).limit(500).lean();
-      for (const d of docs) all.push(serializeTicket(d, t.orgId));
+      const [docs, orgName] = await Promise.all([
+        Ticket.find(filter).sort({ created_at: -1 }).limit(500).lean(),
+        getOrgDisplayName(tenantDb)
+      ]);
+      for (const d of docs) all.push(serializeTicket(d, t.orgId, orgName));
     } catch (err) {
       // One tenant's DB hiccup shouldn't kill the whole list.
       console.error('[admin/tickets] tenant', t.orgId, 'failed:', err?.message || err);
@@ -111,8 +136,11 @@ router.get(
       try {
         const tenantDb = await getTenantConnection(String(req.query.tenant).toLowerCase());
         const Ticket = ticketModelFor(tenantDb);
-        const docs = await Ticket.find(filter).sort({ created_at: -1 }).limit(500).lean();
-        return res.json({ success: true, data: docs.map((d) => serializeTicket(d, req.query.tenant)) });
+        const [docs, orgName] = await Promise.all([
+          Ticket.find(filter).sort({ created_at: -1 }).limit(500).lean(),
+          getOrgDisplayName(tenantDb)
+        ]);
+        return res.json({ success: true, data: docs.map((d) => serializeTicket(d, req.query.tenant, orgName)) });
       } catch (err) {
         return res.status(404).json({
           success: false,

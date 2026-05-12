@@ -15,7 +15,7 @@ import express from 'express';
 import { body, param } from 'express-validator';
 import { authenticate } from '../../middleware/auth.js';
 import { requireSuperAdmin, requireCalciteStaff } from '../../middleware/requireSuperAdmin.js';
-import { detectDangerousPlanDiff, createPendingApproval } from '../../utils/twoPersonApproval.js';
+import { detectDangerousPlanDiff, createPendingApproval, countActiveSuperAdmins } from '../../utils/twoPersonApproval.js';
 import { syncPlanToStripe, isStripeConfigured } from '../../services/stripeService.js';
 import { validate } from '../../middleware/validation.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
@@ -101,7 +101,9 @@ router.patch(
   requireSuperAdmin,
   [
     param('code').isString().trim().notEmpty(),
-    body('reason').optional().isString()
+    // Required: plan edits + archives change every tenant's commercial
+    // terms once they migrate. Auditors need to know why.
+    body('reason').isString().trim().isLength({ min: 1, max: 500 }).withMessage('Reason is required.')
   ],
   validate,
   asyncHandler(async (req, res) => {
@@ -125,6 +127,28 @@ router.patch(
       const dangers = detectDangerousPlanDiff(prevSnap, proposedSnap);
       const skipApproval = patch.__approvedReplay === true; // set only by the approve handler
       if (dangers.length && !skipApproval) {
+        // Two-person rule needs two people. If only one active super-
+        // admin exists in the system, gating would deadlock — apply
+        // immediately but stamp the audit row so it's visible in review
+        // and the requester is nudged to add a second super-admin.
+        const superAdminCount = await countActiveSuperAdmins();
+        if (superAdminCount <= 1) {
+          const result = await applyPlanPatch({
+            req, code, patch, reason,
+            autoAppliedNoSecondApprover: true,
+            autoAppliedDangers: dangers
+          });
+          if (result.error) return res.status(result.statusCode).json({ success: false, error: result.error });
+          return res.json({
+            success: true,
+            data: {
+              ...result.data,
+              auto_applied_no_second_approver: true,
+              auto_applied_dangers: dangers,
+              message: 'Applied without second approver — only one active super-admin exists. Add a second super-admin to restore two-person approval for future dangerous changes.'
+            }
+          });
+        }
         const evt = await createPendingApproval(req, {
           action: 'plan.update_pending',
           targetType: 'plan',
@@ -179,7 +203,7 @@ function projectPlanUpdate(prevSnap, patch) {
  *
  * Returns either { data } on success or { error, statusCode } on failure.
  */
-export async function applyPlanPatch({ req, code, patch, reason = '' }) {
+export async function applyPlanPatch({ req, code, patch, reason = '', autoAppliedNoSecondApprover = false, autoAppliedDangers = [] }) {
   const { SubscriptionPlan, PlanRevision } = getRouterModels();
   const editorId = req?.user?.userId || null;
 
@@ -254,7 +278,13 @@ export async function applyPlanPatch({ req, code, patch, reason = '' }) {
     targetLabel: plan.plan_name,
     diff,
     reason,
-    metadata: { revision: nextRevisionNumber }
+    metadata: {
+      revision: nextRevisionNumber,
+      ...(autoAppliedNoSecondApprover ? {
+        auto_applied_no_second_approver: true,
+        auto_applied_dangers: autoAppliedDangers
+      } : {})
+    }
   });
 
   return { data: { ...newSnapshot, is_template: false, revisions: revisions.map(serializeRevision) } };
@@ -343,7 +373,9 @@ router.post(
   requireSuperAdmin,
   [
     param('code').isString().trim().notEmpty(),
-    body('reason').optional().isString()
+    // Required: plan edits + archives change every tenant's commercial
+    // terms once they migrate. Auditors need to know why.
+    body('reason').isString().trim().isLength({ min: 1, max: 500 }).withMessage('Reason is required.')
   ],
   validate,
   asyncHandler(async (req, res) => {
@@ -370,6 +402,23 @@ router.post(
     // (no new sign-ups) and warrants a second pair of eyes.
     const skipApproval = req.body?.__approvedReplay === true;
     if (!skipApproval) {
+      const superAdminCount = await countActiveSuperAdmins();
+      if (superAdminCount <= 1) {
+        const result = await applyPlanArchive({
+          req, code, reason,
+          autoAppliedNoSecondApprover: true
+        });
+        if (result.error) return res.status(result.statusCode || 500).json({ success: false, error: result.error });
+        return res.json({
+          success: true,
+          data: {
+            ...result.data,
+            auto_applied_no_second_approver: true,
+            auto_applied_dangers: ['plan_archive'],
+            message: 'Archived without second approver — only one active super-admin exists. Add a second super-admin to restore two-person approval for future dangerous changes.'
+          }
+        });
+      }
       const evt = await createPendingApproval(req, {
         action: 'plan.archive_pending',
         targetType: 'plan',
@@ -401,7 +450,7 @@ router.post(
  * Apply the actual archive — extracted so the approve handler can call
  * it after a second super-admin signs off.
  */
-export async function applyPlanArchive({ req, code, reason = 'Archived.' }) {
+export async function applyPlanArchive({ req, code, reason = 'Archived.', autoAppliedNoSecondApprover = false }) {
   const { SubscriptionPlan, PlanRevision } = getRouterModels();
   const plan = await SubscriptionPlan.findOne({ plan_code: code });
   if (!plan) {
@@ -429,7 +478,10 @@ export async function applyPlanArchive({ req, code, reason = 'Archived.' }) {
     targetType: 'plan',
     targetId: plan.plan_code,
     targetLabel: plan.plan_name,
-    reason
+    reason,
+    metadata: autoAppliedNoSecondApprover
+      ? { auto_applied_no_second_approver: true, auto_applied_dangers: ['plan_archive'] }
+      : {}
   });
   return { data: { ...next, is_template: false } };
 }
@@ -471,14 +523,20 @@ router.post(
       });
     }
 
-    // Stamp Stripe IDs back on the plan.
-    plan.metadata = { ...(plan.metadata || {}), stripeProductId: result.productId };
+    // Stamp Stripe IDs back on the plan. The product ID belongs under
+    // `pricing.stripeProductId` (that's the field the schema declares
+    // and every reader — override flow, plan detail UI, checkout —
+    // looks up). Earlier versions of this handler stored it under
+    // `metadata.stripeProductId`, which is why some plans synced
+    // successfully in Stripe but still tripped PLAN_NOT_SYNCED_TO_STRIPE
+    // when the override page tried to mint a Price. Backfill from the
+    // old location if a stale value lives there.
     plan.pricing = {
       ...(plan.pricing || {}),
+      stripeProductId: result.productId || plan.pricing?.stripeProductId || plan.metadata?.stripeProductId || '',
       stripeMonthlyPriceId: result.monthlyPriceId || plan.pricing?.stripeMonthlyPriceId || '',
       stripeAnnualPriceId: result.annualPriceId || plan.pricing?.stripeAnnualPriceId || ''
     };
-    plan.markModified('metadata');
     plan.markModified('pricing');
     await plan.save();
 

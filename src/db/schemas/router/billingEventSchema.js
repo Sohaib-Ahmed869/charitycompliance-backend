@@ -56,7 +56,12 @@ const ACTION_CODES = [
   // Promo program flows (§3.1)
   'promo.community_impact_applied',
   'promo.founding_customer_applied',
-  'promo.volume_group_applied'
+  'promo.volume_group_applied',
+  // In-period overage settlement (Claude/Cursor-style pay-now flow).
+  //   …_started   — tenant opened the Stripe Checkout for outstanding overage
+  //   …_paid_now  — Stripe confirmed the payment via webhook
+  'subscription.overage_paynow_started',
+  'subscription.overage_paid_now'
 ];
 
 const billingEventSchema = new mongoose.Schema({

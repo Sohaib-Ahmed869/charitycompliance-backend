@@ -81,13 +81,46 @@ export const resolveTenant = async (req, res, next) => {
  *   1. authenticate           — populate req.user
  *   2. resolveTenant          — populate req.tenantDb / req.orgId
  *   3. requirePaidSubscription — gate by entitlements.payment_required
- *   4. trackApiCall            — fire-and-forget metering bump
+ *   4. enforceLimit(apiCallsPerDay) — counts AND enforces the daily quota
  *
- * The paywall step short-circuits a curated allow-list (billing,
- * onboarding, dashboard reads) so a tenant can still reach the page
- * they need to pay on. Calcite admins + auditors bypass paywall.
- * Metering also skips Calcite/billing routes to avoid feedback loops.
+ * apiCallsPerDay metering rules (what counts as an "API call"):
+ *
+ *   COUNTS:    feature writes (POST / PUT / PATCH / DELETE) on
+ *              tenant-facing modules — creating an expense, submitting
+ *              a complaint, saving a policy, etc. These are the
+ *              actions a tenant pays for / is rate-limited on.
+ *
+ *   DOESN'T:   GET requests of any kind (UI just reading data — the
+ *              dashboard, sidebar, profile fetch, list pages, etc.)
+ *
+ *   DOESN'T:   *any* request to infrastructure paths regardless of
+ *              method — billing pages, onboarding, auth, notifications,
+ *              user profile, dashboard, org settings, permissions.
+ *              These get polled on every page load and don't represent
+ *              tenant "use" of features.
+ *
+ * The split makes the count match user intuition: 50 expense
+ * submissions / month, not 50,000 GETs from sidebar pollers.
+ *
+ * If limit=0 in the plan, enforceLimit treats apiCallsPerDay as
+ * unmetered (no blocking). The counter still runs so the usage tile
+ * shows real numbers.
  */
+const INFRA_PATH_FRAGMENTS = [
+  '/platform/billing',
+  '/platform/onboarding',
+  '/platform/auth',
+  '/platform/notifications',
+  '/platform/users',                  // team list, profile
+  '/platform/me',                     // current-user fetch fires on every page
+  '/platform/dashboard',
+  '/platform/organization',           // org name / settings — polled on layout
+  '/platform/roles',
+  '/platform/permissions',
+  '/platform/position-permissions',
+  '/platform/approval-thresholds'     // permission-adjacent
+];
+
 export const authAndResolveTenant = [
   // Import authenticate dynamically to avoid circular dependencies
   async (req, res, next) => {
@@ -100,8 +133,22 @@ export const authAndResolveTenant = [
     return requirePaidSubscription(req, res, next);
   },
   async (req, res, next) => {
-    const { trackApiCall } = await import('./trackApiCall.js');
-    return trackApiCall(req, res, next);
+    if (req.method === 'OPTIONS') return next();
+    if (!req.tenantDb || !req.orgId) return next();
+
+    const fullUrl = (req.baseUrl || '') + (req.path || '');
+    const isInfraPath = INFRA_PATH_FRAGMENTS.some((p) => fullUrl.includes(p));
+    const isRead = req.method === 'GET' || req.method === 'HEAD';
+
+    // Reads + infrastructure paths bypass the meter entirely. We don't
+    // even bump the counter — there's no point measuring layout polls.
+    if (isInfraPath || isRead) {
+      return next();
+    }
+
+    // Feature write — counts toward apiCallsPerDay.
+    const { enforceLimit } = await import('./enforceLimit.js');
+    return enforceLimit('apiCallsPerDay')(req, res, next);
   }
 ];
 

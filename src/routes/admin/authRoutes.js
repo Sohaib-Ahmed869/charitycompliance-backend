@@ -17,9 +17,10 @@
 import express from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import speakeasy from 'speakeasy';
 import { body } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
-import { authenticate, generateToken } from '../../middleware/auth.js';
+import { authenticate, generateToken, verifyToken } from '../../middleware/auth.js';
 import { requireSuperAdmin } from '../../middleware/requireSuperAdmin.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { logInfo, logError } from '../../utils/logger.js';
@@ -244,6 +245,28 @@ router.post(
     const dbRole = admin.role || 'super_admin';
     const calciteRole = `calcite.${dbRole}`;
 
+    // MFA gate (handbook §7) — staff with `mfa_enabled` get a short-lived
+    // pre-auth token in place of the full session. They must hit
+    // /admin/auth/mfa/verify with a valid TOTP code to receive the
+    // real session token.
+    if (admin.mfa_enabled) {
+      const preToken = generateToken({
+        userId: admin._id.toString(),
+        email: admin.email,
+        typ: 'calcite_pre_mfa',
+        permissions: []
+      });
+      logInfo('SuperAdmin login → MFA challenge', { email: admin.email });
+      return res.json({
+        success: true,
+        data: {
+          mfa_required: true,
+          pre_mfa_token: preToken,
+          email: admin.email
+        }
+      });
+    }
+
     const token = generateToken({
       userId: admin._id.toString(),
       email: admin.email,
@@ -257,6 +280,140 @@ router.post(
     logInfo('SuperAdmin login', { email: admin.email, role: dbRole });
 
     return res.json({
+      success: true,
+      data: {
+        token,
+        user: {
+          userId: admin._id.toString(),
+          email: admin.email,
+          fullName: admin.full_name,
+          role: dbRole,
+          roles: [calciteRole, dbRole]
+        }
+      }
+    });
+  })
+);
+
+// ════════════════════════════════════════════════════════════════════
+// CALCITE-STAFF MFA (handbook §7)
+// ════════════════════════════════════════════════════════════════════
+
+/** GET /admin/auth/mfa/setup — start TOTP enrollment for the signed-in staff. */
+router.get('/mfa/setup', authenticate, requireCalciteStaff, asyncHandler(async (req, res) => {
+  const { SuperAdmin } = getRouterModels();
+  const admin = await SuperAdmin.findById(req.user.userId);
+  if (!admin) {
+    return res.status(404).json({ success: false, error: { code: 'NOT_FOUND', message: 'Account not found.' } });
+  }
+  const secret = speakeasy.generateSecret({
+    name: `Stewardex Calcite (${admin.email})`,
+    length: 20
+  });
+  admin.mfa_secret = secret.base32;
+  admin.mfa_enabled = false; // not enabled until they confirm a code
+  await admin.save();
+  res.json({
+    success: true,
+    data: { secret: secret.base32, otpauth_url: secret.otpauth_url }
+  });
+}));
+
+/** POST /admin/auth/mfa/enable — confirm enrollment with a code. */
+router.post(
+  '/mfa/enable',
+  authenticate,
+  requireCalciteStaff,
+  [body('code').isString().trim().isLength({ min: 6, max: 6 })],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { SuperAdmin } = getRouterModels();
+    const admin = await SuperAdmin.findById(req.user.userId);
+    if (!admin?.mfa_secret) {
+      return res.status(400).json({ success: false, error: { code: 'MFA_NOT_SETUP', message: 'Run /mfa/setup first.' } });
+    }
+    const ok = speakeasy.totp.verify({
+      secret: admin.mfa_secret, encoding: 'base32', token: String(req.body.code), window: 1
+    });
+    if (!ok) {
+      return res.status(400).json({ success: false, error: { code: 'INVALID_CODE', message: 'Code did not match.' } });
+    }
+    admin.mfa_enabled = true;
+    await admin.save();
+    res.json({ success: true, data: { enabled: true } });
+  })
+);
+
+/** POST /admin/auth/mfa/disable — turn MFA off (re-prompts code for safety). */
+router.post(
+  '/mfa/disable',
+  authenticate,
+  requireCalciteStaff,
+  [body('code').isString().trim().isLength({ min: 6, max: 6 })],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { SuperAdmin } = getRouterModels();
+    const admin = await SuperAdmin.findById(req.user.userId);
+    if (!admin?.mfa_enabled || !admin?.mfa_secret) {
+      return res.status(400).json({ success: false, error: { code: 'MFA_NOT_ENABLED', message: 'MFA is not enabled.' } });
+    }
+    const ok = speakeasy.totp.verify({
+      secret: admin.mfa_secret, encoding: 'base32', token: String(req.body.code), window: 1
+    });
+    if (!ok) {
+      return res.status(400).json({ success: false, error: { code: 'INVALID_CODE', message: 'Code did not match.' } });
+    }
+    admin.mfa_enabled = false;
+    admin.mfa_secret = '';
+    await admin.save();
+    res.json({ success: true, data: { enabled: false } });
+  })
+);
+
+/**
+ * POST /admin/auth/mfa/verify
+ * Body: { pre_mfa_token, code }
+ * Trades the pre-auth token + a valid TOTP for the full session token.
+ */
+router.post(
+  '/mfa/verify',
+  [
+    body('pre_mfa_token').isString().notEmpty(),
+    body('code').isString().trim().isLength({ min: 6, max: 6 })
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    let decoded;
+    try {
+      decoded = verifyToken(req.body.pre_mfa_token);
+    } catch (_) {
+      return res.status(401).json({ success: false, error: { code: 'INVALID_PRE_TOKEN', message: 'Pre-auth token expired or invalid.' } });
+    }
+    if (decoded?.typ !== 'calcite_pre_mfa') {
+      return res.status(401).json({ success: false, error: { code: 'INVALID_PRE_TOKEN', message: 'Wrong token type.' } });
+    }
+
+    const { SuperAdmin } = getRouterModels();
+    const admin = await SuperAdmin.findById(decoded.userId);
+    if (!admin?.mfa_enabled || !admin?.mfa_secret) {
+      return res.status(409).json({ success: false, error: { code: 'MFA_NOT_ENABLED', message: 'MFA was disabled.' } });
+    }
+    const ok = speakeasy.totp.verify({
+      secret: admin.mfa_secret, encoding: 'base32', token: String(req.body.code), window: 1
+    });
+    if (!ok) {
+      return res.status(400).json({ success: false, error: { code: 'INVALID_CODE', message: 'Code did not match.' } });
+    }
+
+    const dbRole = admin.role || 'super_admin';
+    const calciteRole = `calcite.${dbRole}`;
+    const token = generateToken({
+      userId: admin._id.toString(),
+      email: admin.email,
+      roles: [calciteRole, dbRole],
+      permissions: []
+    });
+    res.json({
       success: true,
       data: {
         token,

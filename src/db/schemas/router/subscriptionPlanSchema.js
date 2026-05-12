@@ -60,16 +60,43 @@ const subscriptionPlanSchema = new mongoose.Schema({
     annualAUD: { type: Number, default: 0, min: 0 },
     setupFeeMonthlyAUD: { type: Number, default: 0, min: 0 },
     setupFeeAnnualAUD: { type: Number, default: 0, min: 0 },
-    overagePerWorkflowAUD: { type: Number, default: null }, // null = no overage line
+    overagePerWorkflowAUD: { type: Number, default: null }, // legacy — kept for back-compat with existing tenants
     currency: { type: String, default: 'AUD' },
     stripeProductId: { type: String, default: '' },
     stripeMonthlyPriceId: { type: String, default: '' },
     stripeAnnualPriceId: { type: String, default: '' },
-    stripeOverageMeterId: { type: String, default: '' },
+    stripeOverageMeterId: { type: String, default: '' }, // legacy — workflow meter
     // One-time setup fee Price IDs (created in Stripe as one-time prices).
     // Appended as a line_item on Checkout when set.
     stripeSetupMonthlyPriceId: { type: String, default: '' },
-    stripeSetupAnnualPriceId: { type: String, default: '' }
+    stripeSetupAnnualPriceId: { type: String, default: '' },
+    /**
+     * Per-metric overage rates. 0 / unset means "no overage available"
+     * for that metric — once the tenant hits the limit they're blocked
+     * with LIMIT_EXCEEDED. Any positive value means "charge this AUD
+     * per extra unit until the tenant's hard_cap_aud is reached, then
+     * block." Currently supported metrics:
+     *   workflowsPerMonth, apiCallsPerDay, staffSeats, boardSeats, storageGB
+     */
+    overageRatesAUD: {
+      workflowsPerMonth: { type: Number, default: 0, min: 0 },
+      apiCallsPerDay:    { type: Number, default: 0, min: 0 },
+      staffSeats:        { type: Number, default: 0, min: 0 },
+      boardSeats:        { type: Number, default: 0, min: 0 },
+      storageGB:         { type: Number, default: 0, min: 0 }
+    },
+    /**
+     * Stripe metered Price IDs, one per metric. Required for the
+     * middleware to report usage to Stripe at overage time — without
+     * this, exceeding the limit will block instead of charge.
+     */
+    stripeOverageMeters: {
+      workflowsPerMonth: { type: String, default: '' },
+      apiCallsPerDay:    { type: String, default: '' },
+      staffSeats:        { type: String, default: '' },
+      boardSeats:        { type: String, default: '' },
+      storageGB:         { type: String, default: '' }
+    }
   },
 
   // ── Limits block (handbook §5.1) ───────────────────────────────────────

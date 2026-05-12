@@ -14,7 +14,15 @@ dotenv.config();
 export const server = {
   env: process.env.NODE_ENV || 'development',
   port: parseInt(process.env.PORT) || 5000,
-  corsOrigin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:5173']
+  corsOrigin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:5173'],
+  // Where Stripe redirects the browser back to after a Checkout success
+  // / cancel — must be the frontend URL, never the backend's. Prefer an
+  // explicit FRONTEND_URL env var; fall back to the first CORS origin
+  // (which is always the FE in dev); finally default to localhost:5173.
+  frontendUrl:
+    process.env.FRONTEND_URL?.replace(/\/+$/, '') ||
+    process.env.CORS_ORIGIN?.split(',')[0]?.trim()?.replace(/\/+$/, '') ||
+    'http://localhost:5173'
 };
 
 // Database Configuration

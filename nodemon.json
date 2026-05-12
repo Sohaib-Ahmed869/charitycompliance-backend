@@ -1,0 +1,7 @@
+{
+  "watch": ["src", "server.js"],
+  "ext": "js,json",
+  "ignore": ["node_modules", "uploads", "logs", "*.test.js"],
+  "legacyWatch": true,
+  "delay": 400
+}

@@ -178,6 +178,7 @@ import adminOpsRoutes from './routes/admin/opsRoutes.js';
 import adminStaffRoutes from './routes/admin/staffRoutes.js';
 import adminTicketsRoutes from './routes/admin/ticketsRoutes.js';
 import adminApprovalsRoutes from './routes/admin/approvalsRoutes.js';
+import { requireIpAllowlist } from './middleware/requireIpAllowlist.js';
 import billingRoutes from './routes/platform/billingRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
@@ -230,6 +231,12 @@ if (isModuleEnabled('chat')) app.use('/api/v1/platform/chat', chatRoutes);
 // Calcite SuperAdmin portal — sits outside the /platform namespace.
 // Auth (login + me) is public; everything else is gated by
 // requireSuperAdmin (Sprint 1: read-only catalogue browsing).
+//
+// Network-level allowlist runs FIRST so credential probes never reach
+// auth. Set CALCITE_ADMIN_IP_ALLOWLIST env to enable; empty = open
+// (development default).
+app.use('/api/v1/admin', requireIpAllowlist);
+
 app.use('/api/v1/admin/auth', adminAuthRoutes);
 app.use('/api/v1/admin', adminPlanRoutes);
 app.use('/api/v1/admin', adminOpsRoutes);

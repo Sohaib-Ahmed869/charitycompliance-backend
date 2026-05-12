@@ -93,6 +93,44 @@ async function handleCheckoutCompleted(session, req) {
     console.warn('[stripe webhook] checkout.session.completed without orgId metadata');
     return;
   }
+
+  // Overage pay-now path. The session.mode is 'payment' (not subscription)
+  // and metadata.kind tells us it's the in-period overage settlement
+  // flow. Credit the paid amount against the period budget so the
+  // tenant unfreezes; no subscription is touched.
+  const kind = session.metadata?.kind || session.payment_intent?.metadata?.kind || '';
+  if (kind === 'overage_paynow' || session.mode === 'payment') {
+    const amountPaidCents = Number(session.amount_total) || 0;
+    const amountPaidAud = amountPaidCents / 100;
+    if (amountPaidAud > 0 && session.payment_status === 'paid') {
+      const { OrganizationSubscription } = getRouterModels();
+      const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+      if (sub) {
+        sub.current_period_overage_paid_aud = (Number(sub.current_period_overage_paid_aud) || 0) + amountPaidAud;
+        sub.current_period_overage_invoice_id = session.id || '';
+        await sub.save();
+      }
+      // Audit row so support can see who paid when.
+      const { BillingEvent } = getRouterModels();
+      await BillingEvent.create({
+        action: 'subscription.overage_paid_now',
+        target_type: 'subscription',
+        target_id: orgId,
+        target_label: orgId,
+        tenant_id: orgId,
+        reason: `Overage settled via Stripe Checkout — A$${amountPaidAud.toFixed(2)}`,
+        metadata: {
+          amount_aud: amountPaidAud,
+          stripe_session_id: session.id,
+          stripe_customer_id: session.customer
+        }
+      }).catch(() => {});
+      const { invalidateEntitlements } = await import('../../services/entitlementService.js');
+      invalidateEntitlements(orgId);
+    }
+    return;
+  }
+
   // The subscription is created at checkout completion — fetch it for full details.
   const subscriptionId = session.subscription;
   if (!subscriptionId) return;

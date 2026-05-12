@@ -69,12 +69,21 @@ function requireClient() {
 export async function ensureStripeCustomer({ orgId, email, name }) {
   const client = requireClient();
   // Search first — Stripe supports `metadata['orgId']:'…'` syntax.
+  // Soft-deleted customers still appear in search results with
+  // `deleted: true`, so we skip those AND double-check by retrieving
+  // the customer (the search index can lag for a few seconds after a
+  // dashboard delete, returning a row that 404s on direct fetch).
   try {
     const search = await client.customers.search({
       query: `metadata['orgId']:'${orgId}'`,
-      limit: 1
+      limit: 10
     });
-    if (search.data.length > 0) return search.data[0];
+    for (const candidate of search.data) {
+      if (candidate.deleted) continue;
+      // Verify the customer still exists — search index can be stale.
+      const live = await client.customers.retrieve(candidate.id).catch(() => null);
+      if (live && !live.deleted) return live;
+    }
   } catch (err) {
     // Search may fail on accounts without the right index; fall through to create.
     console.warn('[stripe] customer search failed, falling back to create:', err?.message || err);
@@ -423,6 +432,240 @@ export async function syncPlanToStripe(plan) {
   }
 }
 
+/**
+ * Inspect a Stripe Customer's currency state. A customer becomes
+ * "locked" to a currency the moment they have ANY of: an active
+ * subscription, an open invoice/quote/invoice-item, OR even an
+ * abandoned-but-not-yet-expired Checkout Session in that currency.
+ *
+ * Returns:
+ *   { ok, currency: 'aud' | 'usd' | … | null, hasOpenCheckout, hasActiveSubscription }
+ * currency = null means the customer is "clean" (no commitment yet).
+ */
+export async function inspectCustomerCurrency(customerId) {
+  if (!customerId) return { ok: false, error: 'customerId required' };
+  try {
+    const client = requireClient();
+
+    // 1. Retrieve the customer object — this is the authoritative lock.
+    //    Once Stripe sets `customer.currency` (from ANY first commitment:
+    //    invoice, subscription, invoice item, quote, customer-level
+    //    discount), it's permanent for the lifetime of that customer.
+    //    Expiring sessions does NOT release this lock — only minting a
+    //    new customer does.
+    const customer = await client.customers.retrieve(customerId).catch(() => null);
+    if (!customer || customer.deleted) {
+      return { ok: true, currency: null, hasActiveSubscription: false, hasOpenCheckout: false, customerCurrencyPinned: false, openSessionId: null };
+    }
+    const pinnedCurrency = customer.currency ? customer.currency.toLowerCase() : null;
+
+    // 2. Look at subs — gives context for whether the customer has live
+    //    paid usage we'd be abandoning if we orphaned them.
+    const subs = await client.subscriptions.list({ customer: customerId, status: 'all', limit: 10 });
+    const liveSub = subs.data.find((s) => ['active', 'trialing', 'past_due', 'unpaid', 'paused'].includes(s.status));
+
+    // 3. Look at recent checkout sessions — abandoned sessions reserve
+    //    the currency temporarily even before customer.currency is set.
+    //    Expiring them releases that reservation.
+    const sessions = await client.checkout.sessions.list({ customer: customerId, limit: 20 });
+    const openSession = sessions.data.find((s) => s.status === 'open');
+
+    return {
+      ok: true,
+      currency: pinnedCurrency || liveSub?.currency || openSession?.currency || null,
+      customerCurrencyPinned: !!pinnedCurrency,
+      hasActiveSubscription: !!liveSub,
+      hasOpenCheckout: !!openSession,
+      openSessionId: openSession?.id || null
+    };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Create a per-tenant recurring Price under an existing plan Product.
+ *
+ * Used by the override flow so Calcite ops never have to open the Stripe
+ * Dashboard to mint a custom price. The new Price hangs off the plan's
+ * existing Product (e.g. "Foundation Plan") and is tagged in metadata so
+ * audit/reporting can pick it out from regular plan prices.
+ *
+ * @param {object} args
+ * @param {string} args.productId    - existing plan Product id (plan.pricing.stripeProductId)
+ * @param {number} args.amount       - whole-units amount in `currency` (e.g. 799 = $799)
+ * @param {string} args.currency     - lower-case ISO ('aud' | 'usd' | …)
+ * @param {'month'|'year'} args.interval
+ * @param {string} args.orgId        - tenant orgId, stored in metadata
+ * @param {string} args.planCode     - plan slug, stored in metadata
+ * @param {string} [args.reason]
+ * @returns {Promise<{ ok, price, error? }>}
+ */
+export async function createOverridePrice({ productId, amount, currency, interval, orgId, planCode, reason }) {
+  if (!productId)  return { ok: false, error: 'productId required' };
+  if (!Number.isFinite(amount) || amount <= 0) return { ok: false, error: 'amount must be a positive number' };
+  if (!currency)   return { ok: false, error: 'currency required' };
+  if (interval !== 'month' && interval !== 'year') return { ok: false, error: 'interval must be month or year' };
+  try {
+    const client = requireClient();
+    const price = await client.prices.create({
+      product: productId,
+      currency: String(currency).toLowerCase(),
+      unit_amount: Math.round(Number(amount) * 100), // Stripe takes minor units
+      recurring: { interval },
+      nickname: `Override · ${planCode || 'plan'} · ${orgId || 'tenant'} · ${interval}`,
+      metadata: {
+        override: 'true',
+        orgId: orgId || '',
+        plan_code: planCode || '',
+        reason: (reason || '').slice(0, 480)
+      }
+    });
+    return { ok: true, price };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Bill an in-period overage charge immediately — used by the tenant's
+ * "Pay outstanding overage now" button. Creates a one-off invoice item
+ * on the customer, finalises it as a draft invoice, then attempts to
+ * charge their default payment method.
+ *
+ * Returns the resulting invoice. If the auto-charge fails (decline,
+ * 3DS required, etc.) the invoice is still returned in `open` state so
+ * the caller can surface the hosted-invoice URL for manual payment.
+ */
+/**
+ * Create a one-off Stripe Checkout Session (payment mode, not
+ * subscription) for the tenant's outstanding overage. The session URL
+ * is returned so the frontend can redirect the customer to Stripe's
+ * hosted payment page — they see the amount, confirm with their saved
+ * card or enter a new one, and Stripe handles SCA / 3DS automatically.
+ *
+ * Why Checkout instead of invoices.pay():
+ *   - User sees a familiar Stripe-branded page (trust + transparency)
+ *   - Handles SCA / 3DS for cards that require it (Indian, EU, etc.)
+ *   - One-time payments don't pin the customer to a new currency
+ *   - Built-in failure / cancel handling via redirect URLs
+ *
+ * The success URL hits the existing /platform/billing/overage-paid
+ * webhook handler (created below) which credits the paid amount
+ * against the period's overage budget so the tenant unfreezes.
+ */
+export async function chargeOutstandingOverage({ customerId, amountAUD, description, successUrl, cancelUrl, metadata = {} }) {
+  if (!customerId) return { ok: false, error: 'customerId required' };
+  if (!(Number(amountAUD) > 0)) return { ok: false, error: 'amountAUD must be > 0' };
+  if (!successUrl || !cancelUrl) return { ok: false, error: 'successUrl and cancelUrl required' };
+  try {
+    const client = requireClient();
+    const cents = Math.round(Number(amountAUD) * 100);
+
+    const session = await client.checkout.sessions.create({
+      mode: 'payment',
+      customer: customerId,
+      line_items: [{
+        price_data: {
+          currency: 'aud',
+          unit_amount: cents,
+          product_data: {
+            name: 'Outstanding overage charges',
+            description: description || 'In-period overage settlement.'
+          }
+        },
+        quantity: 1
+      }],
+      success_url: successUrl,
+      cancel_url: cancelUrl,
+      payment_intent_data: {
+        description: description || 'Overage charges — pay now',
+        metadata: { ...metadata, kind: 'overage_paynow' }
+      },
+      metadata: { ...metadata, kind: 'overage_paynow' }
+    });
+    return {
+      ok: true,
+      session_id: session.id,
+      checkout_url: session.url,
+      amount_aud: cents / 100
+    };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Expire every still-open Checkout Session for a customer. Used to
+ * unblock a customer who abandoned a checkout in one currency and
+ * wants to retry in another — abandoning a session doesn't auto-expire
+ * it for up to 24 hours, which strands the customer.
+ */
+export async function expireOpenCheckoutSessions(customerId) {
+  if (!customerId) return { ok: false, error: 'customerId required' };
+  try {
+    const client = requireClient();
+    const sessions = await client.checkout.sessions.list({ customer: customerId, limit: 50 });
+    const open = sessions.data.filter((s) => s.status === 'open');
+    for (const s of open) {
+      await client.checkout.sessions.expire(s.id).catch(() => {});
+    }
+    return { ok: true, expired: open.length };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Mark a subscription to cancel at the end of the current billing
+ * period. The customer keeps access until then; Stripe doesn't refund.
+ */
+export async function cancelAtPeriodEnd({ subscriptionId, cancellationDetails }) {
+  if (!subscriptionId) return { ok: false, error: 'subscriptionId required' };
+  try {
+    const client = requireClient();
+    const updated = await client.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: true,
+      ...(cancellationDetails ? { cancellation_details: cancellationDetails } : {})
+    });
+    return { ok: true, subscription: updated };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/** Undo a pending end-of-period cancellation. */
+export async function restartSubscription({ subscriptionId }) {
+  if (!subscriptionId) return { ok: false, error: 'subscriptionId required' };
+  try {
+    const client = requireClient();
+    const updated = await client.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: false
+    });
+    return { ok: true, subscription: updated };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/**
+ * Re-anchor a subscription's billing cycle so future invoices fall on a
+ * specific calendar day. Accepts a Date; Stripe wants a unix timestamp.
+ */
+export async function setBillingCycleAnchor({ subscriptionId, anchorDate, proration = 'none' }) {
+  if (!subscriptionId || !anchorDate) return { ok: false, error: 'subscriptionId and anchorDate required' };
+  try {
+    const client = requireClient();
+    const updated = await client.subscriptions.update(subscriptionId, {
+      billing_cycle_anchor: Math.floor(new Date(anchorDate).getTime() / 1000),
+      proration_behavior: proration
+    });
+    return { ok: true, subscription: updated };
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
 /** Resume a paused Stripe subscription immediately. */
 export async function resumeSubscription({ subscriptionId }) {
   if (!subscriptionId) return { ok: false, error: 'subscriptionId required' };
@@ -521,18 +764,60 @@ export async function listInvoicesForCustomer({ customerId, limit = 100 }) {
  * @param {string} [args.reason]  Stripe reason enum: 'duplicate' | 'fraudulent' | 'order_change' | 'product_unsatisfactory'
  * @returns {Promise<{ ok, creditNote? , error? }>}
  */
-export async function createCreditNote({ invoiceId, amountAUD, memo = '', reason = 'order_change' }) {
+export async function createCreditNote({
+  invoiceId,
+  amountAUD,
+  memo = '',
+  reason = 'order_change',
+  disposition = 'credit_balance' // 'refund' | 'credit_balance' | 'out_of_band'
+}) {
   if (!invoiceId) return { ok: false, error: 'invoiceId required' };
   try {
     const client = requireClient();
+
+    // For a paid invoice, Stripe requires the post-payment portion to
+    // be disposed of via refund / customer credit balance / out-of-band.
+    // The three amounts must sum to `post_payment_amount`. For an open
+    // (unpaid) invoice, none of these apply — the credit just lowers
+    // the amount due. We retrieve the invoice up-front to figure out
+    // which case we're in.
+    const invoice = await client.invoices.retrieve(invoiceId);
+    const isPaid = invoice.status === 'paid' || invoice.amount_remaining === 0;
+
+    // Total credit amount in cents. If the caller didn't pass an amount,
+    // default to crediting the full invoice — for paid invoices that's
+    // the entire amount, for open ones it's whatever's remaining.
+    const cents = amountAUD != null
+      ? Math.round(Number(amountAUD) * 100)
+      : (isPaid ? invoice.amount_paid : invoice.amount_remaining);
+
     const params = {
       invoice: invoiceId,
+      amount: cents,
       memo: memo || undefined,
       reason
     };
-    if (amountAUD != null) params.amount = Math.round(Number(amountAUD) * 100);
+
+    if (isPaid) {
+      // post_payment_amount is the slice of the credit that lands AFTER
+      // the invoice has been paid — i.e. money already collected that
+      // we now need to return somewhere. For a fully-paid invoice this
+      // equals the credit amount.
+      const postPaymentCents = Math.min(cents, invoice.amount_paid);
+      if (disposition === 'refund') {
+        params.refund_amount = postPaymentCents;
+      } else if (disposition === 'out_of_band') {
+        params.out_of_band_amount = postPaymentCents;
+      } else {
+        // Default: park the credit on the customer balance — applied
+        // automatically to the next invoice. Safest choice because it
+        // doesn't move any money on the card.
+        params.credit_amount = postPaymentCents;
+      }
+    }
+
     const creditNote = await client.creditNotes.create(params);
-    return { ok: true, creditNote };
+    return { ok: true, creditNote, disposition: isPaid ? disposition : 'pre_payment' };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };
   }

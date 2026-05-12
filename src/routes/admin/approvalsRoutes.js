@@ -22,14 +22,16 @@ import getRouterModels from '../../db/models/routerModels.js';
 import {
   loadPending,
   markApproved,
-  markRejected
+  markRejected,
+  countActiveSuperAdmins
 } from '../../utils/twoPersonApproval.js';
 import { applyPlanPatch, applyPlanArchive } from './planRoutes.js';
 
 const router = express.Router();
 router.use(authenticate);
 
-function serialize(evt) {
+function serialize(evt, staffById = {}) {
+  const requester = staffById[String(evt.actor_id || '')] || null;
   return {
     _id: evt._id,
     action: evt.action,
@@ -39,6 +41,8 @@ function serialize(evt) {
     tenant_id: evt.tenant_id,
     requested_by_id: evt.actor_id,
     requested_by_email: evt.actor_email,
+    requested_by_name: requester?.full_name || '',
+    requested_by_role: requester?.role || '',
     diff: evt.diff || [],
     reason: evt.reason || '',
     pending_dangers: evt.pending_dangers || [],
@@ -57,13 +61,31 @@ function serialize(evt) {
 
 /** GET /admin/approvals — list pending two-person-rule requests. */
 router.get('/approvals', requireSuperAdmin, asyncHandler(async (_req, res) => {
-  const { BillingEvent } = getRouterModels();
+  const { BillingEvent, SuperAdmin } = getRouterModels();
   const events = await BillingEvent
     .find({ status: 'pending_approval' })
     .sort({ created_at: -1 })
     .limit(100)
     .lean();
-  res.json({ success: true, data: events.map(serialize) });
+
+  // Bulk-resolve requester identities so each row can show
+  // "Full Name (role) — email" instead of just an email.
+  const actorIds = [...new Set(events.map((e) => String(e.actor_id || '')).filter(Boolean))];
+  const staff = actorIds.length
+    ? await SuperAdmin.find({ _id: { $in: actorIds } }).select('full_name role email').lean()
+    : [];
+  const staffById = Object.fromEntries(staff.map((s) => [String(s._id), s]));
+
+  const activeSuperAdmins = await countActiveSuperAdmins();
+
+  res.json({
+    success: true,
+    data: events.map((evt) => serialize(evt, staffById)),
+    meta: {
+      active_super_admin_count: activeSuperAdmins,
+      two_person_rule_active: activeSuperAdmins >= 2
+    }
+  });
 }));
 
 /**
@@ -81,8 +103,11 @@ router.post(
   validate,
   asyncHandler(async (req, res) => {
     let evt;
+    let soloSelfApproval = false;
     try {
-      evt = await loadPending(req.params.eventId, { approverId: req.user?.userId });
+      const loaded = await loadPending(req.params.eventId, { approverId: req.user?.userId });
+      evt = loaded.evt;
+      soloSelfApproval = loaded.soloSelfApproval;
     } catch (err) {
       return res.status(err.statusCode || 500).json({
         success: false,
@@ -130,12 +155,13 @@ router.post(
       });
     }
 
-    await markApproved(evt, req);
+    await markApproved(evt, req, { soloSelfApproved: soloSelfApproval });
     return res.json({
       success: true,
       data: {
         approved_event_id: evt._id,
-        applied: result.data
+        applied: result.data,
+        solo_self_approved: soloSelfApproval
       }
     });
   })
@@ -153,7 +179,8 @@ router.post(
   asyncHandler(async (req, res) => {
     let evt;
     try {
-      evt = await loadPending(req.params.eventId, { approverId: null });
+      const loaded = await loadPending(req.params.eventId, { approverId: null });
+      evt = loaded.evt;
     } catch (err) {
       return res.status(err.statusCode || 500).json({
         success: false,

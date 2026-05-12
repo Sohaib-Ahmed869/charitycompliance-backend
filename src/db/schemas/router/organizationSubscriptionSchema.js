@@ -93,6 +93,27 @@ const organizationSubscriptionSchema = new mongoose.Schema({
    */
   hard_cap_aud: { type: Number, default: null, min: 0 },
   /**
+   * Claude/Cursor-style overage tracking. Sum of overage AUD already
+   * settled for the current billing period — incremented when the
+   * tenant pays an outstanding overage charge via "Pay now", and reset
+   * to 0 at every period rollover.
+   *
+   * The "outstanding overage" surfaced to the tenant is:
+   *   sum(per-metric overage spend) - current_period_overage_paid_aud
+   *
+   * If that value is > 0, we refuse hard-cap edits (handbook §3.4) so
+   * the tenant can't dodge a bill by lowering the cap. They either pay
+   * the outstanding amount or wait for the next invoice to clear it.
+   */
+  current_period_overage_paid_aud: { type: Number, default: 0, min: 0 },
+  /**
+   * Stripe id of the latest one-off invoice we created to bill in-period
+   * overage. Stored so /pay-overage-now is idempotent — clicking twice
+   * in quick succession returns the same invoice instead of double-
+   * charging.
+   */
+  current_period_overage_invoice_id: { type: String, default: '' },
+  /**
    * One-shot flag — set true after we issue the first-overage credit
    * note for this tenant (handbook §5.2). Stops repeat credits on
    * subsequent overage cycles.

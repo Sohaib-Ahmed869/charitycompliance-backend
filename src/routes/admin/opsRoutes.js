@@ -27,7 +27,10 @@ import {
   applyCouponToSubscription,
   removeCouponFromSubscription,
   pauseSubscription,
-  resumeSubscription
+  resumeSubscription,
+  setBillingCycleAnchor,
+  inspectCustomerCurrency,
+  createOverridePrice
 } from '../../services/stripeService.js';
 import { sendPlanChangeNotice } from '../../services/billingEmails.js';
 import { getOrgOwnerEmail } from '../../utils/getOrgOwnerEmail.js';
@@ -57,12 +60,32 @@ router.get('/tenants', asyncHandler(async (req, res) => {
   const overrideByOrg = new Map(overrides.map((o) => [o.tenant_id, o]));
   const planById = new Map(plans.map((p) => [String(p._id), p]));
 
+  // Look up each tenant's organisation display name from its own DB.
+  // Run in parallel, swallow per-tenant errors so a single failing DB
+  // doesn't blank the entire list. Returns a map { orgId -> name }.
+  const organizationSchema = (await import('../../db/schemas/platform/organizationSchema.js')).default;
+  const { getTenantConnection } = await import('../../db/connectionManager.js');
+  const nameByOrg = new Map();
+  await Promise.all(tenants.map(async (t) => {
+    try {
+      const tenantDb = await getTenantConnection(String(t.orgId).toLowerCase());
+      const Org = tenantDb.models.Organization || tenantDb.model('Organization', organizationSchema);
+      const org = await Org.findOne({}).select('name trading_name').lean();
+      const name = org?.name || org?.trading_name || null;
+      if (name) nameByOrg.set(t.orgId, name);
+    } catch (err) {
+      // One failed connection is non-fatal — caller falls back to orgId.
+      console.warn('[admin/tenants] name lookup failed for', t.orgId, ':', err?.message || err);
+    }
+  }));
+
   const data = tenants.map((t) => {
     const sub = subByOrg.get(t.orgId);
     const plan = sub ? planById.get(String(sub.plan_id)) : null;
     const override = overrideByOrg.get(t.orgId);
     return {
       orgId: t.orgId,
+      tenant_name: nameByOrg.get(t.orgId) || null,
       dbName: t.dbName,
       status: t.status,
       created_at: t.createdAt,
@@ -107,6 +130,21 @@ router.get(
     // verify exactly what features / limits are actually being granted.
     const effectiveEntitlements = await resolveEntitlements(orgId).catch(() => null);
 
+    // Resolve the Stripe customer's locked currency so the override UI
+    // can show the right currency label and the auto-create Price helper
+    // mints in the matching currency. Best-effort — failures don't break
+    // the page (the UI falls back to the plan's default currency).
+    let stripeCustomerCurrency = null;
+    if (sub?.stripe_customer_id && isStripeConfigured()) {
+      const inspect = await inspectCustomerCurrency(sub.stripe_customer_id).catch(() => null);
+      if (inspect?.ok && inspect.currency) {
+        stripeCustomerCurrency = inspect.currency.toLowerCase();
+      }
+    }
+    const overrideCurrency =
+      stripeCustomerCurrency ||
+      (plan?.pricing?.currency || 'AUD').toLowerCase();
+
     res.json({
       success: true,
       data: {
@@ -120,18 +158,21 @@ router.get(
               plan_id: sub.plan_id,
               plan_code: plan?.plan_code || null,
               plan_name: plan?.plan_name || null,
+              plan_stripe_product_id: plan?.pricing?.stripeProductId || '',
               billing_cycle: sub.billing_cycle,
               status: sub.status,
               current_period_start: sub.current_period_start,
               current_period_end: sub.current_period_end,
               cancel_at_period_end: sub.cancel_at_period_end,
               stripe_customer_id: sub.stripe_customer_id || null,
+              stripe_customer_currency: stripeCustomerCurrency,
               stripe_subscription_id: sub.stripe_subscription_id || null,
               is_comp: !!sub.is_comp,
               comp_reason: sub.comp_reason || '',
               comp_granted_at: sub.comp_granted_at || null
             }
           : null,
+        override_currency: overrideCurrency,
         override: override
           ? {
               _id: override._id,
@@ -464,7 +505,8 @@ router.post(
   [
     param('orgId').isString().trim().notEmpty(),
     body('is_comp').isBoolean(),
-    body('reason').optional().isString()
+    // Required: this grants/revokes free access — audit needs the reason.
+    body('reason').isString().trim().isLength({ min: 1, max: 500 }).withMessage('Reason is required when toggling comp status.')
   ],
   validate,
   asyncHandler(async (req, res) => {
@@ -675,12 +717,106 @@ router.put(
       });
     }
 
+    // ── Stripe Price auto-creation ──────────────────────────────────
+    //
+    // If the admin entered numeric monthly/annual amounts but didn't
+    // paste corresponding Stripe price IDs, mint them here against the
+    // plan's existing Stripe product. This is the "layman default" path
+    // — they only ever see the amount; the dashboard step is automatic.
+    //
+    // The advanced-disclosure path is the existing manual-paste fields;
+    // any price ID supplied directly is used verbatim.
+    //
+    // Currency follows the tenant's Stripe customer lock if there is
+    // one (otherwise the plan's default currency, otherwise AUD). This
+    // matches the "customer.currency is sticky" Stripe rule.
+    const incomingPricing = { ...(req.body.pricing || {}) };
+    const pricingWarnings = [];
+    // Hoist the subscription lookup so the auto-apply step further down
+    // can swap the override Price onto the live Stripe subscription
+    // without reloading.
+    const { SubscriptionPlan: SP, OrganizationSubscription: OS } = getRouterModels();
+    const sub = await OS.findOne({ organization_id: orgId }).lean();
+    if (isStripeConfigured()) {
+      // OrganizationSubscription stores `plan_id` (ObjectId), not a
+      // plan_code string — look the plan up by id, then read its code.
+      const plan = sub?.plan_id ? await SP.findById(sub.plan_id).lean() : null;
+      const planCode = plan?.plan_code || '';
+      const productId = plan?.pricing?.stripeProductId || '';
+
+      // Determine the currency to mint the Price in.
+      let targetCurrency = (plan?.pricing?.currency || 'AUD').toLowerCase();
+      if (sub?.stripe_customer_id) {
+        const inspect = await inspectCustomerCurrency(sub.stripe_customer_id);
+        if (inspect.ok && inspect.currency) targetCurrency = inspect.currency.toLowerCase();
+      }
+
+      const monthlyAmount = Number(incomingPricing.monthlyAUD);
+      const annualAmount  = Number(incomingPricing.annualAUD);
+      const wantsMonthly  = Number.isFinite(monthlyAmount) && monthlyAmount > 0;
+      const wantsAnnual   = Number.isFinite(annualAmount)  && annualAmount  > 0;
+      const monthlyIdSupplied = !!incomingPricing.stripeMonthlyPriceId;
+      const annualIdSupplied  = !!incomingPricing.stripeAnnualPriceId;
+
+      if ((wantsMonthly && !monthlyIdSupplied) || (wantsAnnual && !annualIdSupplied)) {
+        if (!productId) {
+          return res.status(409).json({
+            success: false,
+            error: {
+              code: 'PLAN_NOT_SYNCED_TO_STRIPE',
+              message: 'The tenant\'s plan has not been synced to Stripe yet — open the plan and click "Sync to Stripe" before creating an override price.'
+            }
+          });
+        }
+        if (wantsMonthly && !monthlyIdSupplied) {
+          const result = await createOverridePrice({
+            productId,
+            amount: monthlyAmount,
+            currency: targetCurrency,
+            interval: 'month',
+            orgId,
+            planCode: planCode || '',
+            reason
+          });
+          if (!result.ok) {
+            return res.status(502).json({
+              success: false,
+              error: { code: 'STRIPE_PRICE_CREATE_FAILED', message: result.error || 'Could not create the monthly Stripe price.' }
+            });
+          }
+          incomingPricing.stripeMonthlyPriceId = result.price.id;
+          incomingPricing.currency = targetCurrency.toUpperCase();
+          pricingWarnings.push({ cycle: 'monthly', stripe_price_id: result.price.id, currency: targetCurrency });
+        }
+        if (wantsAnnual && !annualIdSupplied) {
+          const result = await createOverridePrice({
+            productId,
+            amount: annualAmount,
+            currency: targetCurrency,
+            interval: 'year',
+            orgId,
+            planCode: planCode || '',
+            reason
+          });
+          if (!result.ok) {
+            return res.status(502).json({
+              success: false,
+              error: { code: 'STRIPE_PRICE_CREATE_FAILED', message: result.error || 'Could not create the annual Stripe price.' }
+            });
+          }
+          incomingPricing.stripeAnnualPriceId = result.price.id;
+          incomingPricing.currency = targetCurrency.toUpperCase();
+          pricingWarnings.push({ cycle: 'annual', stripe_price_id: result.price.id, currency: targetCurrency });
+        }
+      }
+    }
+
     const update = {
       tenant_id: orgId,
       limits: req.body.limits || {},
       feature_flags: req.body.feature_flags || {},
       feature_flag_mode: req.body.feature_flag_mode === 'replace' ? 'replace' : 'merge',
-      pricing: req.body.pricing || {},
+      pricing: incomingPricing,
       effective_from: req.body.effective_from ? new Date(req.body.effective_from) : new Date(),
       effective_until: req.body.effective_until ? new Date(req.body.effective_until) : null,
       reason,
@@ -697,6 +833,42 @@ router.put(
 
     invalidateEntitlements(orgId);
 
+    // ── Auto-apply override Price to the live Stripe subscription ───
+    //
+    // Saving the override creates the Price in Stripe, but until we
+    // swap it onto the actual subscription, invoices keep billing at
+    // the plan default. From the admin's mental model, "I lowered the
+    // price" should mean "the next invoice is lower" — make it so.
+    //
+    // We only auto-apply if the tenant has a live Stripe subscription
+    // AND the override has a price ID for the tenant's current cycle.
+    // Failures are surfaced as a warning, not a hard error — the DB
+    // override is already saved, so the entitlement/feature side is
+    // correct; only the billing-side swap missed and can be retried
+    // via the explicit "Apply to Stripe" button.
+    let autoAppliedToSubscription = null;
+    let autoApplyError = null;
+    if (isStripeConfigured() && sub?.stripe_subscription_id) {
+      const newPriceId = sub.billing_cycle === 'yearly'
+        ? incomingPricing.stripeAnnualPriceId
+        : incomingPricing.stripeMonthlyPriceId;
+      if (newPriceId) {
+        const swap = await swapSubscriptionPrice({
+          subscriptionId: sub.stripe_subscription_id,
+          newPriceId
+        });
+        if (swap.ok) {
+          autoAppliedToSubscription = {
+            stripe_subscription_id: sub.stripe_subscription_id,
+            stripe_price_id: newPriceId,
+            cycle: sub.billing_cycle
+          };
+        } else {
+          autoApplyError = swap.error || 'Unknown Stripe error.';
+        }
+      }
+    }
+
     await writeBillingEvent(req, {
       action: before ? 'subscription_override.updated' : 'subscription_override.created',
       targetType: 'subscription_override',
@@ -707,10 +879,24 @@ router.put(
       diff: before
         ? [{ path: 'override', from: { limits: before.limits, pricing: before.pricing }, to: { limits: update.limits, pricing: update.pricing } }]
         : [],
-      metadata: { effective_until: update.effective_until }
+      metadata: {
+        effective_until: update.effective_until,
+        ...(pricingWarnings.length ? { auto_created_stripe_prices: pricingWarnings } : {}),
+        ...(autoAppliedToSubscription ? { auto_applied_to_subscription: autoAppliedToSubscription } : {}),
+        ...(autoApplyError ? { auto_apply_error: autoApplyError } : {})
+      }
     });
 
-    res.json({ success: true, data: { _id: result._id } });
+    res.json({
+      success: true,
+      data: {
+        _id: result._id,
+        pricing: result.pricing || {},
+        auto_created_stripe_prices: pricingWarnings,
+        auto_applied_to_subscription: autoAppliedToSubscription,
+        auto_apply_error: autoApplyError
+      }
+    });
   })
 );
 
@@ -1101,7 +1287,8 @@ router.post(
     param('id').isString().trim().notEmpty(),
     body('amountAUD').optional().isFloat({ min: 0.01 }),
     body('reason').isString().trim().isLength({ min: 1, max: 500 }),
-    body('stripeReason').optional().isIn(['duplicate', 'fraudulent', 'order_change', 'product_unsatisfactory'])
+    body('stripeReason').optional().isIn(['duplicate', 'fraudulent', 'order_change', 'product_unsatisfactory']),
+    body('disposition').optional().isIn(['refund', 'credit_balance', 'out_of_band'])
   ],
   validate,
   asyncHandler(async (req, res) => {
@@ -1113,11 +1300,13 @@ router.post(
       return res.status(404).json({ success: false, error: { code: 'INVOICE_NOT_FOUND', message: 'No matching invoice.' } });
     }
 
-    const { ok, creditNote, error } = await createCreditNote({
+    const disposition = req.body.disposition || 'credit_balance';
+    const { ok, creditNote, error, disposition: actualDisposition } = await createCreditNote({
       invoiceId: payment.stripe_invoice_id,
       amountAUD: req.body.amountAUD,
       memo: req.body.reason,
-      reason: req.body.stripeReason || 'order_change'
+      reason: req.body.stripeReason || 'order_change',
+      disposition
     });
     if (!ok) {
       return res.status(502).json({ success: false, error: { code: 'STRIPE_ERROR', message: error || 'Stripe rejected the request.' } });
@@ -1133,7 +1322,8 @@ router.post(
       metadata: {
         amount_aud: req.body.amountAUD ?? null,
         stripe_credit_note_id: creditNote?.id,
-        stripe_reason: req.body.stripeReason || 'order_change'
+        stripe_reason: req.body.stripeReason || 'order_change',
+        disposition: actualDisposition
       }
     });
 
@@ -1292,10 +1482,24 @@ router.post(
       return res.status(404).json({ success: false, error: { code: 'COUPON_NOT_FOUND', message: 'Coupon does not exist or is archived.' } });
     }
 
-    const stripeCouponId = coupon.stripe_coupon_id || couponCode;
+    // Match the Stripe coupon's currency to the subscription's currency.
+    // Otherwise Stripe refuses with "You cannot combine currencies on a
+    // single customer." For percent-off coupons the currency suffix is
+    // ignored and a single Stripe coupon serves every currency.
+    const subCurrency = await currencyForStripeSubscription(sub.stripe_subscription_id);
+    const { ensureStripeCouponForLocal } = await import('../../services/stripeService.js');
+    const sync = await ensureStripeCouponForLocal(coupon, { currency: subCurrency });
+    if (!sync.ok) {
+      return res.status(502).json({ success: false, error: { code: 'STRIPE_COUPON_SYNC_FAILED', message: sync.error || 'Could not sync coupon to Stripe.' } });
+    }
+    if (!coupon.stripe_coupon_id || coupon.stripe_coupon_id !== sync.stripe_coupon_id) {
+      coupon.stripe_coupon_id = sync.stripe_coupon_id;
+      await coupon.save().catch(() => {});
+    }
+
     const { ok, error } = await applyCouponToSubscription({
       subscriptionId: sub.stripe_subscription_id,
-      couponCode: stripeCouponId
+      couponCode: sync.stripe_coupon_id
     });
     if (!ok) {
       return res.status(502).json({ success: false, error: { code: 'STRIPE_ERROR', message: error } });
@@ -1325,7 +1529,8 @@ router.delete(
   requireBillingStaff,
   [
     param('orgId').isString().trim().notEmpty(),
-    body('reason').optional().isString().trim().isLength({ max: 500 })
+    // Required: removing a coupon affects what the customer pays next cycle.
+    body('reason').isString().trim().isLength({ min: 1, max: 500 }).withMessage('Reason is required when removing a coupon.')
   ],
   validate,
   asyncHandler(async (req, res) => {
@@ -1372,6 +1577,25 @@ async function ensureLocalCoupon(code, shape) {
 }
 
 /**
+ * Helper: figure out the currency to use when minting a Stripe coupon
+ * for a given Stripe subscription. Stripe rejects amount-off coupons
+ * whose currency doesn't match the subscription's price currency
+ * ("You cannot combine currencies on a single customer"). We retrieve
+ * the subscription and take its `currency` field; falls back to 'aud'
+ * when the lookup fails or no sub exists.
+ */
+async function currencyForStripeSubscription(stripeSubscriptionId) {
+  if (!stripeSubscriptionId || !isStripeConfigured()) return 'aud';
+  try {
+    const { retrieveSubscription } = await import('../../services/stripeService.js');
+    const sub = await retrieveSubscription(stripeSubscriptionId);
+    return (sub?.currency || 'aud').toLowerCase();
+  } catch (_) {
+    return 'aud';
+  }
+}
+
+/**
  * POST /admin/tenants/:orgId/promo/community-impact
  * Body: { abn?, reason }
  * Verifies ABN (best-effort), creates COMMUNITY60 coupon if absent,
@@ -1390,6 +1614,41 @@ router.post(
   asyncHandler(async (req, res) => {
     const { OrganizationSubscription, SubscriptionOverride, SubscriptionPlan } = getRouterModels();
     const orgId = String(req.params.orgId).toLowerCase();
+
+    // 0. ABN verification (handbook §17.3 — Calcite-approved-only flow).
+    // Reject if ABN is missing OR if ABR lookup says the entity isn't
+    // a registered charity. Lookup failures (network / API down) fall
+    // through with a `verified=false` flag so the audit trail records it.
+    let abnVerification = { verified: false, reason: 'no_abn_provided' };
+    if (req.body.abn) {
+      try {
+        const { verifyABN } = await import('../../services/abnVerificationService.js');
+        const abrData = await verifyABN(req.body.abn);
+        const isCharity = !!(abrData?.is_charity || /charit/i.test(abrData?.entity_type_text || ''));
+        abnVerification = {
+          verified: !!abrData?.abn_status_text?.toLowerCase().includes('active'),
+          is_charity: isCharity,
+          entity_name: abrData?.entity_name || null,
+          abn_status: abrData?.abn_status_text || null,
+          looked_up_at: new Date()
+        };
+        // Refuse to grant if ABN is inactive or not a charity (per
+        // handbook — Community Impact is for registered charities only).
+        if (!abnVerification.verified || !isCharity) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'ABN_INELIGIBLE',
+              message: 'ABN is not an active registered charity. Community Impact is restricted to ACNC-registered charities.',
+              details: abnVerification
+            }
+          });
+        }
+      } catch (err) {
+        // ABR API down — record but proceed (super-admin override).
+        abnVerification = { verified: false, reason: 'abr_lookup_failed', error: err?.message || String(err) };
+      }
+    }
 
     // 1. Ensure COMMUNITY60 coupon exists.
     const coupon = await ensureLocalCoupon('COMMUNITY60', {
@@ -1428,7 +1687,8 @@ router.post(
     const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
     let stripeApplied = false;
     if (sub?.stripe_subscription_id && isStripeConfigured()) {
-      const sync = await (await import('../../services/stripeService.js')).ensureStripeCouponForLocal(coupon, { currency: 'aud' });
+      const subCurrency = await currencyForStripeSubscription(sub.stripe_subscription_id);
+      const sync = await (await import('../../services/stripeService.js')).ensureStripeCouponForLocal(coupon, { currency: subCurrency });
       if (sync.ok) {
         const apply = await applyCouponToSubscription({
           subscriptionId: sub.stripe_subscription_id,
@@ -1445,12 +1705,18 @@ router.post(
       targetLabel: orgId,
       tenantId: orgId,
       reason: req.body.reason,
-      metadata: { abn: req.body.abn || null, expires_at: expiresAt, stripe_applied: stripeApplied, coupon_code: 'COMMUNITY60' }
+      metadata: {
+        abn: req.body.abn || null,
+        abn_verification: abnVerification,
+        expires_at: expiresAt,
+        stripe_applied: stripeApplied,
+        coupon_code: 'COMMUNITY60'
+      }
     });
     invalidateEntitlements(orgId);
     res.json({
       success: true,
-      data: { coupon_code: 'COMMUNITY60', expires_at: expiresAt, stripe_applied: stripeApplied }
+      data: { coupon_code: 'COMMUNITY60', expires_at: expiresAt, stripe_applied: stripeApplied, abn_verification: abnVerification }
     });
   })
 );
@@ -1489,7 +1755,8 @@ router.post(
     const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
     let stripeApplied = false;
     if (sub?.stripe_subscription_id && isStripeConfigured()) {
-      const sync = await (await import('../../services/stripeService.js')).ensureStripeCouponForLocal(coupon, { currency: 'aud' });
+      const subCurrency = await currencyForStripeSubscription(sub.stripe_subscription_id);
+      const sync = await (await import('../../services/stripeService.js')).ensureStripeCouponForLocal(coupon, { currency: subCurrency });
       if (sync.ok) {
         const apply = await applyCouponToSubscription({
           subscriptionId: sub.stripe_subscription_id,
@@ -1551,21 +1818,29 @@ router.post(
     );
 
     // Attach the coupon to each tenant's Stripe subscription if any.
+    // Each tenant might be on a different currency, so mint (or reuse)
+    // the right Stripe coupon per tenant. Percent-off coupons are
+    // currency-agnostic so the helper short-circuits to the same id for
+    // every tenant — no extra Stripe round-trips.
     if (isStripeConfigured()) {
-      const stripeSync = await (await import('../../services/stripeService.js')).ensureStripeCouponForLocal(coupon, { currency: 'aud' });
-      if (stripeSync.ok) {
-        for (const orgId of allOrgs) {
-          const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
-          if (sub?.stripe_subscription_id) {
-            const apply = await applyCouponToSubscription({
-              subscriptionId: sub.stripe_subscription_id,
-              couponCode: stripeSync.stripe_coupon_id
-            });
-            results.push({ orgId, ok: apply.ok, error: apply.error || null });
-          } else {
-            results.push({ orgId, ok: false, error: 'No Stripe subscription' });
-          }
+      const { ensureStripeCouponForLocal } = await import('../../services/stripeService.js');
+      for (const orgId of allOrgs) {
+        const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+        if (!sub?.stripe_subscription_id) {
+          results.push({ orgId, ok: false, error: 'No Stripe subscription' });
+          continue;
         }
+        const subCurrency = await currencyForStripeSubscription(sub.stripe_subscription_id);
+        const stripeSync = await ensureStripeCouponForLocal(coupon, { currency: subCurrency });
+        if (!stripeSync.ok) {
+          results.push({ orgId, ok: false, error: stripeSync.error || 'Coupon sync failed' });
+          continue;
+        }
+        const apply = await applyCouponToSubscription({
+          subscriptionId: sub.stripe_subscription_id,
+          couponCode: stripeSync.stripe_coupon_id
+        });
+        results.push({ orgId, ok: apply.ok, error: apply.error || null });
       }
     }
 
@@ -1710,7 +1985,8 @@ router.post(
   requireBillingStaff,
   [
     param('orgId').isString().trim().notEmpty(),
-    body('reason').optional().isString().trim().isLength({ max: 500 })
+    // Required: resumes billing — auditor needs to know why we ended the pause early.
+    body('reason').isString().trim().isLength({ min: 1, max: 500 }).withMessage('Reason is required when resuming a paused subscription.')
   ],
   validate,
   asyncHandler(async (req, res) => {
@@ -1738,6 +2014,63 @@ router.post(
     });
     invalidateEntitlements(orgId);
     res.json({ success: true, data: { resumed: true } });
+  })
+);
+
+// ════════════════════════════════════════════════════════════════════
+// CYCLE ANCHOR CHANGE (handbook §11)
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * POST /admin/tenants/:orgId/cycle-anchor
+ * Body: { anchor_date (ISO date), reason, prorate? }
+ *
+ * Re-anchors a tenant's billing cycle to a specific calendar day —
+ * customer asks for billing on the 1st instead of the 15th.
+ */
+router.post(
+  '/tenants/:orgId/cycle-anchor',
+  requireSuperAdmin,
+  [
+    param('orgId').isString().trim().notEmpty(),
+    body('anchor_date').isISO8601(),
+    body('reason').isString().trim().isLength({ min: 1, max: 500 }),
+    body('prorate').optional().isBoolean()
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({ success: false, error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not configured.' } });
+    }
+    const { OrganizationSubscription } = getRouterModels();
+    const orgId = String(req.params.orgId).toLowerCase();
+    const sub = await OrganizationSubscription.findOne({ organization_id: orgId });
+    if (!sub?.stripe_subscription_id) {
+      return res.status(404).json({ success: false, error: { code: 'SUBSCRIPTION_NOT_FOUND', message: 'No Stripe subscription linked to this tenant.' } });
+    }
+    const anchor = new Date(req.body.anchor_date);
+    if (Number.isNaN(anchor.getTime()) || anchor.getTime() < Date.now()) {
+      return res.status(400).json({ success: false, error: { code: 'INVALID_ANCHOR_DATE', message: 'anchor_date must be a future date.' } });
+    }
+    const result = await setBillingCycleAnchor({
+      subscriptionId: sub.stripe_subscription_id,
+      anchorDate: anchor,
+      proration: req.body.prorate ? 'create_prorations' : 'none'
+    });
+    if (!result.ok) {
+      return res.status(502).json({ success: false, error: { code: 'STRIPE_ERROR', message: result.error } });
+    }
+    await writeBillingEvent(req, {
+      action: 'subscription.changed',
+      targetType: 'subscription',
+      targetId: orgId,
+      targetLabel: orgId,
+      tenantId: orgId,
+      reason: req.body.reason,
+      metadata: { cycle_anchor: anchor, prorate: !!req.body.prorate }
+    });
+    invalidateEntitlements(orgId);
+    res.json({ success: true, data: { anchor_date: anchor, prorate: !!req.body.prorate } });
   })
 );
 

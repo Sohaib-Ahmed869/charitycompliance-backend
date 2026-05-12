@@ -85,6 +85,23 @@ export function detectDangerousPlanDiff(prevSnapshot, nextSnapshot) {
   return Array.from(dangers);
 }
 
+// ─── Super-admin headcount ───────────────────────────────────────────
+
+/**
+ * Count active super-admins on the Calcite side. Used to decide whether
+ * a dangerous change can be gated behind two-person approval or must
+ * auto-apply (with a loud audit marker) because there's no second pair
+ * of eyes available.
+ *
+ * Returns the number of SuperAdmin rows with role='super_admin' AND
+ * status='active'. Billing operators / support agents don't count —
+ * the two-person rule is super-admin only.
+ */
+export async function countActiveSuperAdmins() {
+  const { SuperAdmin } = getRouterModels();
+  return SuperAdmin.countDocuments({ role: 'super_admin', status: 'active' });
+}
+
 // ─── Pending-event helpers ───────────────────────────────────────────
 
 /**
@@ -124,7 +141,12 @@ export async function createPendingApproval(req, {
 /**
  * Look up a pending event for approve / reject. Throws an AppError-shaped
  * `{ statusCode, code, message }` when the row is missing, already
- * resolved, or being approved by its own requester.
+ * resolved, or being approved by its own requester (unless they're the
+ * only active super-admin — solo mode bypasses the self-approval gate).
+ *
+ * Returns `{ evt, soloSelfApproval }` — the caller writes
+ * `soloSelfApproval: true` into the audit metadata so the bypass is
+ * visible in review.
  */
 export async function loadPending(eventId, { approverId } = {}) {
   const { BillingEvent } = getRouterModels();
@@ -138,21 +160,32 @@ export async function loadPending(eventId, { approverId } = {}) {
       code: 'APPROVAL_ALREADY_RESOLVED'
     });
   }
+  let soloSelfApproval = false;
   if (approverId && String(evt.actor_id) === String(approverId)) {
-    throw Object.assign(new Error('A second super-admin must approve — you cannot approve your own request.'), {
-      statusCode: 403,
-      code: 'APPROVAL_SELF_FORBIDDEN'
-    });
+    const activeSuperAdmins = await countActiveSuperAdmins();
+    if (activeSuperAdmins >= 2) {
+      throw Object.assign(new Error('A second super-admin must approve — you cannot approve your own request.'), {
+        statusCode: 403,
+        code: 'APPROVAL_SELF_FORBIDDEN'
+      });
+    }
+    // Only one active super-admin exists → allow self-approval so the
+    // request isn't permanently stuck. The fact that the requester
+    // approved their own change goes into the audit row.
+    soloSelfApproval = true;
   }
-  return evt;
+  return { evt, soloSelfApproval };
 }
 
 /** Mark a pending event as executed — call AFTER the proposed change has been applied. */
-export async function markApproved(evt, req) {
+export async function markApproved(evt, req, { soloSelfApproved = false } = {}) {
   evt.status = 'executed';
   evt.approved_by = req?.user?.userId || null;
   evt.approved_by_email = req?.user?.email || '';
   evt.approved_at = new Date();
+  if (soloSelfApproved) {
+    evt.metadata = { ...(evt.metadata || {}), solo_self_approved: true };
+  }
   await evt.save().catch((err) => logError('markApproved save', err, { id: evt._id }));
   return evt;
 }
