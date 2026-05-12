@@ -9,6 +9,7 @@ import { DonorRepository } from '../repositories/donorRepository.js';
 import { DonorRefundRepository } from '../repositories/donorRefundRepository.js';
 import { ApprovalWorkflowService } from './approvalWorkflowService.js';
 import { AppError } from '../middleware/errorHandler.js';
+import emailService, { buildEmailTemplate } from './emailService.js';
 
 export class DonorService {
   constructor(orgId, tenantDb) {
@@ -121,6 +122,21 @@ export class DonorService {
       admin_notes: payload.admin_notes || '',
     });
 
+    // Email the donor with the public form link. Best-effort — refund is
+    // already saved, so an email outage doesn't block the workflow.
+    if (donorContactEmail) {
+      sendDonorRefundFormEmail({
+        to: donorContactEmail,
+        donorName: donor.name || donor.primary_contact?.name || '',
+        token,
+        adminNotes: payload.admin_notes || ''
+      }).catch((err) => {
+        console.error('[donorService] refund email failed for', donorContactEmail, err?.message || err);
+      });
+    } else {
+      console.warn('[donorService] no email on file for donor', donorId, '— refund created but donor was not notified');
+    }
+
     return refund;
   }
 
@@ -144,5 +160,47 @@ export class DonorService {
     }
     return refunds;
   }
+}
+
+/**
+ * Build + send the refund-initiation email to a donor. Caller fires this
+ * fire-and-forget — failures are logged but never thrown so the underlying
+ * refund record stays valid even if SMTP is down.
+ */
+async function sendDonorRefundFormEmail({ to, donorName, token, adminNotes }) {
+  if (!to || !token) return;
+  const baseUrl = (process.env.FRONTEND_URL || 'http://localhost:5173').split(',')[0].trim();
+  const formUrl = `${baseUrl}/public/donors/refunds/${encodeURIComponent(token)}`;
+  const greeting = donorName ? `Hi ${donorName},` : 'Hello,';
+
+  const html = buildEmailTemplate({
+    heading: 'Donation Refund Request',
+    headingHighlight: 'Donation',
+    bodyHtml: `
+      <p style="margin: 0 0 14px 0; font-size: 14px; line-height: 1.6; color: #334155; text-align: center;">${greeting}</p>
+      <p style="margin: 0 0 14px 0; font-size: 14px; line-height: 1.6; color: #334155; text-align: center;">A refund process has been initiated for one of your donations. To complete the refund we need a few details from you — original donation date, amount, payment method and a reason. The form takes about a minute.</p>
+      ${adminNotes ? `<p style="margin: 0 0 14px 0; font-size: 13px; line-height: 1.6; color: #475569; text-align: center; background: #f8fafc; padding: 10px 14px; border-radius: 8px; border-left: 3px solid #0d9488;"><strong>Note from the team:</strong><br/>${escapeHtml(adminNotes)}</p>` : ''}
+      <p style="margin: 0; font-size: 13px; line-height: 1.6; color: #334155; text-align: center;">Click the button below to fill in the secure form. The link is unique to you.</p>
+    `,
+    buttonText: 'Complete Refund Form',
+    buttonLink: formUrl,
+    infoBoxLines: [
+      'This link is unique to you and should not be shared.',
+      'You\'ll attach evidence of the original donation (receipt or statement).',
+      'If you didn\'t expect this email, please reply to let us know.'
+    ]
+  });
+
+  await emailService.sendEmail({
+    to,
+    subject: 'Action required — complete your donation refund form',
+    html
+  });
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[c]);
 }
 

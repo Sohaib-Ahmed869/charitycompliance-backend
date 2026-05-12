@@ -98,7 +98,10 @@ export const resetPasswordValidator = [
 
 export const verifyOtpValidator = [
   body('userId').notEmpty().withMessage('User ID is required'),
-  body('code').isLength({ min: 6, max: 6 }).isNumeric().withMessage('Code must be 6 digits'),
+  // Length range covers the dev bypass (4-digit `1743`) and the
+  // standard 6-digit production code. Restrict to 6/6 when the bypass
+  // is removed.
+  body('code').isLength({ min: 4, max: 6 }).isNumeric().withMessage('Code must be 4–6 digits'),
   body('orgId').notEmpty().withMessage('Organization ID is required')
 ];
 

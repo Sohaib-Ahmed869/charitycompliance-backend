@@ -249,7 +249,7 @@ const ENTITY_MODULE_MAP = {
   disciplinary_record: 'People & HR',
   donation_box: 'Finances',
   sweep_funds: 'Finances',
-  bas_lodgement: 'Reporting',
+  bas_lodgement: 'Finance',
   financial_report: 'Reporting',
   fiscal_report: 'Reporting',
   complaint: 'Complaint',
@@ -288,7 +288,7 @@ const ENTITY_TEMPLATE_TARGETS = {
   disciplinary_record: { module: 'People & HR', submodule: 'Disciplinary Records' },
   donation_box: { module: 'Finances', submodule: 'Donation Boxes' },
   sweep_funds: { module: 'Finances', submodule: 'Sweep Funds' },
-  bas_lodgement: { module: 'Reporting', submodule: 'Financial Reports' },
+  bas_lodgement: { module: 'Finance', submodule: 'BAS' },
   financial_report: { module: 'Reporting', submodule: 'Financial Reports' },
   fiscal_report: { module: 'Reporting', submodule: 'Fiscal Reports' },
   complaint: { module: 'Complaint', submodule: 'Complaint Register' }
@@ -373,7 +373,10 @@ function canonicalizeEntityType(value) {
 
 function isGenericEntityType(value) {
   const t = String(value || '').trim().toLowerCase();
-  return !t || t === 'other' || t === 'unknown' || t === 'generic';
+  // 'document' is a wrapper type used by document-driven approval requests
+  // (BAS, fiscal_report). The real semantic type lives on request_type, so
+  // treat it as generic to force resolution from request_type.
+  return !t || t === 'other' || t === 'unknown' || t === 'generic' || t === 'document';
 }
 
 function isApprovalScopedChecklistType(entityType) {
