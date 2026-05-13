@@ -966,7 +966,7 @@ router.post(
           : plan.pricing?.stripeSetupMonthlyPriceId)
       : null;
 
-    const frontendBase = (serverConfig.corsOrigin?.[0] || 'http://localhost:5173').replace(/\/$/, '');
+    const frontendBase = serverConfig.frontendUrl;
     console.log('[checkout] creating Stripe session — discounts:', preBuiltDiscounts, 'fallback couponCode:', fallbackCouponCode);
     const session = await createCheckoutSession({
       customerId,
