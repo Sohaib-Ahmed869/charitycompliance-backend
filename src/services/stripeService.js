@@ -95,6 +95,31 @@ export async function ensureStripeCustomer({ orgId, email, name }) {
   });
 }
 
+/**
+ * Search-only counterpart to ensureStripeCustomer — finds the Stripe
+ * Customer for an orgId without creating one. Returns null when none
+ * exists. Used by the reconciler's self-heal path so a tenant who never
+ * subscribed doesn't get a phantom customer minted on a billing read.
+ */
+export async function findStripeCustomerByOrgId(orgId) {
+  const client = requireClient();
+  try {
+    const search = await client.customers.search({
+      query: `metadata['orgId']:'${orgId}'`,
+      limit: 10
+    });
+    for (const candidate of search.data) {
+      if (candidate.deleted) continue;
+      // Search index can lag a dashboard delete — confirm with a direct fetch.
+      const live = await client.customers.retrieve(candidate.id).catch(() => null);
+      if (live && !live.deleted) return live;
+    }
+  } catch (err) {
+    console.warn('[stripe] findStripeCustomerByOrgId search failed:', err?.message || err);
+  }
+  return null;
+}
+
 // ── Checkout sessions ───────────────────────────────────────────────
 
 /**
@@ -169,6 +194,21 @@ export async function createCheckoutSession(args) {
   }
 
   return client.checkout.sessions.create(sessionParams);
+}
+
+/**
+ * Retrieve a Checkout Session by id. Returns null when Stripe can't find
+ * it (e.g. a session id from a different account, or test vs live mode)
+ * so callers can report a clean error instead of throwing a raw 404.
+ */
+export async function retrieveCheckoutSession(sessionId) {
+  const client = requireClient();
+  try {
+    return await client.checkout.sessions.retrieve(sessionId);
+  } catch (err) {
+    if (err?.statusCode === 404 || err?.code === 'resource_missing') return null;
+    throw err;
+  }
 }
 
 /**
@@ -348,6 +388,21 @@ export async function retrieveSubscription(subscriptionId) {
 }
 
 /**
+ * List a customer's subscriptions, most-recent first. status:'all' so the
+ * caller decides which states count as "live". Used by the reconciler's
+ * self-heal path to recover a subscription when no local row exists.
+ */
+export async function listSubscriptionsForCustomer(customerId) {
+  const client = requireClient();
+  const res = await client.subscriptions.list({
+    customer: customerId,
+    status: 'all',
+    limit: 20
+  });
+  return res.data || [];
+}
+
+/**
  * Pause a Stripe subscription's collection for up to N days. After
  * `resumes_at`, billing automatically resumes. The customer keeps
  * access through the pause window — Stripe just stops invoicing.
@@ -368,12 +423,21 @@ export async function pauseSubscription({ subscriptionId, days }) {
 }
 
 /**
- * Sync a Plan to Stripe — ensures Product + monthly + annual Prices
- * exist and returns their ids. Idempotent: if the Stripe ids already
- * exist on the plan and the underlying Stripe objects are still valid,
- * returns them unchanged. Otherwise creates whatever's missing.
+ * Sync a Plan to Stripe — ensures the Product + monthly + annual Prices
+ * exist and returns their ids. Idempotent and safe to call on every plan
+ * create / price edit:
  *
- * Returns `{ ok, productId, monthlyPriceId, annualPriceId, created }`.
+ *   - Product: created if missing; its name is kept in sync if it already
+ *     exists (the retrieve/update doubles as a "still valid?" check).
+ *   - Prices: Stripe Prices are IMMUTABLE — a changed amount cannot be
+ *     edited in place. When the plan's amount differs from the live Stripe
+ *     Price we archive the stale Price and mint a new one. Existing
+ *     subscriptions keep billing the archived Price (Stripe still charges
+ *     archived prices for active subs); only new checkouts move to the new
+ *     one, which matches the app's pinned-revision model.
+ *
+ * Returns `{ ok, productId, monthlyPriceId, annualPriceId, created, archived }`.
+ * Never throws — Stripe failures come back as `{ ok: false, error }`.
  */
 export async function syncPlanToStripe(plan) {
   if (!plan || !plan.plan_code) return { ok: false, error: 'plan must have plan_code' };
@@ -381,11 +445,15 @@ export async function syncPlanToStripe(plan) {
     const client = requireClient();
     const created = { product: false, monthly: false, annual: false };
 
-    // 1. Product
-    let productId = plan.metadata?.stripeProductId || null;
+    // 1. Product. The id lives under `pricing.stripeProductId`; older code
+    //    wrote it to `metadata.stripeProductId`, so read that as a legacy
+    //    fallback. update() also validates it — 404s if the product was
+    //    deleted in the dashboard, in which case we recreate.
+    let productId = plan.pricing?.stripeProductId || plan.metadata?.stripeProductId || null;
     if (productId) {
-      try { await client.products.retrieve(productId); }
-      catch (_) { productId = null; }
+      try {
+        await client.products.update(productId, { name: plan.plan_name || plan.plan_code });
+      } catch (_) { productId = null; }
     }
     if (!productId) {
       const product = await client.products.create({
@@ -396,23 +464,39 @@ export async function syncPlanToStripe(plan) {
       created.product = true;
     }
 
-    // Helper — create a recurring Price for a given cycle.
+    // Ensure a recurring Price for a cycle matches the plan's amount.
+    // Reuses the live Price when the amount is unchanged; otherwise
+    // archives the immutable old Price and mints a fresh one.
     const ensurePrice = async (cycle, currentId, amountAUD) => {
+      const wanted = amountAUD && amountAUD > 0 ? Math.round(amountAUD * 100) : null;
+      let archived = null;
+
       if (currentId) {
         try {
           const existing = await client.prices.retrieve(currentId);
-          if (existing && existing.active) return { id: existing.id, created: false };
-        } catch (_) { /* fall through */ }
+          if (existing && existing.active) {
+            const unchanged = wanted != null
+              && existing.unit_amount === wanted
+              && String(existing.currency).toLowerCase() === 'aud';
+            if (unchanged) return { id: existing.id, created: false, archived: null };
+            // Amount changed (or the cycle no longer has a price) —
+            // archive the old Price before minting its replacement.
+            await client.prices.update(existing.id, { active: false }).catch(() => {});
+            archived = existing.id;
+          }
+        } catch (_) { /* stale / deleted price id — just mint a fresh one */ }
       }
-      if (!amountAUD || amountAUD <= 0) return { id: null, created: false };
+
+      if (wanted == null) return { id: null, created: false, archived };
+
       const price = await client.prices.create({
         product: productId,
         currency: 'aud',
-        unit_amount: Math.round(amountAUD * 100),
+        unit_amount: wanted,
         recurring: { interval: cycle === 'yearly' ? 'year' : 'month' },
         metadata: { plan_code: plan.plan_code, cycle, source: 'stewardex' }
       });
-      return { id: price.id, created: true };
+      return { id: price.id, created: true, archived };
     };
 
     const monthly = await ensurePrice('monthly', plan.pricing?.stripeMonthlyPriceId, plan.pricing?.monthlyAUD);
@@ -425,7 +509,8 @@ export async function syncPlanToStripe(plan) {
       productId,
       monthlyPriceId: monthly.id,
       annualPriceId: annual.id,
-      created
+      created,
+      archived: [monthly.archived, annual.archived].filter(Boolean)
     };
   } catch (err) {
     return { ok: false, error: err?.message || String(err) };

@@ -15,20 +15,37 @@ export class ProjectRefundRepository {
 
     if (!_repairedDbs.has(tenantDb)) {
       _repairedDbs.add(tenantDb);
-      this._repairPromise = this._dropLegacyPaymentAckTokenIndex().catch(() => {});
+      this._repairPromise = this._repairPaymentAckTokenIndex().catch(() => {});
     }
   }
 
   /**
-   * Drop the legacy unique compound index on (org_key, payment_ack_token).
-   * project_refunds never had a payment_ack_token field — that index was
-   * created by an earlier deployment that copied donorRefundSchema, and it
-   * blocks every second insert because both rows have payment_ack_token=null.
+   * Repair the (org_key, payment_ack_token) index on the shared
+   * `project_refunds` collection. Donor refunds (donorRefundSchema) legitimately
+   * need this index, but older deployments created it as a plain `unique`
+   * (or `unique + sparse`) index, which collides on every { org_key, null }
+   * row. Drop the stale index and recreate it as a PARTIAL index: project
+   * refunds have no payment_ack_token field so they're simply not covered,
+   * while donor refunds get correct uniqueness on real string tokens.
+   *
+   * Both refund repos run this identical, idempotent repair so — sharing one
+   * collection — they converge on the correct index instead of fighting.
    */
-  async _dropLegacyPaymentAckTokenIndex() {
+  async _repairPaymentAckTokenIndex() {
+    const coll = this._tenantDb.collection('project_refunds');
     try {
-      await this._tenantDb.collection('project_refunds').dropIndex('org_key_1_payment_ack_token_1');
-    } catch (_) { /* already gone */ }
+      await coll.dropIndex('org_key_1_payment_ack_token_1');
+    } catch (_) { /* not present — nothing to drop */ }
+    try {
+      await coll.createIndex(
+        { org_key: 1, payment_ack_token: 1 },
+        {
+          name: 'org_key_1_payment_ack_token_1',
+          unique: true,
+          partialFilterExpression: { payment_ack_token: { $type: 'string' } }
+        }
+      );
+    } catch (_) { /* already in the correct shape */ }
   }
 
   async findByOrgId(orgId, projectId) {

@@ -21,6 +21,7 @@ import express from 'express';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import getRouterModels from '../../db/models/routerModels.js';
 import { constructWebhookEvent, retrieveSubscription, isStripeConfigured } from '../../services/stripeService.js';
+import { applySubscriptionToTenant, inferBillingCycle } from '../../services/subscriptionReconciler.js';
 import { invalidateEntitlements } from '../../services/entitlementService.js';
 import { writeBillingEvent } from '../../utils/writeBillingEvent.js';
 import {
@@ -135,7 +136,7 @@ async function handleCheckoutCompleted(session, req) {
   const subscriptionId = session.subscription;
   if (!subscriptionId) return;
   const stripeSub = await retrieveSubscription(subscriptionId);
-  await applySubscriptionToTenant(orgId, stripeSub, req);
+  await applySubscriptionToTenant(orgId, stripeSub, { req, source: 'stripe_webhook' });
 
   // Welcome email — best-effort.
   const ownerEmail = await getOrgOwnerEmail(orgId).catch(() => null);
@@ -166,7 +167,7 @@ async function handleSubscriptionUpdated(stripeSub, req) {
     console.warn('[stripe webhook] subscription.updated without orgId metadata, sub:', stripeSub.id);
     return;
   }
-  await applySubscriptionToTenant(orgId, stripeSub, req);
+  await applySubscriptionToTenant(orgId, stripeSub, { req, source: 'stripe_webhook' });
 }
 
 async function handleSubscriptionDeleted(stripeSub, req) {
@@ -358,116 +359,17 @@ async function handleInvoicePaymentFailed(invoice, req) {
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-/**
- * Take a Stripe subscription and write its state into our local
- * OrganizationSubscription. Pinned plan_revision_id stays unchanged on
- * updates (we don't auto-migrate revisions on Stripe events).
- */
-async function applySubscriptionToTenant(orgId, stripeSub, req) {
-  const { OrganizationSubscription, SubscriptionPlan, PlanRevision } = getRouterModels();
-  const planCode = stripeSub.metadata?.planCode || (await guessPlanFromPrice(stripeSub));
-  if (!planCode) {
-    console.warn('[stripe webhook] cannot resolve plan_code for subscription', stripeSub.id);
-    return;
-  }
-  const plan = await SubscriptionPlan.findOne({ plan_code: String(planCode).toLowerCase() });
-  if (!plan) return;
-
-  const billingCycle = inferBillingCycle(stripeSub);
-  const status = stripeStatusToLocal(stripeSub.status);
-
-  let local = await OrganizationSubscription.findOne({ organization_id: orgId });
-  let action = 'subscription.assigned';
-  if (local) {
-    action = 'subscription.changed';
-    if (String(local.plan_id) !== String(plan._id)) {
-      // Plan changed in Stripe (upgrade/downgrade) — re-pin to that plan's latest revision.
-      const latestRev = await PlanRevision.findOne({ plan_id: plan._id }).sort({ revision_number: -1 }).lean();
-      local.plan_id = plan._id;
-      local.plan_revision_id = latestRev?._id || null;
-      local.plan_revision_number = latestRev?.revision_number || null;
-    }
-    local.billing_cycle = billingCycle;
-    local.status = status;
-    local.stripe_subscription_id = stripeSub.id;
-    local.stripe_customer_id = stripeSub.customer;
-    local.current_period_start = stripeSub.current_period_start ? new Date(stripeSub.current_period_start * 1000) : new Date();
-    local.current_period_end = stripeSub.current_period_end ? new Date(stripeSub.current_period_end * 1000) : new Date();
-    local.cancel_at_period_end = !!stripeSub.cancel_at_period_end;
-    await local.save();
-  } else {
-    const latestRev = await PlanRevision.findOne({ plan_id: plan._id }).sort({ revision_number: -1 }).lean();
-    local = await OrganizationSubscription.create({
-      organization_id: orgId,
-      plan_id: plan._id,
-      plan_revision_id: latestRev?._id || null,
-      plan_revision_number: latestRev?.revision_number || null,
-      billing_cycle: billingCycle,
-      status,
-      stripe_subscription_id: stripeSub.id,
-      stripe_customer_id: stripeSub.customer,
-      current_period_start: stripeSub.current_period_start ? new Date(stripeSub.current_period_start * 1000) : new Date(),
-      current_period_end: stripeSub.current_period_end ? new Date(stripeSub.current_period_end * 1000) : new Date(),
-      cancel_at_period_end: !!stripeSub.cancel_at_period_end
-    });
-  }
-
-  invalidateEntitlements(orgId);
-
-  await writeBillingEvent(req, {
-    action,
-    targetType: 'subscription',
-    targetId: orgId,
-    targetLabel: orgId,
-    tenantId: orgId,
-    metadata: {
-      stripe_subscription_id: stripeSub.id,
-      plan_code: plan.plan_code,
-      billing_cycle: billingCycle,
-      status,
-      source: 'stripe_webhook'
-    }
-  });
-}
-
-function stripeStatusToLocal(stripeStatus) {
-  switch (stripeStatus) {
-    case 'active':              return 'active';
-    case 'trialing':            return 'trialing';
-    case 'past_due':            return 'past_due';
-    case 'unpaid':              return 'past_due';
-    case 'canceled':            return 'cancelled';
-    case 'incomplete':          return 'incomplete';
-    case 'incomplete_expired':  return 'cancelled';
-    default:                    return stripeStatus;
-  }
-}
-
-function inferBillingCycle(stripeSub) {
-  const item = stripeSub.items?.data?.[0];
-  const interval = item?.price?.recurring?.interval;
-  if (interval === 'year') return 'yearly';
-  return 'monthly';
-}
+// The subscription write-path — applySubscriptionToTenant and its
+// plan/status/billing-cycle helpers — now lives in
+// services/subscriptionReconciler.js so the webhook, the manual repair
+// script (scripts/reconcileFromCheckout.js), and the entitlement
+// self-heal path all share one implementation.
 
 async function orgIdFromCustomer(customerId) {
   if (!customerId) return null;
   const { OrganizationSubscription } = getRouterModels();
   const found = await OrganizationSubscription.findOne({ stripe_customer_id: customerId }).lean();
   return found?.organization_id || null;
-}
-
-async function guessPlanFromPrice(stripeSub) {
-  const priceId = stripeSub.items?.data?.[0]?.price?.id;
-  if (!priceId) return null;
-  const { SubscriptionPlan } = getRouterModels();
-  const plan = await SubscriptionPlan.findOne({
-    $or: [
-      { 'pricing.stripeMonthlyPriceId': priceId },
-      { 'pricing.stripeAnnualPriceId': priceId }
-    ]
-  }).lean();
-  return plan?.plan_code || null;
 }
 
 export default router;

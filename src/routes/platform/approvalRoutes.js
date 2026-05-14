@@ -139,6 +139,11 @@ router.put(
 // Get pending approvals for current user
 router.get('/pending', approvalController.getPendingApprovals);
 
+// Get in-flight approval request(s) for a specific entity — powers the
+// "routed for approval to X" banner on entity detail pages. Must stay
+// above the /:approvalRequestId route so "by-entity" isn't read as an id.
+router.get('/by-entity', approvalController.getApprovalRequestsByEntity);
+
 // Get approval request by ID
 router.get(
   '/:approvalRequestId',

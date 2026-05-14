@@ -187,6 +187,14 @@ const donorRefundSchema = new mongoose.Schema(
 );
 
 donorRefundSchema.index({ org_key: 1, token: 1 }, { unique: true });
-donorRefundSchema.index({ org_key: 1, payment_ack_token: 1 }, { unique: true, sparse: true });
+// payment_ack_token is null until the donor-acknowledgement step begins, and
+// org_key is constant within a tenant DB. `sparse` does NOT help a compound
+// index here — it only skips docs missing ALL keys, so every { org_key, null }
+// row still collides. A PARTIAL index scoped to real string tokens is correct:
+// null / missing tokens aren't indexed at all.
+donorRefundSchema.index(
+  { org_key: 1, payment_ack_token: 1 },
+  { unique: true, partialFilterExpression: { payment_ack_token: { $type: 'string' } } }
+);
 
 export default donorRefundSchema;

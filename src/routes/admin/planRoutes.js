@@ -251,6 +251,15 @@ export async function applyPlanPatch({ req, code, patch, reason = '', autoApplie
     await plan.save();
   }
 
+  // Auto-sync to Stripe whenever pricing was part of this patch, or on a
+  // plan's first materialisation (so a freshly-saved plan is immediately
+  // self-checkout-ready). syncPlanAndPersist stamps the Stripe IDs back
+  // onto `plan` and saves, so the revision snapshot below captures them.
+  let stripeSync = null;
+  if (cleaned.pricing || !prevSnapshot) {
+    stripeSync = await syncPlanAndPersist(plan, req);
+  }
+
   const newSnapshot = serializePlan(plan.toObject());
   const diff = computeDiff(prevSnapshot, newSnapshot);
 
@@ -287,7 +296,14 @@ export async function applyPlanPatch({ req, code, patch, reason = '', autoApplie
     }
   });
 
-  return { data: { ...newSnapshot, is_template: false, revisions: revisions.map(serializeRevision) } };
+  return {
+    data: {
+      ...newSnapshot,
+      is_template: false,
+      revisions: revisions.map(serializeRevision),
+      stripe_sync: summarizeSync(stripeSync)
+    }
+  };
 }
 
 /**
@@ -340,6 +356,16 @@ router.post(
     initial.updated_by = req.user?.userId || null;
 
     const created = await SubscriptionPlan.create(initial);
+
+    // Auto-provision the Stripe Product + monthly/annual Prices so the
+    // plan is self-checkout-ready the moment it's created — no manual
+    // "go to Stripe, copy the price IDs" step. Best-effort: a Stripe
+    // failure does not roll back plan creation (the manual Sync button,
+    // or the next price edit, retries).
+    const stripeSync = await syncPlanAndPersist(created, req);
+
+    // Serialize AFTER the sync so the revision-1 snapshot captures the
+    // freshly-stamped Stripe IDs.
     const snapshot = serializePlan(created.toObject());
     await PlanRevision.create({
       plan_id: created._id,
@@ -362,7 +388,7 @@ router.post(
 
     return res.status(201).json({
       success: true,
-      data: { ...snapshot, is_template: false, revisions: [] }
+      data: { ...snapshot, is_template: false, revisions: [], stripe_sync: summarizeSync(stripeSync) }
     });
   })
 );
@@ -515,43 +541,15 @@ router.post(
       });
     }
 
-    const result = await syncPlanToStripe(plan.toObject());
+    // Same code-path the auto-sync on plan create/update uses — stamps
+    // the Stripe Product/Price IDs back onto the plan doc and audits it.
+    const result = await syncPlanAndPersist(plan, req);
     if (!result.ok) {
       return res.status(502).json({
         success: false,
         error: { code: 'STRIPE_ERROR', message: result.error || 'Sync failed.' }
       });
     }
-
-    // Stamp Stripe IDs back on the plan. The product ID belongs under
-    // `pricing.stripeProductId` (that's the field the schema declares
-    // and every reader — override flow, plan detail UI, checkout —
-    // looks up). Earlier versions of this handler stored it under
-    // `metadata.stripeProductId`, which is why some plans synced
-    // successfully in Stripe but still tripped PLAN_NOT_SYNCED_TO_STRIPE
-    // when the override page tried to mint a Price. Backfill from the
-    // old location if a stale value lives there.
-    plan.pricing = {
-      ...(plan.pricing || {}),
-      stripeProductId: result.productId || plan.pricing?.stripeProductId || plan.metadata?.stripeProductId || '',
-      stripeMonthlyPriceId: result.monthlyPriceId || plan.pricing?.stripeMonthlyPriceId || '',
-      stripeAnnualPriceId: result.annualPriceId || plan.pricing?.stripeAnnualPriceId || ''
-    };
-    plan.markModified('pricing');
-    await plan.save();
-
-    await writeBillingEvent(req, {
-      action: 'plan.synced_to_stripe',
-      targetType: 'plan',
-      targetId: plan.plan_code,
-      targetLabel: plan.plan_name,
-      metadata: {
-        stripe_product_id: result.productId,
-        stripe_monthly_price_id: result.monthlyPriceId,
-        stripe_annual_price_id: result.annualPriceId,
-        created: result.created
-      }
-    });
 
     res.json({ success: true, data: { ...result, plan_code: plan.plan_code } });
   })
@@ -644,6 +642,73 @@ router.get('/feature-matrix', asyncHandler(async (req, res) => {
 }));
 
 // ── Helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Sync a saved plan to Stripe and stamp the resulting Product / Price IDs
+ * back onto the plan document. The single code-path shared by plan
+ * create, plan update, and the manual "Sync to Stripe" button.
+ *
+ * Best-effort by contract: a Stripe failure (or Stripe not configured) is
+ * returned as { ok: false, ... } and NEVER throws — a plan create/update
+ * must not be rolled back because Stripe had a bad day.
+ *
+ * `planDoc` is a live Mongoose document — it gets mutated and saved here.
+ */
+async function syncPlanAndPersist(planDoc, req) {
+  if (!isStripeConfigured()) {
+    return { ok: false, skipped: true, error: 'Stripe is not configured.' };
+  }
+  try {
+    const result = await syncPlanToStripe(planDoc.toObject());
+    if (!result.ok) return result;
+
+    // Set the three fields in place rather than rebuilding `pricing` —
+    // spreading the Mongoose nested path drops sub-objects like
+    // overageRatesAUD / stripeOverageMeters, which then fail schema cast
+    // on save ("Cast to Object failed for value undefined").
+    planDoc.pricing.stripeProductId = result.productId || planDoc.pricing.stripeProductId || '';
+    planDoc.pricing.stripeMonthlyPriceId = result.monthlyPriceId || '';
+    planDoc.pricing.stripeAnnualPriceId = result.annualPriceId || '';
+    planDoc.markModified('pricing');
+    await planDoc.save();
+
+    await writeBillingEvent(req, {
+      action: 'plan.synced_to_stripe',
+      targetType: 'plan',
+      targetId: planDoc.plan_code,
+      targetLabel: planDoc.plan_name,
+      metadata: {
+        stripe_product_id: result.productId,
+        stripe_monthly_price_id: result.monthlyPriceId,
+        stripe_annual_price_id: result.annualPriceId,
+        created: result.created,
+        archived: result.archived || []
+      }
+    });
+    return result;
+  } catch (err) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+}
+
+/** Compact, frontend-friendly summary of a syncPlanAndPersist result. */
+function summarizeSync(result) {
+  if (!result) return null;
+  if (result.skipped) {
+    return { ok: false, skipped: true, message: 'Stripe not configured — IDs not provisioned.' };
+  }
+  if (!result.ok) {
+    return { ok: false, message: result.error || 'Stripe sync failed — use "Sync to Stripe" to retry.' };
+  }
+  return {
+    ok: true,
+    product_id: result.productId,
+    monthly_price_id: result.monthlyPriceId,
+    annual_price_id: result.annualPriceId,
+    created: result.created,
+    archived: result.archived || []
+  };
+}
 
 function serializePlan(p) {
   if (!p) return null;

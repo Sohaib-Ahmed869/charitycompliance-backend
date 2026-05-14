@@ -108,6 +108,29 @@ export class ApprovalRequestRepository {
       .sort({ created_at: -1 });
   }
 
+  /**
+   * All in-flight approval requests for an entity, populated for display.
+   * "Active" = any non-terminal status (terminal = approved / rejected /
+   * cancelled / rejection_accepted). Returns an array because some
+   * entities (e.g. social media campaigns) can have two workflows in
+   * flight at once. Powers the "routed for approval" banner on entity
+   * pages — query by the reverse entity_id+entity_type link so it works
+   * even for entities that don't store a forward approval_request_id.
+   */
+  async findAllActiveByEntity(entityType, entityId) {
+    return await this.ApprovalRequest.find({
+      entity_id: entityId,
+      entity_type: entityType,
+      status: { $in: ['pending', 'pending_rejection_review', 'returned_for_resubmission', 'paused_for_coi'] }
+    })
+      .populate('submitted_by', 'first_name last_name email')
+      .populate('approval_matrix_id', 'name')
+      .populate('approval_steps.approver_user_id', 'first_name last_name email')
+      .populate('approval_steps.approver_position_id', 'title')
+      .populate('approval_steps.approver_department_id', 'name')
+      .sort({ created_at: -1 });
+  }
+
   async findPendingByApprover(userId, positionIds = []) {
     // Build query: match by user_id OR by position_id (position holders can always approve)
     // Use $elemMatch to ensure all conditions apply to the SAME array element

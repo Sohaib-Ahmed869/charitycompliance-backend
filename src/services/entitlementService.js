@@ -20,6 +20,7 @@
 import NodeCache from 'node-cache';
 import getRouterModels from '../db/models/routerModels.js';
 import { findTemplateByCode } from '../utils/defaultPlans.js';
+import { isStripeConfigured } from './stripeService.js';
 
 const ENTITLEMENT_CACHE_TTL_S = Number(process.env.ENTITLEMENT_CACHE_TTL_S || 60);
 
@@ -76,9 +77,28 @@ export function _peekCache(orgId) {
 async function computeEntitlements(orgId) {
   const { OrganizationSubscription, SubscriptionPlan, PlanRevision, SubscriptionOverride } = getRouterModels();
 
-  const sub = await OrganizationSubscription.findOne({ organization_id: orgId }).lean();
+  let sub = await OrganizationSubscription.findOne({ organization_id: orgId }).lean();
   const overrideDoc = await SubscriptionOverride.findOne({ tenant_id: orgId }).lean();
   const settings = await loadSettings();
+
+  // Self-heal: a tenant with no local subscription may actually have paid
+  // — a missed or misconfigured Stripe webhook would strand them here.
+  // Before falling back to the empty "no subscription" shape, ask Stripe
+  // whether they have a live subscription and, if so, write it locally.
+  // Read-only against Stripe until it writes, and best-effort: any failure
+  // just degrades to the no-sub shape. Dynamic import breaks the
+  // entitlementService <-> subscriptionReconciler require cycle.
+  if (!sub && isStripeConfigured()) {
+    try {
+      const { reconcileFromStripeCustomer } = await import('./subscriptionReconciler.js');
+      const healed = await reconcileFromStripeCustomer(orgId);
+      if (healed.ok) {
+        sub = await OrganizationSubscription.findOne({ organization_id: orgId }).lean();
+      }
+    } catch (err) {
+      console.error('[entitlements] self-heal reconcile failed for', orgId, '—', err?.message || err);
+    }
+  }
 
   // Apply override only if it's within its effective window AND not
   // marked expired by the sweeper. Outside the window OR if expired,

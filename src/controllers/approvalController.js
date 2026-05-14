@@ -256,6 +256,34 @@ export const getPendingApprovals = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * GET /platform/approvals/by-entity?entityType=&entityId=
+ *
+ * Returns the in-flight approval request(s) for a single entity, populated
+ * with the workflow (matrix) name and approver names. Powers the
+ * "Sent for approval to <workflow>" banner shown on entity detail pages.
+ * Reverse-queries by entity_id + entity_type so it works for every
+ * workflow-triggering entity regardless of how (or whether) the entity
+ * itself stores a link back to the approval request.
+ */
+export const getApprovalRequestsByEntity = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { entityType, entityId } = req.query;
+
+  if (!entityType || !entityId || !mongoose.Types.ObjectId.isValid(entityId)) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'INVALID_PARAMS', message: 'entityType and a valid entityId are required.' }
+    });
+  }
+
+  const tenantDb = await getTenantConnection(orgId);
+  const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+  const requests = await approvalRequestRepo.findAllActiveByEntity(entityType, entityId);
+
+  res.json({ success: true, data: requests });
+});
+
 export const uploadAcknowledgementFiles = asyncHandler(async (req, res) => {
   const files = req.files;
   const orgId = req.body.org_id || req.orgId;
