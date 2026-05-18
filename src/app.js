@@ -143,6 +143,7 @@ import governanceStructureRoutes from './routes/platform/governanceStructureRout
 import trainingRoutes from './routes/platform/trainingRoutes.js';
 import riskRoutes from './routes/platform/riskRoutes.js';
 import policyRoutes from './routes/platform/policyRoutes.js';
+import marketplaceRoutes from './routes/platform/marketplaceRoutes.js';
 import meRoutes from './routes/platform/meRoutes.js';
 import positionPermissionsRoutes from './routes/platform/positionPermissions.js';
 import notificationRoutes from './routes/platform/notificationRoutes.js';
@@ -183,6 +184,7 @@ import adminOpsRoutes from './routes/admin/opsRoutes.js';
 import adminStaffRoutes from './routes/admin/staffRoutes.js';
 import adminTicketsRoutes from './routes/admin/ticketsRoutes.js';
 import adminApprovalsRoutes from './routes/admin/approvalsRoutes.js';
+import adminMarketplacePoliciesRoutes from './routes/admin/marketplacePoliciesRoutes.js';
 import { requireIpAllowlist } from './middleware/requireIpAllowlist.js';
 import billingRoutes from './routes/platform/billingRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
@@ -202,6 +204,7 @@ if (isModuleEnabled('governance-structure')) app.use('/api/v1/platform/governanc
 if (isModuleEnabled('training')) app.use('/api/v1/platform/training', trainingRoutes);
 if (isModuleEnabled('risks')) app.use('/api/v1/platform/risks', riskRoutes);
 if (isModuleEnabled('policies')) app.use('/api/v1/platform/policies', policyRoutes);
+if (isModuleEnabled('policies')) app.use('/api/v1/platform/marketplace', marketplaceRoutes);
 app.use('/api/v1/platform/me', meRoutes);
 if (isModuleEnabled('position-permissions')) app.use('/api/v1/platform/position-permissions', positionPermissionsRoutes);
 if (isModuleEnabled('notifications')) app.use('/api/v1/platform/notifications', notificationRoutes);
@@ -248,6 +251,7 @@ app.use('/api/v1/admin', adminOpsRoutes);
 app.use('/api/v1/admin', adminStaffRoutes);
 app.use('/api/v1/admin', adminTicketsRoutes);
 app.use('/api/v1/admin', adminApprovalsRoutes);
+app.use('/api/v1/admin', adminMarketplacePoliciesRoutes);
 app.use('/api/v1/platform/billing', billingRoutes);
 
 // API info route

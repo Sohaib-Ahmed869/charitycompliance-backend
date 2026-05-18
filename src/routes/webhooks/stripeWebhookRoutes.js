@@ -95,11 +95,104 @@ async function handleCheckoutCompleted(session, req) {
     return;
   }
 
+  // Marketplace policy purchase. One-off `payment`-mode Checkout
+  // created by /platform/marketplace/policies/:id/checkout. We flip
+  // the pending MarketplacePurchase to `paid` (idempotent on
+  // stripe_session_id) and stamp the payment intent + customer.
+  const kind = session.metadata?.kind || session.payment_intent?.metadata?.kind || '';
+  if (kind === 'marketplace_policy') {
+    if (session.payment_status !== 'paid') return;
+    const policyId = session.metadata?.policy_id || session.payment_intent?.metadata?.policy_id;
+    if (!policyId) {
+      console.warn('[stripe webhook] marketplace_policy completed without policy_id metadata');
+      return;
+    }
+    const { MarketplacePurchase, BillingEvent } = getRouterModels();
+    const amountCents = Number(session.amount_total) || 0;
+
+    // Two-step "upsert by session id, fallback by (org, policy)" so
+    // the webhook is safe even if the pending row was lost between
+    // checkout-create and webhook (e.g. server restart).
+    let purchase = await MarketplacePurchase.findOne({ stripe_session_id: session.id });
+    if (!purchase) {
+      purchase = await MarketplacePurchase.findOne({
+        org_id: orgId,
+        policy_id: policyId,
+        status: { $in: ['pending', 'paid'] }
+      });
+    }
+    if (purchase) {
+      purchase.status = 'paid';
+      purchase.amount_paid_cents = amountCents || purchase.amount_paid_cents;
+      purchase.stripe_session_id = session.id;
+      purchase.stripe_payment_intent_id = typeof session.payment_intent === 'string'
+        ? session.payment_intent
+        : session.payment_intent?.id || '';
+      purchase.stripe_customer_id = typeof session.customer === 'string'
+        ? session.customer
+        : session.customer?.id || '';
+      purchase.purchased_at = new Date();
+      await purchase.save();
+    } else {
+      // No pending row found — create one outright. Title snapshot
+      // best-effort from the session line items / metadata.
+      await MarketplacePurchase.create({
+        org_id: orgId,
+        policy_id: policyId,
+        amount_paid_cents: amountCents,
+        currency: (session.currency || 'aud').toLowerCase(),
+        stripe_session_id: session.id,
+        stripe_payment_intent_id: typeof session.payment_intent === 'string' ? session.payment_intent : '',
+        stripe_customer_id: typeof session.customer === 'string' ? session.customer : '',
+        status: 'paid',
+        purchased_at: new Date(),
+        policy_title_snapshot: session.metadata?.policy_title || '',
+        policy_version_snapshot: Number(session.metadata?.policy_version) || 1
+      }).catch((err) => {
+        // Duplicate-key under concurrent webhooks (Stripe occasionally
+        // retries) — safe to swallow; the existing row is correct.
+        if (err?.code !== 11000) throw err;
+      });
+    }
+
+    await BillingEvent.create({
+      action: 'marketplace.policy_purchased',
+      target_type: 'marketplace_policy',
+      target_id: policyId,
+      target_label: session.metadata?.policy_title || policyId,
+      tenant_id: orgId,
+      reason: `Marketplace policy purchased — A$${(amountCents / 100).toFixed(2)}`,
+      metadata: {
+        policy_id: policyId,
+        amount_cents: amountCents,
+        stripe_session_id: session.id,
+        stripe_customer_id: typeof session.customer === 'string' ? session.customer : ''
+      }
+    }).catch(() => {});
+
+    // Best-effort post-purchase delivery — watermark the PDF with the
+    // org's logo and copy it into the tenant's local Policy library.
+    // Errors are swallowed here because the purchase itself succeeded;
+    // the delivery_status field on the purchase row tells us if a
+    // retry is needed.
+    try {
+      const { deliverPurchase } = await import('../../services/marketplaceDeliveryService.js');
+      const purchaseDoc = purchase || await MarketplacePurchase.findOne({ stripe_session_id: session.id });
+      if (purchaseDoc) {
+        deliverPurchase(purchaseDoc._id).catch((err) => {
+          console.error('[stripe webhook] marketplace delivery failed:', err?.message || err);
+        });
+      }
+    } catch (err) {
+      console.error('[stripe webhook] marketplace delivery dispatch failed:', err?.message || err);
+    }
+    return;
+  }
+
   // Overage pay-now path. The session.mode is 'payment' (not subscription)
   // and metadata.kind tells us it's the in-period overage settlement
   // flow. Credit the paid amount against the period budget so the
   // tenant unfreezes; no subscription is touched.
-  const kind = session.metadata?.kind || session.payment_intent?.metadata?.kind || '';
   if (kind === 'overage_paynow' || session.mode === 'payment') {
     const amountPaidCents = Number(session.amount_total) || 0;
     const amountPaidAud = amountPaidCents / 100;

@@ -152,19 +152,28 @@ async function refreshApprovalFileUrls(approvalRequest, checklistInstance = null
  * @param {string} logoUrl
  * @param {Object|null} checklistInstance
  */
-export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUrl, checklistInstance = null) => {
+export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUrl, checklistInstance = null, options = {}) => {
   // Refresh all S3 file URLs to ensure they are not expired
   ({ approvalRequest, checklistInstance } = await refreshApprovalFileUrls(approvalRequest, checklistInstance));
 
   const logoSrc = await resolveLogoSrcForPdf(logoUrl);
 
-  const browser = await puppeteer.launch({
+  // Batch caller (e.g. ZIP export) can pass an already-launched browser
+  // to skip the 1-2s puppeteer warmup per PDF. When that happens we
+  // borrow the browser, generate the PDF, close the page and leave the
+  // browser open for the next call. Otherwise we own the browser end
+  // to end, same as the original single-PDF behaviour.
+  const providedBrowser = options.browser;
+  const ownsBrowser = !providedBrowser;
+  const browser = providedBrowser || await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
 
+  let page = null;
+
   try {
-    const page = await browser.newPage();
+    page = await browser.newPage();
 
     const steps = approvalRequest.approval_steps || [];
     const previousAttempts = approvalRequest.previous_attempts || [];
@@ -594,10 +603,15 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
       margin: { top: '20px', right: '20px', bottom: '20px', left: '20px' }
     });
 
-    await browser.close();
+    // Always close the page we opened; only close the browser if we
+    // were the ones who launched it. A batch caller stays in charge
+    // of its shared browser instance.
+    await page.close().catch(() => {});
+    if (ownsBrowser) await browser.close().catch(() => {});
     return pdfBuffer;
   } catch (error) {
-    await browser.close();
+    if (page) await page.close().catch(() => {});
+    if (ownsBrowser) await browser.close().catch(() => {});
     throw error;
   }
 };

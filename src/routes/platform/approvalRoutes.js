@@ -10,6 +10,10 @@ import { body, param } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { uploadAcknowledgementFiles, handleUploadError } from '../../middleware/upload.js';
+import { asyncHandler, AppError } from '../../middleware/errorHandler.js';
+import mongoose from 'mongoose';
+import { ApprovalRequestRepository } from '../../repositories/approvalRequestRepository.js';
+import { streamApprovalsZip } from '../../services/approvalZipExportService.js';
 
 const router = express.Router();
 
@@ -116,6 +120,87 @@ router.post(
 
 // List all approval requests for the org (optional status filter)
 router.get('/list', approvalController.listApprovalRequests);
+
+/**
+ * POST /approvals/export-zip
+ *
+ * Audit-pack export. The frontend already knows which workflows match
+ * the user's filter view, so it passes the resulting approval_ids
+ * verbatim. The backend re-loads those (with org-scope safety) and
+ * streams a ZIP via approvalZipExportService.
+ *
+ * Body:
+ *   approval_ids: string[]                  required, MongoIds
+ *   filters?: object                        describes the filter set,
+ *                                           embedded in the README for
+ *                                           reproducibility
+ */
+router.post(
+  '/export-zip',
+  [
+    body('approval_ids').isArray({ min: 1, max: 5000 }),
+    body('approval_ids.*').isMongoId()
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const orgId = req.orgId;
+    const tenantDb = req.tenantDb;
+    if (!tenantDb) throw new AppError('Tenant DB not resolved', 500, 'TENANT_DB_MISSING');
+
+    // Building the repository registers ApprovalRequest + Position +
+    // Department + ApprovalMatrix + User on this tenant connection.
+    // Without that the populate chain below errors out with a
+    // MissingSchemaError on whichever ref hits Mongoose first.
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const ApprovalRequest = approvalRequestRepo.ApprovalRequest;
+
+    const ids = req.body.approval_ids.map((id) => new mongoose.Types.ObjectId(id));
+
+    // Resolve the org's _id once — the schema stores org_id as the
+    // Mongo _id of the Organization, not the string orgId.
+    const { OrganizationRepository } = await import('../../repositories/organizationRepository.js');
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (!org) throw new AppError('Organisation not found', 404, 'ORG_NOT_FOUND');
+
+    // Fetch the full docs with the populates the exporter needs.
+    const approvals = await ApprovalRequest.find({
+      _id: { $in: ids },
+      org_id: org._id
+    })
+      .populate('submitted_by', 'first_name last_name email')
+      .populate('approval_matrix_id', 'name')
+      // Field is `approval_steps`, not `steps` — matches the schema.
+      .populate('approval_steps.approver_user_id', 'first_name last_name email')
+      .populate('approval_steps.approver_position_id', 'name title')
+      .populate('approval_steps.approver_department_id', 'name')
+      .populate('rejection_reviews.rejected_by', 'first_name last_name email')
+      .populate('rejection_reviews.forwarded_to', 'first_name last_name email')
+      .populate('escalations.escalated_by', 'first_name last_name email')
+      .populate('escalations.escalated_to', 'first_name last_name email')
+      .sort({ created_at: -1 })
+      .lean();
+
+    if (!approvals.length) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NO_WORKFLOWS', message: 'No matching workflows found for this organisation.' }
+      });
+    }
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `approval-workflows-${orgId}-${dateStr}.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    await streamApprovalsZip(approvals, res, {
+      orgId,
+      filters: req.body.filters || {},
+      orgLogoUrl: org.logo_url || ''
+    });
+  })
+);
 
 // Update workflow positions for an action type
 router.put(
