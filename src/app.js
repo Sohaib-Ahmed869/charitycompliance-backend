@@ -123,6 +123,11 @@ app.get('/health', (req, res) => {
 import authRoutes from './routes/platform/authRoutes.js';
 app.use('/api/v1/auth', authRoutes);
 
+// Public, unauthenticated marketing data (used by the /pricing page on the
+// public site). No tenant context, no auth middleware — read-only catalogue.
+import publicPlansRoutes from './routes/public/publicPlansRoutes.js';
+app.use('/api/v1/public/plans', publicPlansRoutes);
+
 // Platform routes (auth required)
 import organizationRoutes from './routes/platform/organizationRoutes.js';
 import roleRoutes from './routes/platform/roleRoutes.js';
