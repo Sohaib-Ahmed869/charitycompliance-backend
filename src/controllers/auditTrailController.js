@@ -126,7 +126,7 @@ function filterEventsByRequestId(allEvents, requestId) {
 }
 
 
-async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
+export async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = null) {
   // Ensure models for entity lookups
   const Policy = tenantDb.models.Policy || tenantDb.model('Policy', policySchema);
   const Expense = tenantDb.models.Expense || tenantDb.model('Expense', expenseSchema);
@@ -1724,4 +1724,89 @@ export const downloadAuditTrailPDF = asyncHandler(async (req, res) => {
   res.send(pdfBuffer);
 });
 
-export default { getAuditTrail, downloadAuditTrailPDF };
+/**
+ * Bulk audit-trail PDF — every audit event (workflows, governance,
+ * COI, documents, board changes, financial thresholds, …) in a single
+ * PDF, with the SAME filters the in-app /audit-trail page uses.
+ * POST /platform/audit-trail/export-pdf
+ */
+export const exportAuditTrailPDF = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = req.tenantDb || await getTenantConnection(orgId);
+
+  // Same access model as getAuditTrail — admin/auditor see all, others
+  // only their own actions.
+  const userRepo = new UserRepository(tenantDb);
+  const user = await userRepo.findById(req.user?.userId);
+  const isAdmin = !!user?.is_org_owner || user?.is_auditor === true;
+  const requestedUserId = String(req.body?.userId || '').trim();
+  const actorFilterUserId = isAdmin
+    ? (requestedUserId || null)
+    : String(req.user?.userId || '');
+
+  const startDate = req.body?.startDate ? new Date(req.body.startDate) : null;
+  const endDate   = req.body?.endDate   ? new Date(req.body.endDate)   : null;
+  const hasValidStart = startDate && !Number.isNaN(startDate.getTime());
+  const hasValidEnd   = endDate   && !Number.isNaN(endDate.getTime());
+  if (hasValidEnd) endDate.setHours(23, 59, 59, 999);
+  const moduleFilter  = String(req.body?.module || '').trim().toLowerCase();
+  const search        = String(req.body?.search || '').trim().toLowerCase();
+
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+  // Register related repositories so populates inside the helper work.
+  new ApprovalRequestRepository(tenantDb);
+  new CoiRequestRepository(tenantDb);
+
+  const allEvents = await buildAuditTrailEventsArray(tenantDb, org, orgId);
+
+  const filtered = allEvents
+    .filter((e) => {
+      const ts = new Date(e.timestamp);
+      if (Number.isNaN(ts.getTime())) return false;
+      if (hasValidStart && ts < startDate) return false;
+      if (hasValidEnd   && ts > endDate)   return false;
+      if (actorFilterUserId) {
+        const id = e.actor?.id ? String(e.actor.id) : '';
+        if (id !== String(actorFilterUserId)) return false;
+      }
+      if (moduleFilter && moduleFilter !== 'all' && String(e.module || '').toLowerCase() !== moduleFilter) return false;
+      if (search) {
+        const haystack = [
+          e.actor?.name, e.actor?.role, e.action, e.module,
+          e.details?.entity_title, e.request_type
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (!haystack.includes(search)) return false;
+      }
+      return true;
+    })
+    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+  // Lazy-import the renderer so the controller bundle stays light
+  // until someone actually exports.
+  const { generateAuditTrailReportPdf } = await import('../services/auditTrailPdfService.js');
+  const pdfBuffer = await generateAuditTrailReportPdf({
+    events: filtered,
+    filters: {
+      module: moduleFilter || undefined,
+      search: search || undefined,
+      startDate: hasValidStart ? startDate.toISOString().slice(0, 10) : undefined,
+      endDate:   hasValidEnd   ? endDate.toISOString().slice(0, 10)   : undefined,
+      actor: actorFilterUserId || undefined
+    },
+    org,
+    orgLogoUrl: org?.logo_url || ''
+  });
+
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const filename = `audit-trail-${orgId}-${dateStr}.pdf`;
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Content-Length', pdfBuffer.length);
+  res.send(pdfBuffer);
+});
+
+export default { getAuditTrail, downloadAuditTrailPDF, exportAuditTrailPDF };

@@ -14,6 +14,7 @@ import { asyncHandler, AppError } from '../../middleware/errorHandler.js';
 import mongoose from 'mongoose';
 import { ApprovalRequestRepository } from '../../repositories/approvalRequestRepository.js';
 import { streamApprovalsZip } from '../../services/approvalZipExportService.js';
+import { streamApprovalsMergedPdf } from '../../services/approvalMergedPdfService.js';
 
 const router = express.Router();
 
@@ -197,7 +198,77 @@ router.post(
     await streamApprovalsZip(approvals, res, {
       orgId,
       filters: req.body.filters || {},
-      orgLogoUrl: org.logo_url || ''
+      orgLogoUrl: org.logo_url || '',
+      // Pass the tenant connection so the service can look up + write
+      // the per-workflow PDF cache collection.
+      tenantDb
+    });
+  })
+);
+
+/**
+ * POST /approvals/export-pdf
+ *
+ * Sibling of /export-zip — same input contract (approval_ids), same
+ * caching pipeline, but the response is a SINGLE merged PDF containing
+ * every workflow's full audit page back-to-back. Replaces the older
+ * client-side `generateApprovalWorkflowsPDF` which only had summary
+ * data and couldn't see attachments / rejection reviews / escalations.
+ */
+router.post(
+  '/export-pdf',
+  [
+    body('approval_ids').isArray({ min: 1, max: 5000 }),
+    body('approval_ids.*').isMongoId()
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const orgId = req.orgId;
+    const tenantDb = req.tenantDb;
+    if (!tenantDb) throw new AppError('Tenant DB not resolved', 500, 'TENANT_DB_MISSING');
+
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const ApprovalRequest = approvalRequestRepo.ApprovalRequest;
+    const ids = req.body.approval_ids.map((id) => new mongoose.Types.ObjectId(id));
+
+    const { OrganizationRepository } = await import('../../repositories/organizationRepository.js');
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (!org) throw new AppError('Organisation not found', 404, 'ORG_NOT_FOUND');
+
+    const approvals = await ApprovalRequest.find({
+      _id: { $in: ids },
+      org_id: org._id
+    })
+      .populate('submitted_by', 'first_name last_name email')
+      .populate('approval_matrix_id', 'name')
+      .populate('approval_steps.approver_user_id', 'first_name last_name email')
+      .populate('approval_steps.approver_position_id', 'name title')
+      .populate('approval_steps.approver_department_id', 'name')
+      .populate('rejection_reviews.rejected_by', 'first_name last_name email')
+      .populate('rejection_reviews.forwarded_to', 'first_name last_name email')
+      .populate('escalations.escalated_by', 'first_name last_name email')
+      .populate('escalations.escalated_to', 'first_name last_name email')
+      .sort({ created_at: -1 })
+      .lean();
+
+    if (!approvals.length) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NO_WORKFLOWS', message: 'No matching workflows found for this organisation.' }
+      });
+    }
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `approval-workflows-${orgId}-${dateStr}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    await streamApprovalsMergedPdf(approvals, res, {
+      orgId,
+      orgLogoUrl: org.logo_url || '',
+      tenantDb
     });
   })
 );

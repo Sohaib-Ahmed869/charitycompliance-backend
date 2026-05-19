@@ -36,6 +36,356 @@ const formatCurrency = (amount) => {
 
 const esc = (str) => String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// ── Entity-detail renderer (used by the ZIP exporter) ───────────────
+// Per-entity-type curated field allowlist. Each entry chooses the
+// human-meaningful fields (title, category, etc.) and ignores infra
+// noise (file_path, mime_type, uploaded_by, approval_matrix_id, etc.).
+// File-pointer fields are turned into clickable presigned-URL links
+// so the auditor can open the source document straight from the PDF.
+
+const ENTITY_INFRA_FIELDS = new Set([
+  '_id', '__v', 'org_id', 'organization_id', 'tenant_id',
+  'created_at', 'updated_at', 'createdAt', 'updatedAt',
+  'created_by', 'updated_by',
+  'is_deleted', 'deleted_at', 'deleted_by',
+  '_encrypted_fields'
+]);
+
+/**
+ * Field configuration per entity_type. Each entry has:
+ *   title:  section heading
+ *   fields: ordered list of { key, label, format? } — format ∈
+ *           date | titleCase | currency | boolean | none (default)
+ *   file:   optional { keyField, nameField, label } — renders as a
+ *           clickable link to a presigned S3 URL
+ *
+ * Only entity_types listed here render structured details. Anything
+ * else falls back to a "Reference: <type>:<id>" line.
+ */
+const ENTITY_CONFIG = {
+  policy: {
+    title: 'Policy Details',
+    fields: [
+      { key: 'title',             label: 'Title' },
+      { key: 'category',          label: 'Category' },
+      { key: 'description',       label: 'Description' },
+      { key: 'status',            label: 'Status', format: 'titleCase' },
+      { key: 'version',           label: 'Version' },
+      { key: 'effective_date',    label: 'Effective Date', format: 'date' },
+      { key: 'review_cycle',      label: 'Review Cycle' },
+      { key: 'next_review_date',  label: 'Next Review',    format: 'date' },
+      { key: 'review_date',       label: 'Last Reviewed',  format: 'date' }
+    ],
+    file: { keyField: 'file_path', nameField: 'file_name', label: 'Policy Document' }
+  },
+  expense: {
+    title: 'Expense Details',
+    fields: [
+      { key: 'expense_name',    label: 'Name' },
+      { key: 'amount',          label: 'Amount',       format: 'currency' },
+      { key: 'category',        label: 'Category' },
+      { key: 'description',     label: 'Description' },
+      { key: 'vendor_name',     label: 'Vendor' },
+      { key: 'expense_date',    label: 'Expense Date', format: 'date' },
+      { key: 'date',            label: 'Date',         format: 'date' },
+      { key: 'status',          label: 'Status',       format: 'titleCase' },
+      { key: 'payment_method',  label: 'Payment Method' }
+    ]
+  },
+  risk: {
+    title: 'Risk Details',
+    fields: [
+      { key: 'title',        label: 'Title' },
+      { key: 'description',  label: 'Description' },
+      { key: 'category',     label: 'Category' },
+      { key: 'status',       label: 'Status', format: 'titleCase' },
+      { key: 'likelihood',   label: 'Likelihood' },
+      { key: 'severity',     label: 'Severity' },
+      { key: 'risk_score',   label: 'Risk Score' },
+      { key: 'owner',        label: 'Owner' },
+      { key: 'review_date',  label: 'Next Review', format: 'date' }
+    ]
+  },
+  donor: {
+    title: 'Donor Details',
+    fields: [
+      { key: 'name',              label: 'Name' },
+      { key: 'organization_name', label: 'Organisation' },
+      { key: 'display_name',      label: 'Display Name' },
+      { key: 'donor_type',        label: 'Donor Type',  format: 'titleCase' },
+      { key: 'email',             label: 'Email' },
+      { key: 'phone',             label: 'Phone' },
+      { key: 'kyc_status',        label: 'KYC Status',  format: 'titleCase' },
+      { key: 'vip_flag',          label: 'VIP Donor',   format: 'boolean' },
+      { key: 'country',           label: 'Country' }
+    ]
+  },
+  donation: {
+    title: 'Donation Details',
+    fields: [
+      { key: 'title',          label: 'Title' },
+      { key: 'campaign_name',  label: 'Campaign' },
+      { key: 'amount',         label: 'Amount', format: 'currency' },
+      { key: 'donation_date',  label: 'Date',   format: 'date' },
+      { key: 'donor_name',     label: 'Donor' },
+      { key: 'status',         label: 'Status', format: 'titleCase' },
+      { key: 'description',    label: 'Description' }
+    ]
+  },
+  donation_agreement: {
+    title: 'Donation Agreement',
+    fields: [
+      { key: 'agreement_title', label: 'Title' },
+      { key: 'donor_name',      label: 'Donor' },
+      { key: 'amount',          label: 'Amount',     format: 'currency' },
+      { key: 'start_date',      label: 'Start Date', format: 'date' },
+      { key: 'end_date',        label: 'End Date',   format: 'date' },
+      { key: 'status',          label: 'Status',     format: 'titleCase' }
+    ],
+    file: { keyField: 'document_path', nameField: 'document_name', label: 'Signed Agreement' }
+  },
+  donation_milestone: {
+    title: 'Donation Milestone',
+    fields: [
+      { key: 'title',         label: 'Milestone' },
+      { key: 'description',   label: 'Description' },
+      { key: 'due_date',      label: 'Due Date',     format: 'date' },
+      { key: 'completed_at',  label: 'Completed At', format: 'date' },
+      { key: 'amount',        label: 'Amount',       format: 'currency' },
+      { key: 'status',        label: 'Status',       format: 'titleCase' }
+    ]
+  },
+  grant: {
+    title: 'Grant Details',
+    fields: [
+      { key: 'title',        label: 'Title' },
+      { key: 'grant_name',   label: 'Grant Name' },
+      { key: 'amount',       label: 'Amount',     format: 'currency' },
+      { key: 'donor',        label: 'Donor' },
+      { key: 'start_date',   label: 'Start Date', format: 'date' },
+      { key: 'end_date',     label: 'End Date',   format: 'date' },
+      { key: 'status',       label: 'Status',     format: 'titleCase' },
+      { key: 'description',  label: 'Description' }
+    ]
+  },
+  funding_agreement: {
+    title: 'Funding Agreement',
+    fields: [
+      { key: 'agreement_title', label: 'Title' },
+      { key: 'partner_name',    label: 'Partner' },
+      { key: 'amount',          label: 'Amount',     format: 'currency' },
+      { key: 'start_date',      label: 'Start Date', format: 'date' },
+      { key: 'end_date',        label: 'End Date',   format: 'date' },
+      { key: 'status',          label: 'Status',     format: 'titleCase' }
+    ]
+  },
+  project: {
+    title: 'Project Details',
+    fields: [
+      { key: 'project_name', label: 'Project Name' },
+      { key: 'description',  label: 'Description' },
+      { key: 'start_date',   label: 'Start Date', format: 'date' },
+      { key: 'end_date',     label: 'End Date',   format: 'date' },
+      { key: 'status',       label: 'Status',     format: 'titleCase' },
+      { key: 'budget',       label: 'Budget',     format: 'currency' }
+    ]
+  },
+  partner_vetting: {
+    title: 'Partner Vetting',
+    fields: [
+      { key: 'partner_name',        label: 'Partner' },
+      { key: 'organization_name',   label: 'Organisation' },
+      { key: 'country',             label: 'Country' },
+      { key: 'kyc_status',          label: 'KYC Status',     format: 'titleCase' },
+      { key: 'sanctions_status',    label: 'Sanctions Check', format: 'titleCase' },
+      { key: 'status',              label: 'Status',         format: 'titleCase' }
+    ]
+  },
+  complaint: {
+    title: 'Complaint Details',
+    fields: [
+      { key: 'complaint_title', label: 'Title' },
+      { key: 'subject',         label: 'Subject' },
+      { key: 'description',     label: 'Description' },
+      { key: 'category',        label: 'Category' },
+      { key: 'severity',        label: 'Severity', format: 'titleCase' },
+      { key: 'status',          label: 'Status',   format: 'titleCase' },
+      { key: 'reported_by',     label: 'Reported By' },
+      { key: 'reported_at',     label: 'Reported At', format: 'date' }
+    ]
+  },
+  coi: {
+    title: 'Conflict of Interest',
+    fields: [
+      { key: 'title',        label: 'Title' },
+      { key: 'nature',       label: 'Nature of Conflict' },
+      { key: 'subject',      label: 'Subject' },
+      { key: 'description',  label: 'Description' },
+      { key: 'declared_by',  label: 'Declared By' },
+      { key: 'declared_at',  label: 'Declared At', format: 'date' },
+      { key: 'status',       label: 'Status',      format: 'titleCase' }
+    ]
+  },
+  contract: {
+    title: 'Contract Details',
+    fields: [
+      { key: 'contract_title', label: 'Title' },
+      { key: 'counterparty',   label: 'Counterparty' },
+      { key: 'value',          label: 'Value',      format: 'currency' },
+      { key: 'start_date',     label: 'Start Date', format: 'date' },
+      { key: 'end_date',       label: 'End Date',   format: 'date' },
+      { key: 'status',         label: 'Status',     format: 'titleCase' }
+    ],
+    file: { keyField: 'document_path', nameField: 'document_name', label: 'Contract Document' }
+  },
+  purchase: {
+    title: 'Purchase Request',
+    fields: [
+      { key: 'item_description', label: 'Item' },
+      { key: 'description',      label: 'Description' },
+      { key: 'amount',           label: 'Amount',  format: 'currency' },
+      { key: 'vendor',           label: 'Vendor' },
+      { key: 'status',           label: 'Status',  format: 'titleCase' }
+    ]
+  },
+  social_media_campaign: {
+    title: 'Campaign Details',
+    fields: [
+      { key: 'campaign_name', label: 'Campaign' },
+      { key: 'platform',      label: 'Platform' },
+      { key: 'description',   label: 'Description' },
+      { key: 'start_date',    label: 'Start Date', format: 'date' },
+      { key: 'end_date',      label: 'End Date',   format: 'date' },
+      { key: 'budget',        label: 'Budget',     format: 'currency' },
+      { key: 'status',        label: 'Status',     format: 'titleCase' }
+    ]
+  },
+  sweep_funds: {
+    title: 'Sweep Funds Request',
+    fields: [
+      { key: 'title',                       label: 'Title' },
+      { key: 'reference',                   label: 'Reference' },
+      { key: 'amount',                      label: 'Amount', format: 'currency' },
+      { key: 'source_portal',               label: 'From' },
+      { key: 'destination_account_label',   label: 'To' },
+      { key: 'status',                      label: 'Status', format: 'titleCase' }
+    ]
+  },
+  donor_refund: {
+    title: 'Donor Refund',
+    fields: [
+      { key: 'donor_name',  label: 'Donor' },
+      { key: 'amount',      label: 'Amount', format: 'currency' },
+      { key: 'reason',      label: 'Reason' },
+      { key: 'status',      label: 'Status', format: 'titleCase' },
+      { key: 'created_at',  label: 'Initiated At', format: 'date' }
+    ]
+  },
+  meeting: {
+    title: 'Meeting Details',
+    fields: [
+      { key: 'title',         label: 'Title' },
+      { key: 'meeting_date',  label: 'Date',     format: 'date' },
+      { key: 'location',      label: 'Location' },
+      { key: 'agenda',        label: 'Agenda' },
+      { key: 'status',        label: 'Status',   format: 'titleCase' }
+    ]
+  },
+  training: {
+    title: 'Training Programme',
+    fields: [
+      { key: 'title',        label: 'Title' },
+      { key: 'category',     label: 'Category' },
+      { key: 'description',  label: 'Description' },
+      { key: 'duration',     label: 'Duration' },
+      { key: 'status',       label: 'Status', format: 'titleCase' }
+    ]
+  }
+};
+
+/** Format a single value according to its declared format type. */
+function formatFieldCell(value, format) {
+  if (value === null || value === undefined || value === '') return '';
+  if (format === 'date')      { try { return esc(formatDate(value)); } catch { return esc(String(value)); } }
+  if (format === 'currency')  return esc(formatCurrency(Number(value) || 0));
+  if (format === 'boolean')   return value ? 'Yes' : 'No';
+  if (format === 'titleCase') return esc(toTitleCase(value));
+  if (Array.isArray(value)) {
+    if (!value.length) return '';
+    if (value.every((v) => typeof v !== 'object')) return value.map((v) => esc(String(v))).join(', ');
+    return `${value.length} item${value.length === 1 ? '' : 's'}`;
+  }
+  if (typeof value === 'object') {
+    if (value._bsontype === 'ObjectId' || value.toHexString) return esc(value.toString());
+    return esc(JSON.stringify(value));
+  }
+  return esc(String(value));
+}
+
+/**
+ * Render the entity-details section. Async because file fields are
+ * resolved into presigned S3 URLs so the auditor can click straight
+ * through to the source document from the PDF.
+ *
+ * Falls back to a single-line reference for entity_types not in the
+ * config map (rare — covers the long tail of obscure workflow kinds).
+ */
+async function renderEntityHTML(entity, entityType, requestType) {
+  if (!entity || typeof entity !== 'object') return '';
+  const lookupKey = String(entityType || requestType || '').toLowerCase();
+  const config = ENTITY_CONFIG[lookupKey];
+  if (!config) {
+    // Unknown type — show just the title or reference so the auditor
+    // at least sees "this approval was for X".
+    const fallbackTitle = entity.title || entity.name || entity.display_name || entity.subject;
+    if (!fallbackTitle) return '';
+    return `
+      <h2>Entity Details</h2>
+      <table class="info-table">
+        <tr><td>Reference</td><td>${esc(fallbackTitle)}</td></tr>
+      </table>
+    `;
+  }
+
+  // Curated field rows — skip anything empty or missing.
+  const rows = [];
+  for (const field of config.fields) {
+    const raw = entity[field.key];
+    if (raw === null || raw === undefined || raw === '') continue;
+    const cell = formatFieldCell(raw, field.format);
+    if (!cell) continue;
+    rows.push(`<tr><td>${esc(field.label)}</td><td>${cell}</td></tr>`);
+  }
+
+  // File-link row — resolves to a 7-day presigned URL so the auditor
+  // can open the source file directly. Failures to mint a URL fall
+  // back to the filename in plain text.
+  if (config.file) {
+    const key  = entity[config.file.keyField];
+    const name = entity[config.file.nameField] || (typeof key === 'string' ? key.split('/').pop() : '');
+    if (key && typeof key === 'string') {
+      let href = '';
+      try {
+        href = await getFileUrl(key, 7 * 24 * 60 * 60);
+      } catch (err) {
+        // Bad/missing S3 key — render the filename without a link.
+      }
+      const cell = href
+        ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${esc(name || 'Open document')}</a>`
+        : esc(name || 'Document attached');
+      rows.push(`<tr><td>${esc(config.file.label)}</td><td>${cell}</td></tr>`);
+    }
+  }
+
+  if (!rows.length) return '';
+  return `
+    <h2>${esc(config.title)}</h2>
+    <table class="info-table">
+      ${rows.join('\n      ')}
+    </table>
+  `;
+}
+
 const REQUEST_TYPE_LABELS = {
   expense: 'Expense Reimbursement',
   risk: 'Risk Assessment',
@@ -194,6 +544,12 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
     const pendingSteps = steps.filter(s => s.status === 'pending').length;
 
     // ── Entity Details ──
+    // For the ZIP exporter we pass the raw entity document as
+    // `options.entity` along with its entity_type. The generic
+    // renderer below covers every workflow type — policy, donor,
+    // risk, grant, complaint, etc. — by listing the entity's
+    // human-meaningful fields. The legacy expense/risk paths still
+    // win when those are explicitly passed (in-app single-PDF flow).
     let entityHTML = '';
     if (expense) {
       entityHTML = `
@@ -234,6 +590,12 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
           </table>
         `;
       }
+    } else if (options.entity) {
+      // Curated entity renderer — used by the ZIP exporter for every
+      // workflow type that doesn't have a dedicated section above.
+      // Per-type allowlist of fields with proper formatting, plus a
+      // clickable presigned-URL link for the entity's main document.
+      entityHTML = await renderEntityHTML(options.entity, options.entityType, approvalRequest.request_type);
     }
 
     // ── Steps table ──
@@ -398,6 +760,130 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
       `;
     }
     
+    // ── Submitter notes ──
+    // Reason / context the submitter wrote at request time. The
+    // controller writes this for policy + donor_refund flows; for
+    // other types it may be empty.
+    let submitterNotesHTML = '';
+    const submitterNotes = approvalRequest.submitter_notes;
+    if (submitterNotes && String(submitterNotes).trim()) {
+      submitterNotesHTML = `
+        <h2>Submitter Notes</h2>
+        <table class="info-table">
+          <tr>
+            <td>From ${esc(submittedBy)}</td>
+            <td style="white-space:pre-wrap;">${esc(submitterNotes)}</td>
+          </tr>
+        </table>
+      `;
+    }
+
+    // ── Rejection reviews ──
+    // When an approver rejects mid-flow, they can forward the
+    // rejection to someone (typically a senior) for a second
+    // opinion. The full back-and-forth lives in rejection_reviews[]
+    // and is part of the audit trail — render it as its own table.
+    let rejectionReviewsHTML = '';
+    const rrList = Array.isArray(approvalRequest.rejection_reviews) ? approvalRequest.rejection_reviews : [];
+    if (rrList.length) {
+      const rrRows = rrList.map((rr, i) => {
+        const rejectedByName = rr.rejected_by
+          ? `${rr.rejected_by.first_name || ''} ${rr.rejected_by.last_name || ''}`.trim() || rr.rejected_by.email || '—'
+          : '—';
+        const forwardedToName = rr.forwarded_to
+          ? `${rr.forwarded_to.first_name || ''} ${rr.forwarded_to.last_name || ''}`.trim() || rr.forwarded_to.email || '—'
+          : '—';
+        const filesHTML = (rr.rejection_files || []).map((f) => {
+          const name = esc(f.name || 'file');
+          return f.url
+            ? `<a href="${esc(f.url)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${name}</a>`
+            : name;
+        }).join(', ') || '—';
+        const reviewLabel = rr.review_action === 'accept_rejection'
+          ? 'Rejection upheld'
+          : rr.review_action === 'reject_rejection'
+            ? 'Rejection overturned'
+            : toTitleCase(rr.review_status || 'pending');
+
+        return `<tr>
+          <td>${i + 1}</td>
+          <td style="font-size:9.5px;">${esc(rejectedByName)}<div style="color:#64748B;">at step ${rr.step_index ?? '—'}</div></td>
+          <td style="font-size:9.5px;">${esc(forwardedToName)}</td>
+          <td style="font-size:9.5px;white-space:pre-wrap;">${esc(rr.rejection_comments || '—')}</td>
+          <td style="font-size:9.5px;white-space:pre-wrap;">${esc(rr.review_comments || '—')}</td>
+          <td style="font-size:9.5px;">${esc(reviewLabel)}</td>
+          <td style="font-size:9.5px;">${rr.reviewed_at ? `${formatDate(rr.reviewed_at)}<br/>${formatTime(rr.reviewed_at)}` : '—'}</td>
+          <td style="font-size:9.5px;">${filesHTML}</td>
+        </tr>`;
+      }).join('');
+
+      rejectionReviewsHTML = `
+        <h2>Rejection Reviews</h2>
+        <table>
+          <thead><tr>
+            <th>#</th>
+            <th>Rejected By</th>
+            <th>Forwarded To</th>
+            <th>Rejection Reason</th>
+            <th>Reviewer Response</th>
+            <th>Outcome</th>
+            <th>Reviewed At</th>
+            <th>Files</th>
+          </tr></thead>
+          <tbody>${rrRows}</tbody>
+        </table>
+      `;
+    }
+
+    // ── Escalations ──
+    // Ad-hoc "second opinion" requests an approver can raise without
+    // changing the matrix. Each escalation has a question + the
+    // escalated party's response. Sometimes legal/CFO weighs in here.
+    let escalationsHTML = '';
+    const escalations = Array.isArray(approvalRequest.escalations) ? approvalRequest.escalations : [];
+    if (escalations.length) {
+      const escRows = escalations.map((e, i) => {
+        const byName = e.escalated_by
+          ? `${e.escalated_by.first_name || ''} ${e.escalated_by.last_name || ''}`.trim() || e.escalated_by.email || '—'
+          : '—';
+        const toName = e.escalated_to
+          ? `${e.escalated_to.first_name || ''} ${e.escalated_to.last_name || ''}`.trim() || e.escalated_to.email || '—'
+          : '—';
+        const filesHTML = (e.escalation_files || []).map((f) => {
+          const name = esc(f.name || 'file');
+          return f.url
+            ? `<a href="${esc(f.url)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${name}</a>`
+            : name;
+        }).join(', ') || '—';
+
+        return `<tr>
+          <td>${i + 1}</td>
+          <td style="font-size:9.5px;">${esc(byName)}<div style="color:#64748B;">at step ${e.step_index ?? '—'}</div></td>
+          <td style="font-size:9.5px;">${esc(toName)}</td>
+          <td style="font-size:9.5px;white-space:pre-wrap;">${esc(e.request_comments || '—')}</td>
+          <td style="font-size:9.5px;white-space:pre-wrap;">${esc(e.comments || (e.responded_at ? '(no comment)' : '(pending)'))}</td>
+          <td style="font-size:9.5px;">${e.responded_at ? `${formatDate(e.responded_at)}<br/>${formatTime(e.responded_at)}` : '—'}</td>
+          <td style="font-size:9.5px;">${filesHTML}</td>
+        </tr>`;
+      }).join('');
+
+      escalationsHTML = `
+        <h2>Escalations / Second Opinions</h2>
+        <table>
+          <thead><tr>
+            <th>#</th>
+            <th>Escalated By</th>
+            <th>To</th>
+            <th>Question</th>
+            <th>Response</th>
+            <th>Responded At</th>
+            <th>Files</th>
+          </tr></thead>
+          <tbody>${escRows}</tbody>
+        </table>
+      `;
+    }
+
     // ── Attempt history ──
     let attemptsHTML = '';
     if (previousAttempts.length > 0) {
@@ -487,7 +973,12 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
     h1 { margin: 0; font-size: 18px; letter-spacing: -0.01em; }
     .subtitle { margin-top: 6px; font-size: 11px; color: #374151; line-height: 1.5; }
 
-    h2 { margin: 18px 0 8px; font-size: 13px; color: #111; border-bottom: 1px solid #111; padding-bottom: 3px; }
+    h2 { margin: 18px 0 8px; font-size: 13px; color: #111; border-bottom: 1px solid #111; padding-bottom: 3px;
+         break-after: avoid; page-break-after: avoid; }
+    /* Never split a table row across pages — keeps approval-step rows,
+       rejection-review entries and other audit rows readable in one piece. */
+    tr { break-inside: avoid; page-break-inside: avoid; }
+    table { -webkit-print-color-adjust: exact; }
     h3 { margin: 14px 0 8px; font-size: 12px; color: #111; }
     h4 { margin: 10px 0 6px; font-size: 11px; color: #111; }
 
@@ -565,6 +1056,8 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
 
     ${entityHTML}
 
+    ${submitterNotesHTML}
+
     <h2>Approval Journey</h2>
     <div class="flowchart-container">
       ${generateApprovalFlowchart(approvalRequest)}
@@ -582,6 +1075,8 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
       <tbody>${stepRows}</tbody>
     </table>
 
+    ${rejectionReviewsHTML}
+    ${escalationsHTML}
     ${attemptsHTML}
     ${ackHTML}
     ${checklistHTML}
@@ -595,7 +1090,17 @@ export const generateApprovalPDF = async (approvalRequest, expense, risk, logoUr
 </html>
     `;
 
-    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+    // Batch callers can override the navigation policy. 'networkidle0'
+    // waits for zero network activity — perfect for one-off PDFs where
+    // we want every embedded image to load, but it'll hang for the
+    // full 30s if any external asset is slow. The batch ZIP exporter
+    // can afford a slightly less crisp render in exchange for a
+    // bounded per-PDF time, so it passes waitUntil: 'load' (DOM + sync
+    // assets) and a shorter timeout.
+    await page.setContent(htmlContent, {
+      waitUntil: options.waitUntil || 'networkidle0',
+      timeout: options.timeout || 30000
+    });
 
     const pdfBuffer = await page.pdf({
       format: 'A4',

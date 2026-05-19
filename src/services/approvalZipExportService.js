@@ -23,12 +23,116 @@
  */
 
 import archiver from 'archiver';
+import mongoose from 'mongoose';
 import puppeteer from 'puppeteer';
-import { getFileStream } from './s3Service.js';
+import { getFileStream, uploadToS3 } from './s3Service.js';
 import { generateApprovalPDF } from './approvalPdfService.js';
+import approvalPdfCacheSchema from '../db/schemas/platform/approvalPdfCacheSchema.js';
 import { logError, logInfo } from '../utils/logger.js';
 
+// ── entity_type → raw collection map ────────────────────────────────
+// Mirrors the resolver in approvalController.listApprovalRequests. We
+// pull the entity straight off the raw Mongo collection so we don't
+// need to register every domain schema on the tenant connection.
+const ENTITY_COLLECTIONS = {
+  risk:                 'risks',
+  policy:               'policies',
+  expense:              'expenses',
+  project:              'projects_register',
+  funding_agreement:    'funding_agreements',
+  donor:                'donors',
+  donation:             'donations',
+  donation_agreement:   'donation_agreements',
+  donation_milestone:   'donation_milestones',
+  grant:                'grants',
+  complaint:            'complaints',
+  coi:                  'coi_declarations',
+  partner_vetting:      'partner_vettings',
+  social_media_campaign:'social_media_campaigns',
+  sweep_funds:          'sweep_funds_requests',
+  donor_refund:         'donor_refunds',
+  contract:             'contracts',
+  meeting:              'meetings',
+  purchase:             'purchase_requests',
+  training:             'training_programs'
+};
+
+/** Batch-fetch entities keyed by `${entity_type}:${entity_id}`. */
+async function fetchEntitiesByWorkflow(tenantDb, approvals) {
+  if (!tenantDb || !approvals?.length) return new Map();
+  const byType = new Map();
+  for (const a of approvals) {
+    const t = String(a.entity_type || '').toLowerCase();
+    const idStr = a.entity_id?._id?.toString?.() || a.entity_id?.toString?.();
+    if (!t || !idStr || !ENTITY_COLLECTIONS[t]) continue;
+    if (!byType.has(t)) byType.set(t, new Set());
+    byType.get(t).add(idStr);
+  }
+
+  const map = new Map();
+  await Promise.all(Array.from(byType.entries()).map(async ([type, idSet]) => {
+    try {
+      const coll = tenantDb.collection(ENTITY_COLLECTIONS[type]);
+      const ids = Array.from(idSet).map((s) => {
+        try { return new mongoose.Types.ObjectId(s); } catch { return null; }
+      }).filter(Boolean);
+      if (!ids.length) return;
+      const docs = await coll.find({ _id: { $in: ids } }).toArray();
+      for (const d of docs) {
+        map.set(`${type}:${d._id.toString()}`, d);
+      }
+    } catch (err) {
+      // Tenant may not have this collection — skip silently.
+      logError(`[zip] entity fetch failed for ${type}:`, err?.message || err);
+    }
+  }));
+  return map;
+}
+
+// ── Concurrency primitive ───────────────────────────────────────────
+// A tiny p-limit replacement so we don't add a new dep. Spins `limit`
+// workers that pull items from a shared cursor — keeps memory bounded
+// (only `limit` jobs in flight) without a queue or external library.
+async function mapWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const worker = async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  };
+  const workers = [];
+  const n = Math.min(limit, items.length);
+  for (let i = 0; i < n; i++) workers.push(worker());
+  await Promise.all(workers);
+  return results;
+}
+
+// Tuneables. Fresh Puppeteer renders are CPU+memory bound — capped at
+// 2 to stay safe on low-RAM hosts (Render free tier ~512MB). Cache
+// reads + attachment fetches are I/O-bound and can run wider.
+const RENDER_CONCURRENCY = 2;
+const CACHE_READ_CONCURRENCY = 8;
+const ATTACHMENT_CONCURRENCY = 5;
+
+// Bump this whenever the PDF renderer changes shape (new sections,
+// curated entity fields, layout tweaks). Cached PDFs with a mismatched
+// template_version are treated as stale and re-rendered.
+const PDF_TEMPLATE_VERSION = 'v3-full-audit-trail';
+
 // ── helpers ─────────────────────────────────────────────────────────
+
+/** Collect an S3 (or any) readable stream into a Buffer. */
+function streamToBuffer(readable) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    readable.on('data',  (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+    readable.on('end',   () => resolve(Buffer.concat(chunks)));
+    readable.on('error', reject);
+  });
+}
 
 /** Make a filename / folder segment safe for any OS: strip slashes,
  *  collapse whitespace, trim length. */
@@ -125,7 +229,7 @@ function collectAttachments(approval) {
 
 // ── builders ────────────────────────────────────────────────────────
 
-function buildReadme({ generatedAt, orgId, filters, count, missingAttachments, failedPdfs }) {
+function buildReadme({ generatedAt, orgId, filters, count, missingAttachments, failedPdfs, cacheStats }) {
   const lines = [];
   lines.push('Stewardex — Approval Workflow Export');
   lines.push('====================================');
@@ -133,6 +237,9 @@ function buildReadme({ generatedAt, orgId, filters, count, missingAttachments, f
   lines.push(`Generated:   ${generatedAt.toISOString()}`);
   lines.push(`Organisation: ${orgId}`);
   lines.push(`Workflows:   ${count}`);
+  if (cacheStats) {
+    lines.push(`Render path: ${cacheStats.hit} cached + ${cacheStats.miss} freshly rendered`);
+  }
   lines.push('');
   lines.push('Filters applied');
   lines.push('---------------');
@@ -143,17 +250,21 @@ function buildReadme({ generatedAt, orgId, filters, count, missingAttachments, f
   lines.push('');
   lines.push('Archive layout');
   lines.push('--------------');
-  lines.push('  all-workflows.csv         — summary row per workflow');
+  lines.push('  all-workflows.csv         — summary index, one row per workflow');
   lines.push('  workflows/YYYY/MM/<id>/   — one folder per workflow:');
-  lines.push('      workflow.pdf          — human-readable audit document (the main file)');
-  lines.push('      timeline.csv          — every step, decision, actor, timestamp');
-  lines.push('      comments.csv          — every comment across steps + reviews');
-  lines.push('      workflow.json         — full Mongoose snapshot for tooling');
-  lines.push('      attachments/          — all files attached, pulled inline');
+  lines.push('      workflow.pdf          — the audit document. Includes the entity');
+  lines.push('                              (policy / expense / risk / donor / …),');
+  lines.push('                              every approval step with timestamps + actor,');
+  lines.push('                              every comment, every signature.');
+  lines.push('      attachments/          — every file referenced by the workflow,');
+  lines.push('                              pulled inline.');
   lines.push('');
   if (failedPdfs?.length) {
     lines.push(`Note: ${failedPdfs.length} workflow PDF(s) could not be rendered. The`);
     lines.push('JSON snapshot and CSVs still carry the full data — use those for audit if needed.');
+    failedPdfs.forEach((f) => {
+      lines.push(`  • ${f.workflow}: ${f.error}`);
+    });
     lines.push('');
   }
   if (missingAttachments?.length) {
@@ -275,8 +386,13 @@ function workflowFolderPath(approval) {
  * `orgLogoUrl` is the tenant's logo (Organization.logo_url) — embedded
  * in every per-workflow PDF header so the audit pack looks like
  * official org-branded paperwork.
+ *
+ * `tenantDb` is required for the per-workflow PDF cache lookup — when
+ * a workflow hasn't changed since its last render we reuse the cached
+ * PDF from S3 instead of spending another Puppeteer cycle. Pass the
+ * same connection the caller used to fetch `approvals`.
  */
-export async function streamApprovalsZip(approvals, res, { orgId, filters, orgLogoUrl = '' }) {
+export async function streamApprovalsZip(approvals, res, { orgId, filters, orgLogoUrl = '', tenantDb = null }) {
   const archive = archiver('zip', { zlib: { level: 9 } });
 
   archive.on('warning', (err) => {
@@ -293,104 +409,192 @@ export async function streamApprovalsZip(approvals, res, { orgId, filters, orgLo
 
   const missingAttachments = [];
   const failedPdfs = [];
+  const cacheStats = { hit: 0, miss: 0 };
 
   // Top-level summary CSV first — fast, no I/O.
   archive.append(buildAllWorkflowsCsv(approvals), { name: 'all-workflows.csv' });
 
-  // ── Shared Puppeteer browser for ALL per-workflow PDFs ────────────
-  // Launching Chromium is the slow part (~1-2s). The previous code
-  // launched it once per workflow, which made a 20-workflow export
-  // take 30-60s. Now we launch once up front and reuse the browser
-  // for every PDF — each PDF after the first is just a few hundred ms.
+  // ── PDF cache lookup ────────────────────────────────────────────
+  // For each workflow we check ApprovalPdfCache: if the cached entry's
+  // source_updated_at is ≥ the workflow's updatedAt, the cached PDF on
+  // S3 is still fresh and we skip the Puppeteer render entirely. This
+  // makes repeat exports near-instant — only changed workflows pay the
+  // render cost.
+  let PdfCache = null;
+  if (tenantDb) {
+    PdfCache = tenantDb.models.ApprovalPdfCache
+      || tenantDb.model('ApprovalPdfCache', approvalPdfCacheSchema);
+  }
+
+  const cacheRows = PdfCache
+    ? await PdfCache.find({ workflow_id: { $in: approvals.map((a) => a._id) } }).lean()
+    : [];
+  const cacheByWorkflow = Object.fromEntries(cacheRows.map((r) => [r.workflow_id.toString(), r]));
+
+  // Batch-fetch the underlying entity (policy / risk / expense / etc.)
+  // for each workflow so the per-workflow PDF can include its details.
+  const entityMap = await fetchEntitiesByWorkflow(tenantDb, approvals);
+
+  // Compute the work plan: for each workflow either "reuse cached"
+  // (download from S3) or "render fresh" (puppeteer).
+  // Cache freshness factors in BOTH the approval's updatedAt and the
+  // entity's updatedAt — editing a linked policy invalidates the
+  // cached PDF even if the approval itself wasn't touched.
+  const workItems = approvals.map((a) => {
+    const wfId = a._id.toString();
+    const cached = cacheByWorkflow[wfId];
+    const entityKey = `${String(a.entity_type || '').toLowerCase()}:${a.entity_id?._id?.toString?.() || a.entity_id?.toString?.() || ''}`;
+    const entity = entityMap.get(entityKey) || null;
+    const aTs = new Date(a.updatedAt || a.updated_at || a.created_at || 0).getTime();
+    const eTs = new Date(entity?.updatedAt || entity?.updated_at || 0).getTime();
+    const sourceUpdatedAt = new Date(Math.max(aTs, eTs));
+    const isFresh = cached
+      && cached.source_updated_at
+      && new Date(cached.source_updated_at) >= sourceUpdatedAt
+      // Template-version match — a renderer change automatically
+      // invalidates cached PDFs without needing to wipe the collection.
+      && (cached.template_version || 'v1') === PDF_TEMPLATE_VERSION;
+    return { approval: a, entity, cached: isFresh ? cached : null, sourceUpdatedAt };
+  });
+
+  // ── Shared Puppeteer browser — only launch if we actually need it ─
+  // If every workflow has a fresh cached PDF we can skip Chromium
+  // entirely and the export becomes pure I/O against S3.
+  const needsRender = workItems.some((w) => !w.cached);
   let sharedBrowser = null;
-  try {
-    sharedBrowser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
-  } catch (err) {
-    // If Chromium can't launch at all the PDFs will all fail; we
-    // still ship the JSON/CSV/attachments so the export isn't lost.
-    logError('[zip] could not launch Chromium for batched PDFs:', err?.message || err);
+  if (needsRender) {
+    try {
+      sharedBrowser = await puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+      });
+    } catch (err) {
+      logError('[zip] could not launch Chromium for batched PDFs:', err?.message || err);
+    }
   }
 
   try {
-    // One folder per workflow.
-    for (const a of approvals) {
-      const folder = workflowFolderPath(a);
+    // ── Per-workflow pipeline ──────────────────────────────────────
+    // Concurrency-capped. PDFs are CPU+memory heavy (cap 2) while
+    // attachment fetches are I/O (cap 5 per workflow). Top-level
+    // Outer concurrency stays at RENDER_CONCURRENCY because any item
+    // may hit the slow path (Puppeteer). Cache hits still benefit
+    // from the parallel attachment fetches per workflow.
+    await mapWithConcurrency(workItems, RENDER_CONCURRENCY, async ({ approval, entity, cached, sourceUpdatedAt }) => {
+      const folder = workflowFolderPath(approval);
 
-      // ── Per-workflow PDF — the human-readable audit document ──
-      // Reuses sharedBrowser so we skip the per-PDF Chromium warm-up.
-      try {
-        const pdfResult = await generateApprovalPDF(
-          a, null, null, orgLogoUrl, null,
-          sharedBrowser ? { browser: sharedBrowser } : undefined
-        );
-        // Puppeteer v24+ returns a Uint8Array from page.pdf(), but
-        // archiver.append() refuses anything that isn't a Buffer,
-        // Stream or string. Buffer.from(uint8array) is a zero-copy
-        // re-wrap (shares the same underlying memory), so this is
-        // cheap even for large PDFs.
-        const pdfBuffer = Buffer.isBuffer(pdfResult) ? pdfResult : Buffer.from(pdfResult);
-        archive.append(pdfBuffer, { name: `${folder}/workflow.pdf` });
-      } catch (err) {
-        logError(`[zip] PDF generation failed for ${a._id}:`, err?.message || err);
-        failedPdfs.push({ workflow: a._id?.toString(), error: err?.message || String(err) });
-      }
-
-      // Supporting CSVs — easy to grep through.
-      archive.append(buildTimelineCsv(a),          { name: `${folder}/timeline.csv` });
-      archive.append(buildCommentsCsv(a),          { name: `${folder}/comments.csv` });
-
-      // Raw JSON snapshot kept as a structured-data backup for
-      // downstream tooling. Auditors don't read it; engineers do.
-      archive.append(JSON.stringify(a, null, 2), { name: `${folder}/workflow.json` });
-
-      // Attachments — fetched serially to keep S3 load predictable.
-      // We collect each stream into a Buffer BEFORE appending it to
-      // the archive. Appending an in-flight Readable means any S3
-      // error mid-stream propagates into archiver as a fatal error
-      // (which destroys the response, producing the
-      // ERR_INCOMPLETE_CHUNKED_ENCODING the client was seeing). With
-      // a buffered append, any failure is caught right here and the
-      // export keeps going.
-      const attachments = collectAttachments(a);
-      for (const att of attachments) {
+      // ── 1. Per-workflow PDF (cache hit vs miss) ──
+      let pdfBuffer = null;
+      if (cached) {
+        // Cache hit — stream the cached PDF from S3 once.
         try {
-          const s3 = await getFileStream(att.key);
-          const bytes = await new Promise((resolve, reject) => {
-            const chunks = [];
-            s3.Body.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
-            s3.Body.on('end',   () => resolve(Buffer.concat(chunks)));
-            s3.Body.on('error', reject);
-          });
-          const filename = `${att.source}__${safeSegment(att.name, 'attachment')}`;
-          archive.append(bytes, { name: `${folder}/attachments/${filename}` });
+          const s3 = await getFileStream(cached.s3_key);
+          pdfBuffer = await streamToBuffer(s3.Body);
+          cacheStats.hit++;
         } catch (err) {
-          logError(`[zip] could not fetch attachment ${att.key}:`, err?.message || err);
-          missingAttachments.push({ workflow: a._id?.toString(), key: att.key, name: att.name });
+          // Cached entry pointed at a missing S3 key — fall through
+          // and re-render. Don't surface this to the auditor; just
+          // log + recover.
+          logError(`[zip] cached PDF unreadable for ${approval._id} (${cached.s3_key}):`, err?.message || err);
+          pdfBuffer = null;
         }
       }
-    }
+      if (!pdfBuffer) {
+        try {
+          // Pass the entity through as a generic param so the PDF
+          // generator can render entity details inline (policy fields,
+          // expense breakdown, risk scoring, etc.).
+          const pdfResult = await generateApprovalPDF(
+            approval, null, null, orgLogoUrl, null,
+            {
+              ...(sharedBrowser ? { browser: sharedBrowser } : {}),
+              waitUntil: 'load',
+              timeout: 15000,
+              entity,
+              entityType: approval.entity_type
+            }
+          );
+          pdfBuffer = Buffer.isBuffer(pdfResult) ? pdfResult : Buffer.from(pdfResult);
+          cacheStats.miss++;
+
+          // Persist to the cache for next time. Failure here is
+          // non-fatal — we still ship the PDF this run, just no cache
+          // for next.
+          if (PdfCache) {
+            try {
+              const cacheKey = `_approval-pdf-cache/${orgId}/${approval._id}.pdf`;
+              const upload = await uploadToS3(pdfBuffer, `${approval._id}.pdf`, 'application/pdf', orgId, 'approval-pdf-cache');
+              await PdfCache.findOneAndUpdate(
+                { workflow_id: approval._id },
+                {
+                  $set: {
+                    s3_key: upload.key || cacheKey,
+                    bytes: pdfBuffer.length,
+                    source_updated_at: sourceUpdatedAt || new Date(),
+                    template_version: PDF_TEMPLATE_VERSION,
+                    generated_at: new Date()
+                  }
+                },
+                { upsert: true }
+              );
+            } catch (cacheErr) {
+              logError(`[zip] cache save failed for ${approval._id}:`, cacheErr?.message || cacheErr);
+            }
+          }
+        } catch (err) {
+          const detail = err?.message || err?.toString?.() || String(err);
+          const stack = err?.stack ? `\n${err.stack.split('\n').slice(0, 5).join('\n')}` : '';
+          // eslint-disable-next-line no-console
+          console.error(`[zip] PDF generation failed for ${approval._id}: ${detail}${stack}`);
+          logError(`[zip] PDF generation failed for ${approval._id}: ${detail}`);
+          failedPdfs.push({ workflow: approval._id?.toString(), error: detail });
+        }
+      }
+      if (pdfBuffer) archive.append(pdfBuffer, { name: `${folder}/workflow.pdf` });
+
+      // The workflow PDF now carries all the timeline + comments +
+      // entity detail an auditor needs. No more per-workflow CSV/JSON
+      // companions — the top-level all-workflows.csv is the single
+      // structured-data index.
+
+      // ── 2. Attachments (parallel within the workflow) ──
+      const attachments = collectAttachments(approval);
+      const attBuffers = await mapWithConcurrency(attachments, ATTACHMENT_CONCURRENCY, async (att) => {
+        try {
+          const s3 = await getFileStream(att.key);
+          const bytes = await streamToBuffer(s3.Body);
+          return { att, bytes, err: null };
+        } catch (err) {
+          return { att, bytes: null, err };
+        }
+      });
+      for (const { att, bytes, err } of attBuffers) {
+        if (err || !bytes) {
+          logError(`[zip] could not fetch attachment ${att.key}:`, err?.message || err);
+          missingAttachments.push({ workflow: approval._id?.toString(), key: att.key, name: att.name });
+          continue;
+        }
+        const filename = `${att.source}__${safeSegment(att.name, 'attachment')}`;
+        archive.append(bytes, { name: `${folder}/attachments/${filename}` });
+      }
+    });
   } finally {
-    // Always close the shared browser, even if the loop threw.
-    if (sharedBrowser) {
-      await sharedBrowser.close().catch(() => {});
-    }
+    if (sharedBrowser) await sharedBrowser.close().catch(() => {});
   }
 
-  // README last so missingAttachments / failedPdfs are accurate.
+  // README last so missingAttachments / failedPdfs / cacheStats are accurate.
   archive.append(buildReadme({
     generatedAt: new Date(),
     orgId,
     filters,
     count: approvals.length,
     missingAttachments,
-    failedPdfs
+    failedPdfs,
+    cacheStats
   }), { name: 'README.txt' });
 
   await archive.finalize();
-  logInfo(`[zip] approvals export streamed: ${approvals.length} workflows, ${missingAttachments.length} missing attachments, ${failedPdfs.length} PDF failures`);
+  logInfo(`[zip] approvals export streamed: ${approvals.length} workflows, ${cacheStats.hit} cache hits, ${cacheStats.miss} fresh renders, ${missingAttachments.length} missing attachments, ${failedPdfs.length} PDF failures`);
 }
 
 export default { streamApprovalsZip };
