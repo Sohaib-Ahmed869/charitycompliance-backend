@@ -65,15 +65,23 @@ const marketplacePurchaseSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     default: null
   },
-  // 'pending' = paid but not yet copied to tenant
-  // 'delivered' = tenant Policy row created
-  // 'failed' = delivery error (we still let the user re-trigger)
+  // 'pending'     = paid but not yet copied to tenant
+  // 'in_progress' = atomic claim taken by a delivery worker; prevents
+  //                 webhook + reconcile-checkout from running twice in
+  //                 parallel and minting two Policy rows
+  // 'delivered'   = tenant Policy row created
+  // 'failed'      = delivery error (we still let the user re-trigger)
   delivery_status: {
     type: String,
-    enum: ['pending', 'delivered', 'failed'],
+    enum: ['pending', 'in_progress', 'delivered', 'failed'],
     default: 'pending'
   },
   delivery_error: { type: String, default: '' },
+  // True when the tenant has no approval workflow configured for
+  // policies. The delivered Policy is saved as `draft` instead of
+  // entering review; the frontend surfaces a "create a workflow to
+  // publish" message until the buyer sets one up.
+  workflow_pending: { type: Boolean, default: false },
 
   purchased_at: { type: Date, default: null },
   created_at:   { type: Date, default: Date.now },

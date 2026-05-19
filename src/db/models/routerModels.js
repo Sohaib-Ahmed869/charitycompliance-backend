@@ -20,6 +20,7 @@ import subscriptionOverrideSchema from '../schemas/router/subscriptionOverrideSc
 import marketplacePolicyGroupSchema from '../schemas/router/marketplacePolicyGroupSchema.js';
 import marketplacePolicySchema from '../schemas/router/marketplacePolicySchema.js';
 import marketplacePurchaseSchema from '../schemas/router/marketplacePurchaseSchema.js';
+import marketplacePublicPurchaseSchema from '../schemas/router/marketplacePublicPurchaseSchema.js';
 
 let routerConnection = null;
 
@@ -42,7 +43,8 @@ const getRouterModels = () => {
     WebsiteLead: routerConnection.model('WebsiteLead', websiteLeadSchema),
     MarketplacePolicyGroup: routerConnection.model('MarketplacePolicyGroup', marketplacePolicyGroupSchema),
     MarketplacePolicy: routerConnection.model('MarketplacePolicy', marketplacePolicySchema),
-    MarketplacePurchase: routerConnection.model('MarketplacePurchase', marketplacePurchaseSchema)
+    MarketplacePurchase: routerConnection.model('MarketplacePurchase', marketplacePurchaseSchema),
+    MarketplacePublicPurchase: routerConnection.model('MarketplacePublicPurchase', marketplacePublicPurchaseSchema)
   };
 };
 

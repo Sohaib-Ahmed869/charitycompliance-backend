@@ -53,6 +53,25 @@ export async function resolvePartnerActionToken(token, expectedType = null) {
   return doc;
 }
 
+/**
+ * Look up a token regardless of is_active. Used by public context
+ * endpoints to distinguish "never existed / expired" from "already
+ * submitted" so the UI can show the right copy.
+ */
+export async function findPartnerActionToken(token, expectedType = null) {
+  const routerDb = getRouterConnection();
+  const col = routerDb.collection(COLLECTION);
+  const query = { token };
+  if (expectedType) query.action_type = expectedType;
+  return col.findOne(query);
+}
+
+/**
+ * Mark a token as used AND deactivate it. Single-use semantics —
+ * after a successful submission the same link can't be reused. The
+ * row stays in the collection so context endpoints can still detect
+ * "already submitted" and show a friendly message.
+ */
 export async function markPartnerActionTokenUsed(token) {
   const routerDb = getRouterConnection();
   const col = routerDb.collection(COLLECTION);
@@ -60,7 +79,7 @@ export async function markPartnerActionTokenUsed(token) {
     { token },
     {
       $inc: { used_count: 1 },
-      $set: { last_used_at: new Date(), updated_at: new Date() },
+      $set: { last_used_at: new Date(), updated_at: new Date(), is_active: false },
     }
   );
 }

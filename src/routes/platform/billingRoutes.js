@@ -966,7 +966,49 @@ router.post(
           : plan.pricing?.stripeSetupMonthlyPriceId)
       : null;
 
-    const frontendBase = serverConfig.frontendUrl;
+    // Resolve the redirect base URL. Priority:
+    //   1. Body-supplied success_url / cancel_url (caller is most
+    //      authoritative — they know exactly where to land).
+    //   2. The request's Origin / Referer header — this is where the
+    //      user actually is. A localhost frontend hitting a deployed
+    //      backend should still get bounced back to localhost.
+    //   3. FRONTEND_URL env — last-resort fallback for server-to-server
+    //      callers (webhooks, scripts) that have no Origin header.
+    //
+    // Previously env beat header, which sent local-dev users to the
+    // deployed Vercel host after Stripe.
+    const headerOriginRaw = (req.get('origin') || req.get('referer') || '').replace(/\/$/, '');
+    // If the Referer header includes a path, strip it down to the origin.
+    let headerOrigin = '';
+    try {
+      headerOrigin = headerOriginRaw ? new URL(headerOriginRaw).origin : '';
+    } catch {
+      headerOrigin = headerOriginRaw;
+    }
+    const envOrigin = (serverConfig.frontendUrl || '').replace(/\/$/, '');
+    const frontendBase = headerOrigin || envOrigin || '';
+
+    const callerSuccess = typeof req.body?.success_url === 'string' && req.body.success_url.trim();
+    const callerCancel  = typeof req.body?.cancel_url  === 'string' && req.body.cancel_url.trim();
+    const isAbsoluteHttpUrl = (u) => /^https?:\/\/[^\s/]+/.test(u || '');
+    // Build the URLs. Stripe needs absolute http(s):// — verify before
+    // sending so we error cleanly here instead of letting Stripe reject.
+    const successUrl = callerSuccess
+      ? callerSuccess
+      : `${frontendBase}/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`;
+    const cancelUrl = callerCancel
+      ? callerCancel
+      : `${frontendBase}/billing?checkout=cancelled`;
+    if (!isAbsoluteHttpUrl(successUrl) || !isAbsoluteHttpUrl(cancelUrl)) {
+      return res.status(500).json({
+        success: false,
+        error: {
+          code: 'CHECKOUT_URL_INVALID',
+          message: 'Could not resolve a valid frontend URL for Stripe Checkout. Pass success_url/cancel_url, or set FRONTEND_URL on the server.'
+        }
+      });
+    }
+
     console.log('[checkout] creating Stripe session — discounts:', preBuiltDiscounts, 'fallback couponCode:', fallbackCouponCode);
     const session = await createCheckoutSession({
       customerId,
@@ -974,8 +1016,8 @@ router.post(
       orgId: req.orgId,
       planCode: plan.plan_code,
       billingCycle,
-      successUrl: `${frontendBase}/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-      cancelUrl: `${frontendBase}/billing?checkout=cancelled`,
+      successUrl,
+      cancelUrl,
       trialDays: plan.trial_days || 0,
       // Pre-built `discounts` wins; otherwise we fall back to letting
       // createCheckoutSession resolve the raw string against Stripe.
@@ -1016,6 +1058,49 @@ router.post('/portal', asyncHandler(async (req, res) => {
   });
   res.json({ success: true, data: { url: session.url } });
 }));
+
+/**
+ * POST /platform/billing/reconcile-checkout
+ * Body: { session_id }
+ *
+ * Fallback for environments where Stripe webhooks can't reach this
+ * backend (local dev without Stripe CLI, or webhook misconfigured in
+ * prod). Frontend calls this when redirected back from Checkout with
+ * ?checkout=success&session_id=cs_... and we pull the subscription
+ * directly from Stripe and write it locally. Idempotent — re-running
+ * is a no-op if the local row already matches.
+ */
+router.post(
+  '/reconcile-checkout',
+  [body('session_id').isString().trim().notEmpty()],
+  validate,
+  asyncHandler(async (req, res) => {
+    if (!isStripeConfigured()) {
+      return res.status(503).json({
+        success: false,
+        error: { code: 'STRIPE_NOT_CONFIGURED', message: 'Stripe is not yet configured.' }
+      });
+    }
+    const { reconcileFromCheckoutSession } = await import('../../services/subscriptionReconciler.js');
+    const result = await reconcileFromCheckoutSession(req.body.session_id);
+    if (!result.ok) {
+      return res.status(409).json({
+        success: false,
+        error: { code: 'RECONCILE_FAILED', message: result.reason || 'Could not reconcile checkout session.' }
+      });
+    }
+    // Verify the session actually belongs to the caller's org — guard
+    // against a tenant trying to claim someone else's session.
+    if (result.orgId && String(result.orgId).toLowerCase() !== String(req.orgId).toLowerCase()) {
+      return res.status(403).json({
+        success: false,
+        error: { code: 'SESSION_NOT_FOR_TENANT', message: 'Session does not belong to this organisation.' }
+      });
+    }
+    invalidateEntitlements(req.orgId);
+    res.json({ success: true, data: { action: result.action, status: result.status } });
+  })
+);
 
 // ── helpers ──────────────────────────────────────────────────────────
 

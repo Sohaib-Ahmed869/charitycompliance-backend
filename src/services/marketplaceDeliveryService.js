@@ -24,13 +24,15 @@
  * source file is still licensed and tracked through MarketplacePurchase.
  */
 
-import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib';
 import { uploadToS3, getFileStream } from './s3Service.js';
+import { convertDocxBufferToPdfBuffer } from './docxToPdfService.js';
 import { getTenantConnection } from '../db/connectionManager.js';
 import getRouterModels from '../db/models/routerModels.js';
 import organizationSchema from '../db/schemas/platform/organizationSchema.js';
 import policySchema from '../db/schemas/platform/policySchema.js';
-import { logError, logInfo } from '../utils/logger.js';
+import { ApprovalWorkflowService } from './approvalWorkflowService.js';
+import { brandMarketplacePdf } from './policyPdfBrandingService.js';
+import { logError, logInfo, logWarn } from '../utils/logger.js';
 
 // ── helpers ─────────────────────────────────────────────────────────
 
@@ -44,136 +46,74 @@ async function streamToBuffer(stream) {
   });
 }
 
-/** Turn a data: URL or http URL into PNG/JPG bytes pdf-lib can embed. */
+/**
+ * Turn a data: URL or http URL into PNG/JPG bytes pdf-lib can embed.
+ *
+ * Handles the common variants of data URLs:
+ *   data:image/png;base64,...
+ *   data:image/png;name=logo.png;base64,...     (some browsers add this)
+ *   data:image/png;charset=utf-8;base64,...     (rare but valid)
+ *
+ * Returns null when the URL is missing, empty, or can't be parsed —
+ * caller falls back to the org-name text header.
+ */
 async function fetchLogoBytes(logoUrl) {
   if (!logoUrl) return null;
   const raw = String(logoUrl).trim();
   if (!raw) return null;
 
   if (raw.startsWith('data:')) {
-    const match = /^data:([^;]+);base64,(.+)$/i.exec(raw);
-    if (!match) return null;
-    const mime = match[1].toLowerCase();
-    const bytes = Buffer.from(match[2], 'base64');
+    // Split on the FIRST comma — everything before is the metadata,
+    // everything after is the payload. base64 alphabet never includes
+    // commas so the split is unambiguous.
+    const commaIdx = raw.indexOf(',');
+    if (commaIdx === -1) {
+      logWarn(`[marketplace] logo data URL missing comma — length=${raw.length}`);
+      return null;
+    }
+    const meta = raw.slice(5, commaIdx); // strip "data:"
+    const payload = raw.slice(commaIdx + 1);
+    const metaParts = meta.split(';').map((p) => p.trim().toLowerCase());
+    const mime = metaParts[0] || 'application/octet-stream';
+    const isBase64 = metaParts.includes('base64');
+    if (!isBase64) {
+      logWarn(`[marketplace] logo data URL not base64-encoded (mime=${mime})`);
+      return null;
+    }
+    let bytes;
+    try {
+      bytes = Buffer.from(payload, 'base64');
+    } catch (err) {
+      logError('[marketplace] logo base64 decode failed:', err?.message || err);
+      return null;
+    }
+    logInfo(`[marketplace] logo decoded: mime=${mime}, bytes=${bytes.length}`);
     return { bytes, mime };
   }
   if (/^https?:\/\//i.test(raw)) {
     try {
       const r = await fetch(raw);
-      if (!r.ok) return null;
+      if (!r.ok) {
+        logWarn(`[marketplace] logo http fetch returned ${r.status} for ${raw.slice(0, 80)}`);
+        return null;
+      }
       const buf = Buffer.from(await r.arrayBuffer());
       const mime = (r.headers.get('content-type') || '').toLowerCase();
+      logInfo(`[marketplace] logo fetched: mime=${mime}, bytes=${buf.length}`);
       return { bytes: buf, mime };
     } catch (err) {
       logError('[marketplace] logo fetch failed:', err?.message || err);
       return null;
     }
   }
+  logWarn(`[marketplace] logo URL has unrecognised scheme (first 30 chars: "${raw.slice(0, 30)}")`);
   return null;
 }
 
-/**
- * Watermark a PDF buffer:
- *   • top-right header rectangle with the org logo (if available)
- *     and org name text
- *   • diagonal "Licensed to <Org Name>" pattern across each page in
- *     low opacity so screenshots remain traceable but reading is
- *     unaffected
- */
-async function watermarkPdf(pdfBytes, { orgName, logoBytes, logoMime }) {
-  const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
-  const font = await doc.embedFont(StandardFonts.HelveticaBold);
-
-  let logoImage = null;
-  if (logoBytes && logoMime) {
-    try {
-      if (logoMime.includes('png')) {
-        logoImage = await doc.embedPng(logoBytes);
-      } else if (logoMime.includes('jpeg') || logoMime.includes('jpg')) {
-        logoImage = await doc.embedJpg(logoBytes);
-      }
-    } catch (err) {
-      // Logo embed can fail on unusual formats; fall back to text-only.
-      logError('[marketplace] logo embed failed:', err?.message || err);
-    }
-  }
-
-  const safeOrgName = String(orgName || 'Licensed organisation').slice(0, 80);
-  const diagonalLabel = `Licensed to ${safeOrgName}`;
-
-  const pages = doc.getPages();
-  for (const page of pages) {
-    const { width, height } = page.getSize();
-
-    // ── Header band — logo + org name in the top-right ──────────────
-    const headerH = 36;
-    const padding = 18;
-    page.drawRectangle({
-      x: 0,
-      y: height - headerH,
-      width,
-      height: headerH,
-      color: rgb(0.043, 0.149, 0.224), // brand deep navy
-      opacity: 0.92
-    });
-
-    // Org name (right-aligned)
-    const nameSize = 11;
-    const nameWidth = font.widthOfTextAtSize(safeOrgName, nameSize);
-    page.drawText(safeOrgName, {
-      x: width - padding - nameWidth,
-      y: height - headerH + (headerH - nameSize) / 2 + 1,
-      size: nameSize,
-      font,
-      color: rgb(1, 1, 1)
-    });
-
-    // Logo on the left of the header band (if we have one)
-    if (logoImage) {
-      const targetH = headerH - 12;
-      const scale = targetH / logoImage.height;
-      const logoW = logoImage.width * scale;
-      page.drawImage(logoImage, {
-        x: padding,
-        y: height - headerH + (headerH - targetH) / 2,
-        width: logoW,
-        height: targetH
-      });
-    } else {
-      // No logo — fall back to "Stewardex" wordmark text on the left.
-      page.drawText('Stewardex', {
-        x: padding,
-        y: height - headerH + (headerH - 11) / 2 + 1,
-        size: 11,
-        font,
-        color: rgb(0.302, 0.702, 0.659) // brand-teal
-      });
-    }
-
-    // ── Diagonal repeated watermark ────────────────────────────────
-    const wmSize = 22;
-    const wmColor = rgb(0.043, 0.149, 0.224);
-    const wmOpacity = 0.08;
-    const spacingY = 130;
-    const spacingX = 320;
-
-    for (let y = -spacingY; y < height + spacingY; y += spacingY) {
-      for (let x = -spacingX; x < width + spacingX; x += spacingX) {
-        page.drawText(diagonalLabel, {
-          x,
-          y,
-          size: wmSize,
-          font,
-          color: wmColor,
-          opacity: wmOpacity,
-          rotate: degrees(-28)
-        });
-      }
-    }
-  }
-
-  return Buffer.from(await doc.save());
-}
+// Watermarking lives in policyPdfBrandingService.js (a cover page +
+// a per-page top-right logo). Kept as a thin wrapper so the rest of
+// this file's call sites don't have to thread the policy title /
+// purchase date through manually.
 
 /**
  * deliverPurchase — main entry point. Idempotent: safe to call twice.
@@ -182,12 +122,43 @@ async function watermarkPdf(pdfBytes, { orgName, logoBytes, logoMime }) {
  */
 export async function deliverPurchase(purchaseId) {
   const { MarketplacePurchase, MarketplacePolicy } = getRouterModels();
-  const purchase = await MarketplacePurchase.findById(purchaseId);
-  if (!purchase) return { ok: false, error: 'Purchase not found' };
-  if (purchase.status !== 'paid') return { ok: false, error: 'Purchase not paid' };
-  if (purchase.delivery_status === 'delivered' && purchase.delivered_policy_id) {
-    return { ok: true, deliveredPolicyId: purchase.delivered_policy_id };
+
+  // ── Atomic claim ──────────────────────────────────────────────────
+  // Webhook delivery and the frontend's reconcile-checkout call can
+  // both invoke this fn at roughly the same instant. Without an
+  // atomic flip on the purchase row, both readers would see
+  // delivery_status='pending' and end up creating two Policy rows in
+  // the tenant DB (the exact bug the user reported). findOneAndUpdate
+  // with the not-delivered/not-in-progress predicate is the lock — one
+  // call flips to 'in_progress' and proceeds; the other gets null and
+  // either returns the already-delivered row or backs off.
+  const claimed = await MarketplacePurchase.findOneAndUpdate(
+    {
+      _id: purchaseId,
+      status: 'paid',
+      delivery_status: { $nin: ['delivered', 'in_progress'] }
+    },
+    { $set: { delivery_status: 'in_progress' } },
+    { new: true }
+  );
+
+  if (!claimed) {
+    const existing = await MarketplacePurchase.findById(purchaseId).lean();
+    if (!existing) return { ok: false, error: 'Purchase not found' };
+    if (existing.delivery_status === 'delivered' && existing.delivered_policy_id) {
+      return {
+        ok: true,
+        deliveredPolicyId: existing.delivered_policy_id,
+        workflowPending: !!existing.workflow_pending,
+        workflowMessage: existing.delivery_error || '',
+        alreadyDelivered: true
+      };
+    }
+    if (existing.status !== 'paid') return { ok: false, error: 'Purchase not paid' };
+    // Another worker holds the claim — back off so we don't double-deliver.
+    return { ok: false, error: 'Delivery already in progress', inProgress: true };
   }
+  const purchase = claimed;
 
   const policy = await MarketplacePolicy.findById(purchase.policy_id).lean();
   if (!policy) {
@@ -219,6 +190,9 @@ export async function deliverPurchase(purchaseId) {
     if (org) {
       orgLogoUrl = org.logo_url || '';
       orgDisplayName = org.name || org.legal_name || purchase.org_id;
+      logInfo(`[marketplace] org ${purchase.org_id} resolved: name="${orgDisplayName}", logo_url_present=${!!orgLogoUrl}, logo_starts_with="${orgLogoUrl ? orgLogoUrl.slice(0, 30) : ''}"`);
+    } else {
+      logWarn(`[marketplace] no Organization doc in tenant DB for ${purchase.org_id}`);
     }
   } catch (err) {
     logError('[marketplace] could not load tenant org for', purchase.org_id, err?.message);
@@ -234,24 +208,35 @@ export async function deliverPurchase(purchaseId) {
     const stream = await getFileStream(sourceKey);
     const sourceBytes = await streamToBuffer(stream.Body);
 
+    // Resolve PDF bytes first — for DOCX marketplace templates we
+    // render to PDF up-front so the same pdf-lib watermark path adds
+    // the org logo on top. Delivering as PDF (rather than the original
+    // DOCX) is intentional: it's the only way to get a branded header,
+    // and it's a more lock-down format than an editable Word doc.
+    let pdfBytes = null;
     if (policy.file?.format === 'pdf') {
-      // Embed logo (if any) + watermark.
-      const logo = orgLogoUrl ? await fetchLogoBytes(orgLogoUrl) : null;
-      watermarkedBytes = await watermarkPdf(sourceBytes, {
-        orgName: orgDisplayName,
-        logoBytes: logo?.bytes,
-        logoMime: logo?.mime
-      });
-      watermarkedMime = 'application/pdf';
-      originalName = (policy.file?.original_name || policy.title || 'policy').replace(/\.pdf$/i, '') + '.pdf';
+      pdfBytes = sourceBytes;
     } else {
-      // DOCX path — pdf-lib can't manipulate DOCX. Pass the source
-      // through unchanged but still register it in the tenant's
-      // policy library so the org gets their copy.
-      watermarkedBytes = sourceBytes;
-      watermarkedMime = policy.file?.mime_type || 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-      originalName = policy.file?.original_name || `${policy.title}.docx`;
+      // DOCX → PDF. Same conversion used by the preview-stream route,
+      // so the output is consistent with what the buyer previewed.
+      logInfo(`[marketplace] converting DOCX → PDF for ${policy.title}`);
+      pdfBytes = await convertDocxBufferToPdfBuffer(sourceBytes);
     }
+
+    // Prepend a branded cover page and stamp a small top-right logo
+    // on every other page. Logic lives in policyPdfBrandingService so
+    // tenant + public marketplace deliveries stay visually identical.
+    const logo = orgLogoUrl ? await fetchLogoBytes(orgLogoUrl) : null;
+    watermarkedBytes = await brandMarketplacePdf(pdfBytes, {
+      orgName: orgDisplayName,
+      logoBytes: logo?.bytes,
+      logoMime: logo?.mime,
+      policyTitle: policy.title,
+      purchasedAt: purchase.purchased_at || new Date()
+    });
+    watermarkedMime = 'application/pdf';
+    const baseName = (policy.file?.original_name || policy.title || 'policy').replace(/\.[^.]+$/, '');
+    originalName = `${baseName}.pdf`;
 
     const upload = await uploadToS3(
       watermarkedBytes,
@@ -270,8 +255,11 @@ export async function deliverPurchase(purchaseId) {
   }
 
   // ── Create the tenant-side Policy row ────────────────────────────
-  // We default to status:'active' so it shows up in the org's main
-  // /policies list immediately. They can edit cycle/owner later.
+  // Land as `under_review` so the approval workflow drives publication —
+  // mirrors how a manually-uploaded policy behaves. If no workflow is
+  // configured for policies, we downgrade to `draft` below and surface
+  // that on the purchase row so the buyer sees a clear "create a
+  // workflow to publish" message.
   let deliveredPolicyId = null;
   try {
     if (!tenantConn) tenantConn = await getTenantConnection(purchase.org_id);
@@ -294,7 +282,7 @@ export async function deliverPurchase(purchaseId) {
       file_size: watermarkedBytes.length,
       mime_type: watermarkedMime,
       version: `v${policy.version || 1}`,
-      status: 'active',
+      status: 'under_review',
       effective_date: new Date()
     });
     deliveredPolicyId = created._id;
@@ -306,13 +294,121 @@ export async function deliverPurchase(purchaseId) {
     return { ok: false, error: err?.message || 'Policy create failed' };
   }
 
+  // ── Kick off the policy approval workflow ────────────────────────
+  const { workflowPending, workflowMessage } = await tryStartPolicyWorkflow({
+    orgId: purchase.org_id,
+    deliveredPolicyId,
+    tenantConn
+  });
+
   purchase.delivered_policy_id = deliveredPolicyId;
   purchase.delivery_status = 'delivered';
-  purchase.delivery_error = '';
+  purchase.delivery_error = workflowMessage;
+  purchase.workflow_pending = workflowPending;
   await purchase.save();
 
-  logInfo(`[marketplace] delivered policy ${policy._id} → tenant ${purchase.org_id} (Policy ${deliveredPolicyId})`);
-  return { ok: true, deliveredPolicyId };
+  logInfo(`[marketplace] delivered policy ${policy._id} → tenant ${purchase.org_id} (Policy ${deliveredPolicyId}, workflow_pending=${workflowPending})`);
+  return { ok: true, deliveredPolicyId, workflowPending, workflowMessage };
 }
 
-export default { deliverPurchase };
+/**
+ * Internal helper — try to start the policy approval workflow for an
+ * already-delivered marketplace policy. Submitter is the org owner;
+ * marketplace purchases happen outside any single user session
+ * (webhook / reconcile / retry path) so we attribute to the
+ * registered owner. If no workflow is configured we downgrade the
+ * Policy to `draft` and return a friendly message; if it succeeds we
+ * promote it to `under_review`.
+ */
+async function tryStartPolicyWorkflow({ orgId, deliveredPolicyId, tenantConn }) {
+  let conn = tenantConn;
+  try {
+    if (!conn) conn = await getTenantConnection(orgId);
+    const ownerDoc = await conn.collection('users').findOne(
+      { is_org_owner: true },
+      { projection: { _id: 1 } }
+    );
+    if (!ownerDoc?._id) {
+      throw Object.assign(new Error('No org owner on file'), { code: 'NO_ORG_OWNER' });
+    }
+    const workflowService = new ApprovalWorkflowService(orgId);
+    await workflowService.createPolicyApprovalRequest(deliveredPolicyId, ownerDoc._id);
+    // Success — make sure the policy is in `under_review` (it may have
+    // been left at `draft` by a previous attempt that fell back).
+    try {
+      const Policy = conn.model('Policy', policySchema);
+      await Policy.updateOne({ _id: deliveredPolicyId }, { $set: { status: 'under_review' } });
+    } catch (statusErr) {
+      logError('[marketplace] policy status promote failed:', statusErr?.message || statusErr);
+    }
+    return { workflowPending: false, workflowMessage: '' };
+  } catch (err) {
+    const errCode = err?.code || '';
+    const isNoWorkflow =
+      err?.name === 'CastError' ||
+      errCode === 'INVALID_ID' ||
+      errCode === 'NO_APPROVAL_MATRIX' ||
+      errCode === 'NO_MATCHING_RULE' ||
+      errCode === 'WORKFLOW_NOT_CONFIGURED' ||
+      errCode === 'NO_ORG_OWNER';
+
+    if (isNoWorkflow) {
+      try {
+        const Policy = conn.model('Policy', policySchema);
+        await Policy.updateOne({ _id: deliveredPolicyId }, { $set: { status: 'draft' } });
+      } catch (downgradeErr) {
+        logError('[marketplace] policy draft downgrade failed:', downgradeErr?.message || downgradeErr);
+      }
+      logWarn(`[marketplace] no policy workflow for ${orgId} — saved as draft`);
+      return {
+        workflowPending: true,
+        workflowMessage: 'Policy saved as draft, hidden from other members. It will enter review automatically once an approval workflow for policies is configured (Role Permissions → Approval Workflows) and will publish when the review completes.'
+      };
+    }
+    logError('[marketplace] policy workflow start failed:', err?.message || err);
+    return {
+      workflowPending: false,
+      workflowMessage: `Policy delivered, but the approval workflow could not start automatically: ${err?.message || err}`
+    };
+  }
+}
+
+/**
+ * Public helper — re-attempt the workflow start for a purchase whose
+ * delivery succeeded but landed as `draft` because the tenant had no
+ * approval workflow at that time. Idempotent: returns the current
+ * state if there's nothing to retry (already in_progress, already
+ * promoted, or not paid). Called from the marketplace detail page
+ * when it loads with workflow_pending=true.
+ */
+export async function retryPolicyWorkflowForPurchase(purchaseId) {
+  const { MarketplacePurchase } = getRouterModels();
+  const purchase = await MarketplacePurchase.findById(purchaseId);
+  if (!purchase) return { ok: false, error: 'Purchase not found' };
+  if (purchase.delivery_status !== 'delivered' || !purchase.delivered_policy_id) {
+    return { ok: false, error: 'Purchase not yet delivered', delivery_status: purchase.delivery_status };
+  }
+  if (!purchase.workflow_pending) {
+    return { ok: true, workflowPending: false, workflowMessage: '', alreadyStarted: true };
+  }
+
+  const { workflowPending, workflowMessage } = await tryStartPolicyWorkflow({
+    orgId: purchase.org_id,
+    deliveredPolicyId: purchase.delivered_policy_id,
+    tenantConn: null
+  });
+
+  purchase.workflow_pending = workflowPending;
+  purchase.delivery_error = workflowMessage;
+  await purchase.save();
+
+  return {
+    ok: true,
+    deliveredPolicyId: purchase.delivered_policy_id,
+    workflowPending,
+    workflowMessage,
+    workflowStarted: !workflowPending
+  };
+}
+
+export default { deliverPurchase, retryPolicyWorkflowForPurchase };

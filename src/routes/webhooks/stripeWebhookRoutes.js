@@ -95,11 +95,41 @@ async function handleCheckoutCompleted(session, req) {
     return;
   }
 
-  // Marketplace policy purchase. One-off `payment`-mode Checkout
+  // Public marketplace purchase (guest, no orgId). Different schema,
+  // different lifecycle — buyer claims the PDF after entering org
+  // name + logo, so all we do here is flip status='pending' → 'paid'.
+  const kind = session.metadata?.kind || session.payment_intent?.metadata?.kind || '';
+  if (kind === 'marketplace_policy_public') {
+    if (session.payment_status !== 'paid') return;
+    const claimToken = session.metadata?.claim_token || session.payment_intent?.metadata?.claim_token;
+    if (!claimToken) {
+      console.warn('[stripe webhook] marketplace_policy_public missing claim_token metadata');
+      return;
+    }
+    const { MarketplacePublicPurchase } = getRouterModels();
+    const purchase = await MarketplacePublicPurchase.findOne({ claim_token: claimToken });
+    if (!purchase) {
+      console.warn('[stripe webhook] no public purchase for claim_token', claimToken);
+      return;
+    }
+    if (purchase.status === 'pending') {
+      purchase.status = 'paid';
+      purchase.paid_at = new Date();
+      purchase.stripe_payment_intent_id = typeof session.payment_intent === 'string'
+        ? session.payment_intent
+        : session.payment_intent?.id || '';
+      purchase.stripe_customer_id = typeof session.customer === 'string'
+        ? session.customer
+        : session.customer?.id || '';
+      await purchase.save();
+    }
+    return;
+  }
+
+  // Marketplace policy purchase (tenant). One-off `payment`-mode Checkout
   // created by /platform/marketplace/policies/:id/checkout. We flip
   // the pending MarketplacePurchase to `paid` (idempotent on
   // stripe_session_id) and stamp the payment intent + customer.
-  const kind = session.metadata?.kind || session.payment_intent?.metadata?.kind || '';
   if (kind === 'marketplace_policy') {
     if (session.payment_status !== 'paid') return;
     const policyId = session.metadata?.policy_id || session.payment_intent?.metadata?.policy_id;

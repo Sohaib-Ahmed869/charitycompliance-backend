@@ -14,7 +14,7 @@ import { CoiRequestRepository } from '../repositories/coiRequestRepository.js';
 import { ApprovalMatrixRepository } from '../repositories/approvalMatrixRepository.js';
 import { CoiWorkflowService } from '../services/coiWorkflowService.js';
 import emailService from '../services/emailService.js';
-import { createPartnerActionToken, resolvePartnerActionToken, markPartnerActionTokenUsed } from '../services/partnerActionTokenService.js';
+import { createPartnerActionToken, resolvePartnerActionToken, markPartnerActionTokenUsed, findPartnerActionToken } from '../services/partnerActionTokenService.js';
 
 const parsePublicToken = (token, req) => {
   // Expected format: "<orgKey>.<token>"
@@ -276,8 +276,23 @@ export const getPublicPartnerCoiContext = asyncHandler(async (req, res) => {
   const parsed = parsePublicToken(token, req);
   if (!parsed) throw new AppError('Invalid or missing token', 400, 'INVALID_TOKEN');
 
-  const tokenDoc = await resolvePartnerActionToken(parsed.token, 'coi');
-  if (!tokenDoc) throw new AppError('Invalid or expired link', 401, 'INVALID_TOKEN');
+  let tokenDoc = await resolvePartnerActionToken(parsed.token, 'coi');
+
+  // If the active lookup misses, fall back to a raw lookup so we can
+  // distinguish "this token was already used" from "never existed".
+  // markPartnerActionTokenUsed flips is_active=false, so a used token
+  // returns null from resolvePartnerActionToken even though the row
+  // still exists.
+  let alreadySubmitted = false;
+  if (!tokenDoc) {
+    const raw = await findPartnerActionToken(parsed.token, 'coi');
+    if (raw && (raw.used_count > 0 || raw.last_used_at)) {
+      tokenDoc = raw;
+      alreadySubmitted = true;
+    } else {
+      throw new AppError('Invalid or expired link', 401, 'INVALID_TOKEN');
+    }
+  }
 
   const tenantDb = await getTenantConnection(parsed.orgKey);
   const repo = new PartnerVettingRepository(tenantDb);
@@ -294,7 +309,9 @@ export const getPublicPartnerCoiContext = asyncHandler(async (req, res) => {
         contact_email: partner?.contact?.email || '',
       },
       token: tokenDoc.token,
-      expires_at: tokenDoc.expires_at || null
+      expires_at: tokenDoc.expires_at || null,
+      already_submitted: alreadySubmitted,
+      submitted_at: tokenDoc.last_used_at || null
     }
   });
 });
@@ -313,7 +330,16 @@ export const submitPublicPartnerCoi = asyncHandler(async (req, res) => {
   if (!parsed) throw new AppError('Invalid or missing token', 400, 'INVALID_TOKEN');
 
   const tokenDoc = await resolvePartnerActionToken(parsed.token, 'coi');
-  if (!tokenDoc) throw new AppError('Invalid or expired link', 401, 'INVALID_TOKEN');
+  if (!tokenDoc) {
+    // Distinguish "already used" from "never existed / expired" so the
+    // public page can show a clean "already submitted" screen rather
+    // than a generic error.
+    const raw = await findPartnerActionToken(parsed.token, 'coi');
+    if (raw && (raw.used_count > 0 || raw.last_used_at)) {
+      throw new AppError('This declaration link has already been used.', 410, 'TOKEN_ALREADY_USED');
+    }
+    throw new AppError('Invalid or expired link', 401, 'INVALID_TOKEN');
+  }
 
   const tenantDb = await getTenantConnection(parsed.orgKey);
   const partnerRepo = new PartnerVettingRepository(tenantDb);

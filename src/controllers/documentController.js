@@ -331,7 +331,62 @@ export const updateDocument = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const documentRepo = new DocumentRepository(tenantDb);
 
-  const document = await documentRepo.update(documentId, req.body);
+  const existing = await documentRepo.findById(documentId);
+  if (!existing) {
+    throw new AppError('Document not found', 404, 'NOT_FOUND');
+  }
+
+  // Build the update payload field-by-field. We only forward fields
+  // the caller actually sent (so an unrelated PUT can't accidentally
+  // clear stored data), and coerce date-strings to Date objects since
+  // the schema's setter doesn't run on $set with raw strings.
+  const body = req.body || {};
+  const update = {};
+  const stringFields = [
+    'document_type', 'registration_number', 'title', 'description',
+    'category', 'related_board_member_id', 'renewal_requirements',
+    'state_or_territory'
+  ];
+  for (const f of stringFields) {
+    if (Object.prototype.hasOwnProperty.call(body, f) && body[f] !== '') {
+      update[f] = body[f];
+    }
+  }
+  const dateFields = [
+    'date_adopted', 'date_last_amended', 'effective_date',
+    'review_date', 'expiry_date'
+  ];
+  for (const f of dateFields) {
+    if (Object.prototype.hasOwnProperty.call(body, f) && body[f]) {
+      const d = new Date(body[f]);
+      if (!Number.isNaN(d.getTime())) update[f] = d;
+    }
+  }
+
+  // Optional file replacement. When the caller posted multipart/form-data
+  // with a new `file`, swap it on S3 + update the snapshot fields.
+  // The old S3 object is left in place if the new upload succeeds AND
+  // delete fails — better to have an orphan than to break the record.
+  if (req.file) {
+    const subfolder = update.category || existing.category || 'document';
+    const uploaded = await uploadToS3(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      orgId,
+      subfolder
+    );
+    update.file_name = req.file.originalname;
+    update.file_path = uploaded.key;
+    update.file_size = req.file.size;
+    update.mime_type = req.file.mimetype;
+    if (existing.file_path && existing.file_path !== uploaded.key) {
+      try { await deleteFromS3(existing.file_path); }
+      catch (err) { console.warn('[updateDocument] old S3 file delete failed:', err?.message || err); }
+    }
+  }
+
+  const document = await documentRepo.update(documentId, update);
   if (!document) {
     throw new AppError('Document not found', 404, 'NOT_FOUND');
   }
@@ -548,6 +603,118 @@ export const replaceWorkflowDocumentFile = asyncHandler(async (req, res) => {
     400,
     'REPLACE_NOT_ALLOWED'
   );
+});
+
+/**
+ * GET /platform/documents/:documentId/versions
+ *
+ * Returns the version history for a document: the current "head"
+ * row + every row whose parent_document_id points at it OR at a
+ * shared parent. We also resolve the parent chain so an arbitrary
+ * mid-chain document still surfaces its full history.
+ */
+export const getDocumentVersions = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { documentId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+  const documentRepo = new DocumentRepository(tenantDb);
+
+  const root = await documentRepo.findById(documentId);
+  if (!root) throw new AppError('Document not found', 404, 'NOT_FOUND');
+
+  // Walk up to the original parent (if any).
+  let head = root;
+  while (head.parent_document_id) {
+    // eslint-disable-next-line no-await-in-loop
+    const parent = await documentRepo.findById(head.parent_document_id);
+    if (!parent) break;
+    head = parent;
+  }
+
+  const children = await documentRepo.findVersions(head._id);
+  const all = [head, ...children]
+    .filter((d, idx, arr) => arr.findIndex((x) => String(x._id) === String(d._id)) === idx)
+    .sort((a, b) => (b.version || 1) - (a.version || 1));
+
+  // Attach a presigned file URL to each row so the UI can link straight
+  // to the underlying S3 object without a second round-trip.
+  const withUrls = await Promise.all(all.map(async (d) => {
+    let file_url = null;
+    try { file_url = await getFileUrl(d.file_path); } catch { /* leave null */ }
+    return { ...d.toObject(), file_url };
+  }));
+
+  res.json({ success: true, data: { head_id: String(head._id), versions: withUrls } });
+});
+
+/**
+ * POST /platform/documents/:documentId/versions
+ *
+ * Upload a new version of an existing document. The new row is
+ * linked to the original via parent_document_id and gets the next
+ * incremental version number. Metadata is copied from the parent
+ * and selectively overridden by anything in the request body.
+ */
+export const uploadDocumentVersion = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { documentId } = req.params;
+  if (!req.file) {
+    throw new AppError('A file is required to create a new version.', 400, 'FILE_REQUIRED');
+  }
+
+  const tenantDb = await getTenantConnection(orgId);
+  const documentRepo = new DocumentRepository(tenantDb);
+  const parent = await documentRepo.findById(documentId);
+  if (!parent) throw new AppError('Parent document not found', 404, 'NOT_FOUND');
+
+  // Resolve the head of the chain so versions all hang off the same root.
+  let head = parent;
+  while (head.parent_document_id) {
+    // eslint-disable-next-line no-await-in-loop
+    const upstream = await documentRepo.findById(head.parent_document_id);
+    if (!upstream) break;
+    head = upstream;
+  }
+
+  const subfolder = parent.category || 'document';
+  const uploaded = await uploadToS3(
+    req.file.buffer,
+    req.file.originalname,
+    req.file.mimetype,
+    orgId,
+    subfolder
+  );
+
+  // Build the version doc — start from the parent's metadata, then
+  // overlay any fields the caller supplied (title / dates / type).
+  const body = req.body || {};
+  const data = {
+    org_id: head.org_id,
+    category: head.category,
+    document_type: body.document_type || parent.document_type,
+    registration_number: body.registration_number ?? parent.registration_number,
+    title: body.title || parent.title,
+    description: body.description ?? parent.description,
+    file_name: req.file.originalname,
+    file_path: uploaded.key,
+    file_size: req.file.size,
+    mime_type: req.file.mimetype,
+    date_adopted: body.date_adopted ? new Date(body.date_adopted) : parent.date_adopted,
+    date_last_amended: body.date_last_amended ? new Date(body.date_last_amended) : new Date(),
+    effective_date: body.effective_date ? new Date(body.effective_date) : parent.effective_date,
+    review_date: body.review_date ? new Date(body.review_date) : parent.review_date,
+    expiry_date: body.expiry_date ? new Date(body.expiry_date) : parent.expiry_date,
+    uploaded_by: req.user?.userId || null
+  };
+
+  const created = await documentRepo.createVersion(head._id, data);
+  let file_url = null;
+  try { file_url = await getFileUrl(created.file_path); } catch { /* leave null */ }
+
+  res.status(201).json({
+    success: true,
+    data: { ...created.toObject(), file_url }
+  });
 });
 
 export const deleteDocument = asyncHandler(async (req, res) => {

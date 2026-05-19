@@ -155,10 +155,13 @@ router.get(
       success: true,
       data: {
         ...serializePolicyForTenant(policy, !!purchase),
+        purchase_id: purchase?._id?.toString() || null,
         purchased_at: purchase?.purchased_at || null,
         amount_paid_cents: purchase?.amount_paid_cents || null,
         delivered_policy_id: purchase?.delivered_policy_id?.toString() || null,
-        delivery_status: purchase?.delivery_status || null
+        delivery_status: purchase?.delivery_status || null,
+        workflow_pending: !!purchase?.workflow_pending,
+        delivery_message: purchase?.delivery_error || ''
       }
     });
   })
@@ -237,15 +240,24 @@ router.get(
 
     if (!s3Key) throw new AppError('Policy has no file attached', 404, 'FILE_MISSING');
 
-    const range = req.headers.range || null;
-    const stream = await getFileStream(s3Key, range);
+    // Preview is always Stewardex-branded — the buyer doesn't get the
+    // org's logo until they actually purchase. We pull the full PDF
+    // bytes (no range support — the brand step needs the whole doc),
+    // prepend the Stewardex cover + per-page top-right logo, and
+    // stream the resulting buffer back.
+    const stream = await getFileStream(s3Key);
+    const sourceBytes = await new Promise((resolve, reject) => {
+      const chunks = [];
+      stream.Body.on('data', (c) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+      stream.Body.on('end', () => resolve(Buffer.concat(chunks)));
+      stream.Body.on('error', reject);
+    });
+    const { brandStewardexPreviewPdf } = await import('../../services/policyPdfBrandingService.js');
+    const branded = await brandStewardexPreviewPdf(sourceBytes, { policyTitle: policy.title || '' });
 
-    // Surface "purchased?" + raw title so the frontend can decide
-    // which watermark to draw — Stewardex (unpurchased) vs org-named
-    // (purchased) — without a second round-trip.
     res.set({
-      'Content-Type': stream.ContentType || 'application/pdf',
-      'Content-Length': stream.ContentLength ?? undefined,
+      'Content-Type': 'application/pdf',
+      'Content-Length': branded.length,
       'Cache-Control': 'private, no-store',
       // Discourage casual saving via Save-As / Ctrl+S — the browser
       // still allows it but the inline disposition keeps it in-tab.
@@ -255,11 +267,7 @@ router.get(
       // Block iframes from re-hosting the stream off-site.
       'X-Frame-Options': 'SAMEORIGIN'
     });
-    if (stream.IsPartial) {
-      res.status(206);
-      if (stream.ContentRange) res.set('Content-Range', stream.ContentRange);
-    }
-    stream.Body.pipe(res);
+    res.end(branded);
   })
 );
 
@@ -352,12 +360,20 @@ router.post(
     //   3. Origin / Referer headers on the request as a last resort
     // Stripe rejects anything that isn't a fully-qualified http(s):// URL,
     // so we validate before sending.
-    const headerOrigin = (req.get('origin') || req.get('referer') || '').replace(/\/$/, '');
-    const envOrigin    = (serverConfig.frontendUrl || '').replace(/\/$/, '');
-    const fallbackOrigin = envOrigin || headerOrigin || '';
+    // Origin header beats FRONTEND_URL env — the user might be on a
+    // localhost frontend hitting a deployed backend; we want them
+    // bounced back to where they actually are.
+    const headerOriginRaw = (req.get('origin') || req.get('referer') || '').replace(/\/$/, '');
+    let headerOrigin = '';
+    try { headerOrigin = headerOriginRaw ? new URL(headerOriginRaw).origin : ''; }
+    catch { headerOrigin = headerOriginRaw; }
+    const envOrigin = (serverConfig.frontendUrl || '').replace(/\/$/, '');
+    const fallbackOrigin = headerOrigin || envOrigin || '';
 
+    // Include {CHECKOUT_SESSION_ID} so the frontend can pull it from the
+    // URL on return and call /reconcile-checkout as a webhook fallback.
     const successUrl = req.body.success_url
-      || `${fallbackOrigin}/policies/marketplace/${policy._id}?checkout=success`;
+      || `${fallbackOrigin}/policies/marketplace/${policy._id}?checkout=success&session_id={CHECKOUT_SESSION_ID}`;
     const cancelUrl  = req.body.cancel_url
       || `${fallbackOrigin}/policies/marketplace/${policy._id}?checkout=cancel`;
 
@@ -449,6 +465,160 @@ router.post(
         checkout_url: session.url,
         session_id: session.id,
         amount_aud_cents: priceCents
+      }
+    });
+  })
+);
+
+/**
+ * POST /platform/marketplace/policies/reconcile-checkout
+ * Body: { session_id }
+ *
+ * Fallback for environments where Stripe webhooks can't reach the
+ * backend. Pulls the completed Checkout Session straight from Stripe,
+ * flips the pending MarketplacePurchase to `paid`, and kicks off
+ * delivery (watermark + copy into tenant's Policy library). Idempotent.
+ */
+router.post(
+  '/policies/reconcile-checkout',
+  [body('session_id').isString().trim().notEmpty()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { retrieveCheckoutSession } = await import('../../services/stripeService.js');
+    const session = await retrieveCheckoutSession(req.body.session_id);
+    if (!session) {
+      throw new AppError('Session not found.', 404, 'SESSION_NOT_FOUND');
+    }
+    const orgIdFromSession = String(
+      session.metadata?.orgId || session.payment_intent?.metadata?.orgId || ''
+    ).toLowerCase();
+    if (orgIdFromSession && orgIdFromSession !== String(req.orgId).toLowerCase()) {
+      throw new AppError('Session does not belong to this organisation.', 403, 'SESSION_NOT_FOR_TENANT');
+    }
+    const kind = session.metadata?.kind || session.payment_intent?.metadata?.kind || '';
+    if (kind !== 'marketplace_policy') {
+      throw new AppError(`Unsupported session kind: ${kind || 'unknown'}.`, 409, 'WRONG_SESSION_KIND');
+    }
+    if (session.payment_status !== 'paid') {
+      throw new AppError(`Session not paid yet: ${session.payment_status}.`, 409, 'SESSION_NOT_PAID');
+    }
+    const policyId = session.metadata?.policy_id || session.payment_intent?.metadata?.policy_id;
+    if (!policyId) {
+      throw new AppError('Session missing policy_id metadata.', 409, 'NO_POLICY_ID');
+    }
+
+    const { MarketplacePurchase, BillingEvent } = getRouterModels();
+    const amountCents = Number(session.amount_total) || 0;
+
+    let purchase = await MarketplacePurchase.findOne({ stripe_session_id: session.id });
+    if (!purchase) {
+      purchase = await MarketplacePurchase.findOne({
+        org_id: req.orgId,
+        policy_id: policyId,
+        status: { $in: ['pending', 'paid'] }
+      });
+    }
+    if (purchase) {
+      purchase.status = 'paid';
+      purchase.amount_paid_cents = amountCents || purchase.amount_paid_cents;
+      purchase.stripe_session_id = session.id;
+      purchase.stripe_payment_intent_id = typeof session.payment_intent === 'string'
+        ? session.payment_intent
+        : session.payment_intent?.id || '';
+      purchase.stripe_customer_id = typeof session.customer === 'string'
+        ? session.customer
+        : session.customer?.id || '';
+      purchase.purchased_at = purchase.purchased_at || new Date();
+      await purchase.save();
+    } else {
+      purchase = await MarketplacePurchase.create({
+        org_id: req.orgId,
+        policy_id: policyId,
+        amount_paid_cents: amountCents,
+        currency: (session.currency || 'aud').toLowerCase(),
+        stripe_session_id: session.id,
+        stripe_payment_intent_id: typeof session.payment_intent === 'string' ? session.payment_intent : '',
+        stripe_customer_id: typeof session.customer === 'string' ? session.customer : '',
+        status: 'paid',
+        purchased_at: new Date(),
+        policy_title_snapshot: session.metadata?.policy_title || '',
+        policy_version_snapshot: Number(session.metadata?.policy_version) || 1
+      });
+    }
+
+    await BillingEvent.create({
+      action: 'marketplace.policy_purchased',
+      target_type: 'marketplace_policy',
+      target_id: policyId,
+      target_label: session.metadata?.policy_title || policyId,
+      tenant_id: req.orgId,
+      reason: `Marketplace policy purchased — A$${(amountCents / 100).toFixed(2)} (reconciled)`,
+      metadata: {
+        policy_id: policyId,
+        amount_cents: amountCents,
+        stripe_session_id: session.id,
+        source: 'tenant_reconcile'
+      }
+    }).catch(() => {});
+
+    // Kick off delivery — watermark + copy into tenant's Policy library.
+    // Awaited so the response carries workflow_pending / message; the
+    // overall reconcile request stays fast (delivery is seconds at most).
+    let deliveryResult = null;
+    try {
+      const { deliverPurchase } = await import('../../services/marketplaceDeliveryService.js');
+      deliveryResult = await deliverPurchase(purchase._id);
+    } catch (err) {
+      console.error('[marketplace reconcile] delivery failed:', err?.message || err);
+    }
+
+    res.json({
+      success: true,
+      data: {
+        purchase_id: purchase._id.toString(),
+        policy_id: String(policyId),
+        status: purchase.status,
+        delivered_policy_id: deliveryResult?.deliveredPolicyId
+          ? String(deliveryResult.deliveredPolicyId)
+          : null,
+        workflow_pending: !!deliveryResult?.workflowPending,
+        message: deliveryResult?.workflowMessage || ''
+      }
+    });
+  })
+);
+
+/**
+ * POST /platform/marketplace/purchases/:id/retry-workflow
+ *
+ * Re-attempts the approval-workflow start for a delivered marketplace
+ * policy that originally landed as `draft` (because no workflow was
+ * configured at delivery time). Called by the marketplace detail page
+ * whenever it loads with workflow_pending=true — that way once the
+ * buyer configures a policy workflow, simply revisiting the page
+ * promotes the policy to `under_review` and clears the banner.
+ */
+router.post(
+  '/purchases/:id/retry-workflow',
+  [param('id').isMongoId()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { MarketplacePurchase } = getRouterModels();
+    const purchase = await MarketplacePurchase.findOne({
+      _id: req.params.id,
+      org_id: req.orgId
+    }).lean();
+    if (!purchase) {
+      throw new AppError('Purchase not found.', 404, 'PURCHASE_NOT_FOUND');
+    }
+    const { retryPolicyWorkflowForPurchase } = await import('../../services/marketplaceDeliveryService.js');
+    const result = await retryPolicyWorkflowForPurchase(req.params.id);
+    res.json({
+      success: true,
+      data: {
+        workflow_pending: !!result?.workflowPending,
+        workflow_started: !!result?.workflowStarted,
+        message: result?.workflowMessage || ''
       }
     });
   })

@@ -128,6 +128,10 @@ app.use('/api/v1/auth', authRoutes);
 import publicPlansRoutes from './routes/public/publicPlansRoutes.js';
 app.use('/api/v1/public/plans', publicPlansRoutes);
 
+// Public-facing policy marketplace (guest checkout, no JWT).
+import publicMarketplaceRoutes from './routes/public/publicMarketplaceRoutes.js';
+app.use('/api/v1/public/marketplace', publicMarketplaceRoutes);
+
 // Platform routes (auth required)
 import organizationRoutes from './routes/platform/organizationRoutes.js';
 import roleRoutes from './routes/platform/roleRoutes.js';
