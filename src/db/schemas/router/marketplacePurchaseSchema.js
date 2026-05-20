@@ -83,6 +83,13 @@ const marketplacePurchaseSchema = new mongoose.Schema({
   // publish" message until the buyer sets one up.
   workflow_pending: { type: Boolean, default: false },
 
+  // True once the purchase confirmation / receipt email (with the
+  // invoice PDF attached) has been sent. Guards against the webhook
+  // and the reconcile-checkout fallback both emailing the same buyer
+  // — the Payment row is deduped by a unique index, but the email is
+  // not, so we gate it on this flag.
+  receipt_sent: { type: Boolean, default: false },
+
   purchased_at: { type: Date, default: null },
   created_at:   { type: Date, default: Date.now },
   updated_at:   { type: Date, default: Date.now }

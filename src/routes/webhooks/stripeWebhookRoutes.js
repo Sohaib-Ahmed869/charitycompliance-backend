@@ -200,6 +200,24 @@ async function handleCheckoutCompleted(session, req) {
       }
     }).catch(() => {});
 
+    // Re-read the purchase so the Payment record + receipt below see
+    // the freshly-saved `paid` state (the create-branch above never
+    // assigned `purchase`).
+    const purchaseDoc = purchase || await MarketplacePurchase.findOne({ stripe_session_id: session.id });
+
+    // Bridge the purchase into the shared `payments` collection so it
+    // shows up in the SuperAdmin Invoices list, and email the buyer a
+    // receipt with an invoice PDF attached. Both are best-effort — the
+    // purchase itself has already succeeded.
+    if (purchaseDoc) {
+      try {
+        const { finaliseMarketplacePurchase } = await import('../../services/marketplacePaymentService.js');
+        await finaliseMarketplacePurchase(purchaseDoc.toObject ? purchaseDoc.toObject() : purchaseDoc);
+      } catch (err) {
+        console.error('[stripe webhook] marketplace payment/receipt failed:', err?.message || err);
+      }
+    }
+
     // Best-effort post-purchase delivery — watermark the PDF with the
     // org's logo and copy it into the tenant's local Policy library.
     // Errors are swallowed here because the purchase itself succeeded;
@@ -207,7 +225,6 @@ async function handleCheckoutCompleted(session, req) {
     // retry is needed.
     try {
       const { deliverPurchase } = await import('../../services/marketplaceDeliveryService.js');
-      const purchaseDoc = purchase || await MarketplacePurchase.findOne({ stripe_session_id: session.id });
       if (purchaseDoc) {
         deliverPurchase(purchaseDoc._id).catch((err) => {
           console.error('[stripe webhook] marketplace delivery failed:', err?.message || err);

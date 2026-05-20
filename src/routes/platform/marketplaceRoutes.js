@@ -561,6 +561,17 @@ router.post(
       }
     }).catch(() => {});
 
+    // Bridge the purchase into the shared `payments` collection so it
+    // appears in the SuperAdmin Invoices list, and email the buyer a
+    // receipt with an invoice PDF attached. Idempotent + best-effort —
+    // safe even if the webhook already ran this for the same purchase.
+    try {
+      const { finaliseMarketplacePurchase } = await import('../../services/marketplacePaymentService.js');
+      await finaliseMarketplacePurchase(purchase.toObject ? purchase.toObject() : purchase);
+    } catch (err) {
+      console.error('[marketplace reconcile] payment/receipt failed:', err?.message || err);
+    }
+
     // Kick off delivery — watermark + copy into tenant's Policy library.
     // Awaited so the response carries workflow_pending / message; the
     // overall reconcile request stays fast (delivery is seconds at most).

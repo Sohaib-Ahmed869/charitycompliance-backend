@@ -92,6 +92,59 @@ export async function sendPaymentReceipt({
   await trySend({ to, subject, html });
 }
 
+/* ── Marketplace purchase receipt — fires on a marketplace_policy ──
+ *    checkout.session.completed. Stripe never mints a hosted invoice
+ *    for one-off `payment`-mode Checkout, so we generate our own
+ *    invoice PDF and attach it. Best-effort — a missing PDF still
+ *    sends the email body without the attachment. */
+export async function sendMarketplacePurchaseReceipt({
+  to, orgName, policyTitle, amountAUD, currency = 'AUD',
+  invoiceNumber, purchasedAt, invoicePdfBuffer
+}) {
+  if (!to) return;
+  const safeTitle = String(policyTitle || 'your policy template');
+  const html = buildEmailTemplate({
+    heading: 'Purchase confirmed',
+    headingHighlight: 'Purchase',
+    bodyHtml: `
+      <p style="margin: 0 0 14px 0;">Hi${orgName ? ` ${orgName}` : ''},</p>
+      <p style="margin: 0 0 14px 0;">
+        Thanks for your purchase from the Stewardex Policy Marketplace. We've received
+        <strong>${fmtMoney(amountAUD, currency)}</strong> for <strong>${safeTitle}</strong>.
+      </p>
+      <p style="margin: 0 0 14px 0;">
+        Your tax invoice is attached to this email. The branded policy template has
+        been delivered to your Stewardex policy library.
+      </p>
+    `,
+    buttonText: 'Open Stewardex',
+    buttonLink: `${FRONTEND_URL}/dashboard`,
+    infoBoxLines: [
+      `Item: ${safeTitle}`,
+      `Amount: ${fmtMoney(amountAUD, currency)}`,
+      invoiceNumber ? `Invoice: ${invoiceNumber}` : null,
+      purchasedAt ? `Purchased on: ${fmtDate(purchasedAt)}` : null
+    ].filter(Boolean)
+  });
+
+  const attachments = invoicePdfBuffer
+    ? [{
+        filename: `${invoiceNumber || 'stewardex-invoice'}.pdf`,
+        content: invoicePdfBuffer,
+        contentType: 'application/pdf'
+      }]
+    : undefined;
+
+  await trySend({
+    to,
+    subject: invoiceNumber
+      ? `Your Stewardex receipt — invoice ${invoiceNumber}`
+      : `Your Stewardex marketplace receipt`,
+    html,
+    attachments
+  });
+}
+
 /* ── Past-due — fires on invoice.payment_failed ──────────────────── */
 export async function sendPastDueAlert({ to, orgName, planName, amountAUD, attemptCount }) {
   if (!to) return;

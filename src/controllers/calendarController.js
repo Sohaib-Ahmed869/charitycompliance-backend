@@ -31,6 +31,14 @@ const hasModuleViewPermission = (permissions = [], moduleId) => {
   return permissions.includes('*:*') || permissions.includes(`module:${moduleId}:view`);
 };
 
+/** Convert a snake_case key (e.g. "board_member") to Title Case ("Board Member"). */
+const humanizeKey = (key) =>
+  String(key || '')
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+
 /**
  * Helper function to format an event for calendar display
  * System events (expiring items) are normalized to 9:00 AM on the due date
@@ -45,7 +53,9 @@ const formatCalendarEvent = (event, type, sourceId = null) => {
     title: event.title,
     date: toISODate(normalizedDate) || toISODate(date) || date,
     type,
-    description: event.description || `${type} event`,
+    // Fall back to a human-readable label instead of the raw snake_case
+    // type key (e.g. "Board Member event" rather than "board_member event").
+    description: event.description || `${humanizeKey(type)} event`,
     is_custom: false,
     source: type,
     source_id: event._id || sourceId

@@ -303,8 +303,10 @@ class EmailService {
    * @param {string} options.subject - Email subject
    * @param {string} options.html - HTML content
    * @param {string} options.text - Plain text content (optional)
+   * @param {Array}  options.attachments - nodemailer attachments (optional);
+   *        each item is `{ filename, content (Buffer|string), contentType }`.
    */
-  async sendEmail({ to, subject, html, text, brandTemplate }) {
+  async sendEmail({ to, subject, html, text, brandTemplate, attachments }) {
     // Belt-and-braces: if `html` wasn't built via `buildEmailTemplate` (no
     // sentinel), wrap it now so every outbound email lands in the brand chrome
     // — gradient strip, logo, footer. Callers can opt out by passing
@@ -358,6 +360,11 @@ class EmailService {
         html,
         text: text || html.replace(/<[^>]*>/g, '') // Strip HTML for text version
       };
+      // File attachments (e.g. an invoice PDF) — only set when provided so
+      // the vast majority of emails that carry none stay unaffected.
+      if (Array.isArray(attachments) && attachments.length > 0) {
+        mailOptions.attachments = attachments;
+      }
 
       const sendTimeout = parseInt(process.env.SMTP_SEND_TIMEOUT_MS) || 30000;
       const result = await Promise.race([
