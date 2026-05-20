@@ -47,10 +47,12 @@ const donorSchema = new mongoose.Schema({
     phone: { type: String, trim: true }
   },
 
-  // Workflow + KYC / AML status
+  // Workflow + KYC / AML status. `archived` is the terminal state for
+  // donors that are no longer engaged but kept on file for audit /
+  // history. Only reachable from `inactive` (frontend gate enforces).
   status: {
     type: String,
-    enum: ['draft', 'pending_approval', 'approved', 'rejected', 'inactive'],
+    enum: ['draft', 'pending_approval', 'approved', 'rejected', 'inactive', 'archived'],
     default: 'pending_approval',
     index: true
   },

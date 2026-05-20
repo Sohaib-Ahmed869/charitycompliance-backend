@@ -42,6 +42,7 @@ const { startTrialReminderScheduler } = await import('./src/services/trialRemind
 const { startOverrideExpiryScheduler } = await import('./src/services/overrideExpiryService.js');
 const { startUsageAggregator } = await import('./src/services/usageAggregator.js');
 const { startFoundingCustomerRenewalScheduler } = await import('./src/services/foundingCustomerRenewalService.js');
+const { startWeeklyDigestScheduler, runWeeklyDigestOnce } = await import('./src/services/weeklyComplianceDigestService.js');
 
 const PORT = process.env.PORT || 5000;
 const isDevelopment = String(process.env.NODE_ENV || '').toLowerCase() === 'development';
@@ -82,6 +83,8 @@ const startServer = async () => {
         startChatRetentionScheduler();
         // Chat mention digest: emails users any unread @mention older than the threshold (default 30 min).
         startChatMentionDigestScheduler();
+        // Weekly compliance digest — Monday-morning summary email to org owners.
+        startWeeklyDigestScheduler();
 
         // Optional: run catch-up reminders immediately on boot (useful after downtime).
         // These are deduped (notifications) and phase-tracked (meetings), so safe on restarts.
@@ -93,6 +96,8 @@ const startServer = async () => {
             runFiscalReportRemindersOnce().catch((err) => logError('Fiscal report reminders run-on-boot failed', err));
             runSuitabilityRenewalsOnce().catch((err) => logError('Suitability renewals run-on-boot failed', err));
             runSubscriptionMaintenanceRemindersOnce().catch((err) => logError('Subscription maintenance reminders run-on-boot failed', err));
+            // Only sends when today is the configured send day (Mon by default), so safe to run on every boot.
+            runWeeklyDigestOnce().catch((err) => logError('Weekly digest run-on-boot failed', err));
           }, Number(process.env.REMINDERS_RUN_ON_BOOT_DELAY_MS) || 8000);
         }
       } else {

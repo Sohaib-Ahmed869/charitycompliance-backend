@@ -103,6 +103,34 @@ router.get(
   donationBoxController.getDonationBoxById
 );
 
+// CASH-016/017 — Activate / deactivate a donation box. Single endpoint
+// rather than two so the same client-side mutation handles both
+// transitions just by switching `status` in the body.
+router.patch(
+  '/:boxId/status',
+  [
+    param('boxId').isMongoId().withMessage('Invalid donation box ID'),
+    body('status').isIn(['active', 'inactive']).withMessage('Status must be active or inactive')
+  ],
+  validate,
+  requirePermission('module:donation_boxes:edit'),
+  donationBoxController.setDonationBoxStatus
+);
+
+// CASH-010 — record the variance investigation on a single entry.
+router.patch(
+  '/:boxId/entries/:entryId/variance-investigation',
+  [
+    param('boxId').isMongoId().withMessage('Invalid donation box ID'),
+    param('entryId').isMongoId().withMessage('Invalid entry ID'),
+    body('status').optional().isIn(['none', 'open', 'investigating', 'resolved', 'unresolved']).withMessage('Invalid status'),
+    body('notes').optional().isString().isLength({ max: 4000 }).withMessage('Notes must be 4000 chars or fewer')
+  ],
+  validate,
+  requirePermission('module:donation_boxes:edit'),
+  donationBoxController.setVarianceInvestigation
+);
+
 // Add entry against donation box / miscellaneous collection
 // Category-specific requirements (e.g. box_still_at_location for donation boxes,
 // gross_amount for miscellaneous) are enforced in the service layer once the

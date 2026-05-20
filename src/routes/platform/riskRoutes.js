@@ -89,6 +89,17 @@ router.delete(
   riskController.deleteRisk
 );
 
+// Resubmit a rejected / returned-for-resubmission risk. Optional body
+// fields apply field updates in the same request (same shape as the
+// PUT /:riskId endpoint) so the user can fix issues and resubmit at
+// once. The service then re-triggers the HoD assessment workflow.
+router.post(
+  '/:riskId/resubmit',
+  [param('riskId').isMongoId().withMessage('Invalid risk ID')],
+  validate,
+  riskController.resubmitRisk
+);
+
 router.post(
   '/:riskId/treatments',
   [

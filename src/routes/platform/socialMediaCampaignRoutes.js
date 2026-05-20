@@ -11,7 +11,9 @@ import {
   getSocialMediaCampaignById,
   updateSocialMediaCampaign,
   publishSocialMediaCampaign,
-  resubmitSocialMediaCompliance
+  resubmitSocialMediaCompliance,
+  pauseSocialMediaCampaign,
+  archiveSocialMediaCampaign
 } from '../../controllers/socialMediaCampaignController.js';
 
 const router = express.Router();
@@ -119,6 +121,28 @@ router.post(
   uploadSocialCampaignImages,
   handleUploadError,
   uploadImagesController
+);
+
+// MKT-007 — Pause / resume. Single endpoint that takes `{ action: 'pause' | 'resume' }`
+// so the frontend uses one mutation for both transitions. Pausing
+// stashes the prior status; resuming restores it.
+router.post(
+  '/:campaignId/pause',
+  [
+    param('campaignId').isMongoId().withMessage('Invalid campaign ID'),
+    body('action').isIn(['pause', 'resume']).withMessage('Action must be pause or resume')
+  ],
+  validate,
+  pauseSocialMediaCampaign
+);
+
+// MKT-008 — Archive. Terminal state; reversible only by a full restore
+// flow (not exposed here).
+router.post(
+  '/:campaignId/archive',
+  [param('campaignId').isMongoId().withMessage('Invalid campaign ID')],
+  validate,
+  archiveSocialMediaCampaign
 );
 
 export default router;

@@ -1332,6 +1332,21 @@ export class ChecklistService {
           throw new AppError('Evidence is required to complete this item', 400, 'EVIDENCE_REQUIRED');
         }
       }
+      // CHKL-004 — dependency blocking. Cannot mark satisfied until every
+      // listed predecessor is itself satisfied/checked.
+      if (checked && Array.isArray(item.depends_on_item_ids) && item.depends_on_item_ids.length > 0) {
+        const byId = new Map((inst.items || []).map((it) => [String(it._id), it]));
+        const blockers = item.depends_on_item_ids
+          .map((id) => byId.get(String(id)))
+          .filter((dep) => dep && !(dep.state === 'satisfied' || dep.checked));
+        if (blockers.length > 0) {
+          throw new AppError(
+            `Complete the prerequisite item${blockers.length === 1 ? '' : 's'} first: ${blockers.map((b) => b.title_snapshot || 'item').join(', ')}`,
+            400,
+            'CHECKLIST_ITEM_BLOCKED'
+          );
+        }
+      }
       item.checked = checked;
       item.checked_by = checked ? userId : null;
       item.checked_at = checked ? new Date() : null;

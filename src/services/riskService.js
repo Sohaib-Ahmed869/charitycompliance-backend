@@ -182,6 +182,70 @@ export class RiskService {
     return plain;
   }
 
+  /**
+   * Resubmit a rejected (or returned-for-resubmission) risk. Resets
+   * the status to `pending`, optionally accepts any field updates,
+   * then re-triggers the HoD assessment approval request — mirroring
+   * the createRisk path so the same review chain runs from scratch.
+   */
+  async resubmitRisk(riskId, submittedBy, updates = {}) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const riskRepo = new RiskRepository(tenantDb);
+
+    const existing = await riskRepo.findById(riskId);
+    if (!existing) throw new AppError('Risk not found', 404, 'RISK_NOT_FOUND');
+
+    const resubmittableStatuses = ['rejected', 'resubmission_required', 'draft'];
+    if (!resubmittableStatuses.includes(existing.status)) {
+      throw new AppError(
+        `Risk cannot be resubmitted from status "${existing.status}". Only rejected, resubmission_required, or draft risks can be resubmitted.`,
+        400,
+        'RISK_NOT_RESUBMITTABLE'
+      );
+    }
+
+    // Apply any field updates first, then clear the approval state and
+    // mark pending so the workflow trigger below picks up the latest data.
+    const merged = {
+      ...(updates && typeof updates === 'object' ? updates : {}),
+      status: 'pending',
+      approval_request_id: null,
+      approval_matrix_id: null,
+      rejection_reason: null,
+      resubmitted_at: new Date()
+    };
+    await riskRepo.update(riskId, merged);
+
+    let approvalRequestId = null;
+    try {
+      const workflowService = new ApprovalWorkflowService(this.orgId);
+      const workflowReq = await workflowService.createRiskHodAssessmentRequest(riskId, submittedBy);
+      approvalRequestId = workflowReq?._id || workflowReq?.id || null;
+    } catch (err) {
+      const errCode = err?.code;
+      const isNoSetup =
+        err?.name === 'CastError' ||
+        errCode === 'INVALID_ID' ||
+        errCode === 'NO_APPROVAL_MATRIX' ||
+        errCode === 'NO_MATCHING_RULE' ||
+        errCode === 'RISK_NO_DEPARTMENT' ||
+        errCode === 'NO_DEPARTMENT_HEAD';
+      if (!isNoSetup) throw err;
+      // Auto-approve fallback — same behaviour as createRisk so the
+      // resubmit flow doesn't dead-end when no HoD / matrix exists.
+      await riskRepo.update(riskId, {
+        status: 'approved',
+        approval_matrix_id: null,
+        approval_request_id: null
+      });
+    }
+
+    logInfo('Risk resubmitted', { riskId, submittedBy, approvalRequestId });
+    const fresh = await riskRepo.findById(riskId);
+    return this._decryptRiskOwnerBoardMember(fresh);
+  }
+
   async getRisks(filters = {}) {
     const tenantDb = await this.getTenantDb();
     this._ensureTenantModels(tenantDb);

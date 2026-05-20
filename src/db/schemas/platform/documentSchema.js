@@ -89,10 +89,21 @@ const documentSchema = new mongoose.Schema({
     type: String,
     required: true
   },
-  // Version tracking
+  // Version tracking.
+  //   `version`       — major version. Bumps when the underlying
+  //                     FILE is replaced (new upload via the version
+  //                     history panel).
+  //   `minor_version` — incremented on metadata edits (title, dates,
+  //                     description, etc.) without a file swap. Resets
+  //                     to 0 whenever the major bumps.
+  // Displayed as `v{version}.{minor_version}` (e.g. "v1.0", "v1.1", "v2.0").
   version: {
     type: Number,
     default: 1
+  },
+  minor_version: {
+    type: Number,
+    default: 0
   },
   parent_document_id: {
     type: mongoose.Schema.Types.ObjectId,

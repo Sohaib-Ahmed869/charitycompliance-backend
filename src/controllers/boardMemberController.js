@@ -57,6 +57,38 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
   if (!keyHex) {
     throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
   }
+
+  // ── Aggregate volunteer submission counts per board member ──────────
+  // Public volunteer-link submissions stamp `volunteer_submission.
+  // board_member_id` on the resulting complaint / risk / COI row. Sum
+  // counts across the three collections so the volunteers register can
+  // show a per-row total without each card making three extra round-trips.
+  const volunteerIds = boardMembers
+    .filter((bm) => bm?.is_volunteer === true)
+    .map((bm) => bm._id);
+  const submissionCountByVolunteer = new Map();
+  if (volunteerIds.length > 0) {
+    const collections = ['complaints', 'risks', 'coi_requests'];
+    await Promise.all(collections.map(async (collName) => {
+      try {
+        const col = tenantDb.collection(collName);
+        const rows = await col.aggregate([
+          { $match: {
+              'volunteer_submission.source': 'volunteer_link',
+              'volunteer_submission.board_member_id': { $in: volunteerIds }
+          } },
+          { $group: { _id: '$volunteer_submission.board_member_id', count: { $sum: 1 } } }
+        ]).toArray();
+        for (const r of rows) {
+          const k = String(r._id);
+          submissionCountByVolunteer.set(k, (submissionCountByVolunteer.get(k) || 0) + Number(r.count || 0));
+        }
+      } catch (err) {
+        logError(`Failed to aggregate volunteer submissions from ${collName}`, err);
+      }
+    }));
+  }
+
   const list = await Promise.all(
     boardMembers.map(async (bm) => {
       const obj = bm.toObject ? bm.toObject() : { ...bm };
@@ -81,6 +113,8 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
           logError('Failed to resolve contract URL for list', err, { boardMemberId: bm._id });
         }
       }
+      // Inject the rolled-up submissions count (0 if none / not a volunteer).
+      obj.volunteer_submissions_count = submissionCountByVolunteer.get(String(bm._id)) || 0;
       return obj;
     })
   );

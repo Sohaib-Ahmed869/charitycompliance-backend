@@ -45,7 +45,16 @@ const instanceItemSchema = new mongoose.Schema(
     },
 
     evaluation_detail: { type: String, trim: true },
-    last_evaluated_at: { type: Date }
+    last_evaluated_at: { type: Date },
+
+    // CHKL-004 — IDs of other instance items in the same checklist that
+    // must reach satisfied/checked before this item can be checked. Refers
+    // to the `_id` of sibling items (sub-document _ids on this same
+    // `items` array), captured from the template at instance creation.
+    depends_on_item_ids: {
+      type: [mongoose.Schema.Types.ObjectId],
+      default: []
+    }
   },
   { _id: true }
 );

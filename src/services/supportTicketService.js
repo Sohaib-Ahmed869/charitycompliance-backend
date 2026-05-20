@@ -176,7 +176,42 @@ export class SupportTicketService {
 
     logInfo('Support ticket status updated', { ticketId, status });
 
-    return await ticketRepo.update(ticketId, updateData);
+    const updated = await ticketRepo.update(ticketId, updateData);
+
+    // SUP-010 — When a public-submitted ticket reaches a terminal
+    // state, notify the external submitter at the email they supplied
+    // at submission. Best-effort: failures here don't roll back the
+    // status update. Internal-reporter tickets never trigger this
+    // (they get in-app notifications instead).
+    if ((status === 'solved' || status === 'declined') && ticket?.reporter?.is_external && ticket?.reporter?.email) {
+      try {
+        const { default: emailService } = await import('./emailService.js');
+        const refId = updated?.ticket_number || ticket.ticket_number || String(ticket._id).slice(-8).toUpperCase();
+        const subject = status === 'solved'
+          ? `Your support ticket ${refId} has been resolved`
+          : `Update on your support ticket ${refId}`;
+        const verb = status === 'solved' ? 'resolved' : 'closed without resolution';
+        const notesBlock = resolutionNotes
+          ? `<p style="margin:14px 0;padding:12px 14px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;"><strong>Notes from the team:</strong><br>${String(resolutionNotes).replace(/[<>]/g, '')}</p>`
+          : '';
+        const html = `
+          <h2 style="margin:0 0 12px;">Ticket ${refId} — ${verb}</h2>
+          <p>Hi${ticket.reporter.name ? ` ${String(ticket.reporter.name).replace(/[<>]/g, '')}` : ''},</p>
+          <p>Your support request <strong>${String(ticket.summary || 'your enquiry').replace(/[<>]/g, '')}</strong> has been ${verb} by our team.</p>
+          ${notesBlock}
+          <p style="font-size:12px;color:#5b6770;margin-top:18px;">
+            If you have follow-up questions, reply to this email and we'll re-open the ticket.
+          </p>
+        `.trim();
+        await emailService.sendEmail({ to: ticket.reporter.email, subject, html });
+      } catch (err) {
+        logInfo('Failed to send public ticket resolution email — non-fatal', {
+          ticketId, error: err?.message
+        });
+      }
+    }
+
+    return updated;
   }
 
   /**

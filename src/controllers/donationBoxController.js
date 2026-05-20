@@ -51,6 +51,87 @@ export const getDonationBoxById = asyncHandler(async (req, res) => {
   res.json({ success: true, data: box });
 });
 
+/**
+ * PATCH /platform/donation-boxes/:boxId/status
+ *
+ * Flip a donation box between active and inactive (CASH-016/017).
+ * Lightweight — doesn't touch entries, just sets the status field.
+ */
+export const setDonationBoxStatus = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const boxId = req.params.boxId;
+  const nextStatus = req.body.status;
+  if (!isMongoId(boxId)) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Invalid donation box ID' },
+    });
+  }
+  const tenantDb = await getTenantConnection(orgId);
+  // Use the underlying model directly — the service surface doesn't
+  // have a status-only update, and adding one there would invite
+  // callers to bypass other guarded paths. Status is a simple flag.
+  const { default: donationBoxSchema } = await import('../db/schemas/platform/donationBoxSchema.js');
+  const DonationBox = tenantDb.models.DonationBox || tenantDb.model('DonationBox', donationBoxSchema);
+  const updated = await DonationBox.findByIdAndUpdate(
+    boxId,
+    { $set: { status: nextStatus, updated_at: new Date() } },
+    { new: true }
+  );
+  if (!updated) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Donation box not found' }
+    });
+  }
+  res.json({ success: true, data: updated });
+});
+
+// CASH-010 — update the variance investigation on a single entry.
+// Path: PATCH /platform/donation-boxes/:boxId/entries/:entryId/variance-investigation
+export const setVarianceInvestigation = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { boxId, entryId } = req.params;
+  const { status, notes } = req.body || {};
+
+  if (!isMongoId(boxId) || !isMongoId(entryId)) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Invalid donation box or entry ID' },
+    });
+  }
+
+  const allowed = ['none', 'open', 'investigating', 'resolved', 'unresolved'];
+  const nextStatus = allowed.includes(status) ? status : 'investigating';
+
+  const tenantDb = await getTenantConnection(orgId);
+  const { default: donationBoxSchema } = await import('../db/schemas/platform/donationBoxSchema.js');
+  const DonationBox = tenantDb.models.DonationBox || tenantDb.model('DonationBox', donationBoxSchema);
+
+  const updated = await DonationBox.findOneAndUpdate(
+    { _id: boxId, 'entries._id': entryId },
+    {
+      $set: {
+        'entries.$.variance_investigation.status': nextStatus,
+        'entries.$.variance_investigation.notes': String(notes || '').trim(),
+        'entries.$.variance_investigation.investigated_by': req.user?.userId || null,
+        'entries.$.variance_investigation.investigated_at': new Date(),
+        updated_at: new Date(),
+      }
+    },
+    { new: true }
+  );
+
+  if (!updated) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Donation box or entry not found' }
+    });
+  }
+
+  res.json({ success: true, data: updated });
+});
+
 export const addDonationBoxEntry = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const boxId = req.params.boxId;

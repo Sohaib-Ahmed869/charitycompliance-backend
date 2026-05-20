@@ -146,6 +146,23 @@ export const updateRisk = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * POST /platform/risks/:riskId/resubmit
+ *
+ * Resubmit a rejected risk. Optionally accept the same field updates
+ * the edit form sends so the user can fix issues in one step rather
+ * than editing and then clicking a separate resubmit button.
+ */
+export const resubmitRisk = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user?.userId;
+  const { riskId } = req.params;
+  const updates = (req.body && typeof req.body === 'object') ? req.body : {};
+  const riskService = new RiskService(orgId);
+  const risk = await riskService.resubmitRisk(riskId, userId, updates);
+  res.json({ success: true, data: risk });
+});
+
 export const deleteRisk = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { riskId } = req.params;

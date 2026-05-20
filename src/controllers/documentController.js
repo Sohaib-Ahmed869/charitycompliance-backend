@@ -386,6 +386,34 @@ export const updateDocument = asyncHandler(async (req, res) => {
     }
   }
 
+  // Version-number bump.
+  //   File replaced via this endpoint  → major +1, minor → 0
+  //   Metadata-only edit               → minor +1 (when at least one
+  //                                      tracked field actually changed)
+  const trackedMetadataFields = [
+    'document_type', 'registration_number', 'title', 'description',
+    'date_adopted', 'date_last_amended', 'effective_date',
+    'review_date', 'expiry_date'
+  ];
+  const metadataChanged = trackedMetadataFields.some((f) => {
+    if (!Object.prototype.hasOwnProperty.call(update, f)) return false;
+    const before = existing[f];
+    const after = update[f];
+    if (before instanceof Date || after instanceof Date) {
+      const a = before ? new Date(before).getTime() : null;
+      const b = after ? new Date(after).getTime() : null;
+      return a !== b;
+    }
+    return (before ?? '') !== (after ?? '');
+  });
+  if (req.file) {
+    update.version = (existing.version || 1) + 1;
+    update.minor_version = 0;
+  } else if (metadataChanged) {
+    update.version = existing.version || 1;
+    update.minor_version = (existing.minor_version || 0) + 1;
+  }
+
   const document = await documentRepo.update(documentId, update);
   if (!document) {
     throw new AppError('Document not found', 404, 'NOT_FOUND');
@@ -699,6 +727,10 @@ export const uploadDocumentVersion = asyncHandler(async (req, res) => {
     file_path: uploaded.key,
     file_size: req.file.size,
     mime_type: req.file.mimetype,
+    // New file → major bump (createVersion does parent.version + 1) +
+    // minor reset to 0. Explicit so we don't inherit whatever minor
+    // the parent currently sits at.
+    minor_version: 0,
     date_adopted: body.date_adopted ? new Date(body.date_adopted) : parent.date_adopted,
     date_last_amended: body.date_last_amended ? new Date(body.date_last_amended) : new Date(),
     effective_date: body.effective_date ? new Date(body.effective_date) : parent.effective_date,
