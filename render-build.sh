@@ -10,9 +10,11 @@ echo "=== Any .npmrc? ==="
 cat .npmrc 2>/dev/null || echo "(none)"
 cat ~/.npmrc 2>/dev/null || echo "(no home .npmrc)"
 apt-get update && apt-get install -y \
-  libnss3 libatk-bridge2.0-0 libx11-xcb1 libxcomposite1 \
-  libxdamage1 libxrandr2 libgbm1 libasound2 libpangocairo-1.0-0 \
-  libgtk-3-0 libxshmfence1 fonts-liberation
+  libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 libcups2 \
+  libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+  libgbm1 libdrm2 libnss3 libnspr4 libasound2 \
+  libpango-1.0-0 libpangocairo-1.0-0 libcairo2 libgtk-3-0 \
+  libx11-xcb1 libxshmfence1 fonts-liberation
 echo "=== Cleaning node_modules ==="
 rm -rf node_modules
 echo "=== Node & npm ==="
