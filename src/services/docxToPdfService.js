@@ -102,11 +102,13 @@ export async function convertDocxBufferToPdfBuffer(docxBuffer) {
   const wrappedHtml = wrapHtml(html);
 
   // ── Stage 2: HTML → PDF via Puppeteer ─────────────────────────────
-  // Reuse the same launch flags the other PDF services use so this
-  // works in the Docker / Render container without surprise EACCES.
+  // Match the launch flags every other PDF service in this codebase
+  // uses (no-sandbox + disable-setuid-sandbox) so EC2 deployment is
+  // consistent — the container runs Chromium as root and would
+  // otherwise refuse to start under the default sandbox.
   const browser = await puppeteer.launch({
-    headless: 'new',
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    headless: true,
   });
   try {
     const page = await browser.newPage();
