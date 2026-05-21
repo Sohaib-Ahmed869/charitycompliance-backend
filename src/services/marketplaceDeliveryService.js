@@ -204,39 +204,59 @@ export async function deliverPurchase(purchaseId) {
   let watermarkedMime;
   let originalName;
 
+  // Buyer's chosen format. 'docx' → a branded but EDITABLE Word doc
+  // delivered as a draft policy; 'pdf' → the watermarked, locked-down
+  // PDF that enters the approval workflow (the original behaviour).
+  const wantsDocx = String(purchase.download_format || 'pdf').toLowerCase() === 'docx';
+
   try {
     const stream = await getFileStream(sourceKey);
     const sourceBytes = await streamToBuffer(stream.Body);
-
-    // Resolve PDF bytes first — for DOCX marketplace templates we
-    // render to PDF up-front so the same pdf-lib watermark path adds
-    // the org logo on top. Delivering as PDF (rather than the original
-    // DOCX) is intentional: it's the only way to get a branded header,
-    // and it's a more lock-down format than an editable Word doc.
-    let pdfBytes = null;
-    if (policy.file?.format === 'pdf') {
-      pdfBytes = sourceBytes;
-    } else {
-      // DOCX → PDF. Same conversion used by the preview-stream route,
-      // so the output is consistent with what the buyer previewed.
-      logInfo(`[marketplace] converting DOCX → PDF for ${policy.title}`);
-      pdfBytes = await convertDocxBufferToPdfBuffer(sourceBytes);
-    }
-
-    // Prepend a branded cover page and stamp a small top-right logo
-    // on every other page. Logic lives in policyPdfBrandingService so
-    // tenant + public marketplace deliveries stay visually identical.
-    const logo = orgLogoUrl ? await fetchLogoBytes(orgLogoUrl) : null;
-    watermarkedBytes = await brandMarketplacePdf(pdfBytes, {
-      orgName: orgDisplayName,
-      logoBytes: logo?.bytes,
-      logoMime: logo?.mime,
-      policyTitle: policy.title,
-      purchasedAt: purchase.purchased_at || new Date()
-    });
-    watermarkedMime = 'application/pdf';
     const baseName = (policy.file?.original_name || policy.title || 'policy').replace(/\.[^.]+$/, '');
-    originalName = `${baseName}.pdf`;
+    const logo = orgLogoUrl ? await fetchLogoBytes(orgLogoUrl) : null;
+
+    if (wantsDocx) {
+      // Branded, editable Word doc. policyDocxService handles PDF- or
+      // DOCX-source templates uniformly (PDF needs LibreOffice on the
+      // host; without it conversion throws and delivery is recorded
+      // as failed so the buyer can retry as PDF).
+      logInfo(`[marketplace] generating branded DOCX for ${policy.title}`);
+      const { generateBrandedPolicyDocx, DOCX_MIME } = await import('./policyDocxService.js');
+      watermarkedBytes = await generateBrandedPolicyDocx({
+        sourceBytes,
+        sourceFormat: policy.file?.format || 'pdf',
+        orgName: orgDisplayName,
+        logoBytes: logo?.bytes,
+        logoMime: logo?.mime,
+        policyTitle: policy.title
+      });
+      watermarkedMime = DOCX_MIME;
+      originalName = `${baseName}.docx`;
+    } else {
+      // Resolve PDF bytes first — for DOCX marketplace templates we
+      // render to PDF up-front so the same pdf-lib watermark path adds
+      // the org logo on top.
+      let pdfBytes = null;
+      if (policy.file?.format === 'pdf') {
+        pdfBytes = sourceBytes;
+      } else {
+        logInfo(`[marketplace] converting DOCX → PDF for ${policy.title}`);
+        pdfBytes = await convertDocxBufferToPdfBuffer(sourceBytes);
+      }
+
+      // Prepend a branded cover page and stamp a small top-right logo
+      // on every other page. Logic lives in policyPdfBrandingService so
+      // tenant + public marketplace deliveries stay visually identical.
+      watermarkedBytes = await brandMarketplacePdf(pdfBytes, {
+        orgName: orgDisplayName,
+        logoBytes: logo?.bytes,
+        logoMime: logo?.mime,
+        policyTitle: policy.title,
+        purchasedAt: purchase.purchased_at || new Date()
+      });
+      watermarkedMime = 'application/pdf';
+      originalName = `${baseName}.pdf`;
+    }
 
     const upload = await uploadToS3(
       watermarkedBytes,
@@ -282,7 +302,9 @@ export async function deliverPurchase(purchaseId) {
       file_size: watermarkedBytes.length,
       mime_type: watermarkedMime,
       version: `v${policy.version || 1}`,
-      status: 'under_review',
+      // Word purchases land as an editable DRAFT (the org tweaks then
+      // publishes); PDF purchases go straight into the review workflow.
+      status: wantsDocx ? 'draft' : 'under_review',
       effective_date: new Date()
     });
     deliveredPolicyId = created._id;
@@ -294,12 +316,23 @@ export async function deliverPurchase(purchaseId) {
     return { ok: false, error: err?.message || 'Policy create failed' };
   }
 
-  // ── Kick off the policy approval workflow ────────────────────────
-  const { workflowPending, workflowMessage } = await tryStartPolicyWorkflow({
-    orgId: purchase.org_id,
-    deliveredPolicyId,
-    tenantConn
-  });
+  // ── Publication path ─────────────────────────────────────────────
+  // PDF purchases enter the approval workflow, mirroring a manually
+  // uploaded policy. Word purchases are delivered as an editable draft
+  // — the buyer tweaks the wording and publishes it themselves — so no
+  // workflow is started.
+  let workflowPending = false;
+  let workflowMessage = '';
+  if (wantsDocx) {
+    workflowMessage = 'Delivered as an editable Word draft in your Policies. '
+      + 'Open it, adjust the wording, then publish it when you are ready.';
+  } else {
+    ({ workflowPending, workflowMessage } = await tryStartPolicyWorkflow({
+      orgId: purchase.org_id,
+      deliveredPolicyId,
+      tenantConn
+    }));
+  }
 
   purchase.delivered_policy_id = deliveredPolicyId;
   purchase.delivery_status = 'delivered';

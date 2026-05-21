@@ -47,39 +47,67 @@ export async function deliverPublicPurchase({
   orgName,
   logoBytes,
   logoMime,
-  policy
+  policy,
+  format = 'pdf'
 }) {
   const { MarketplacePublicPurchase } = getRouterModels();
 
   const sourceKey = policy?.file?.s3_key;
   if (!sourceKey) return { ok: false, error: 'Policy file missing.' };
 
+  const wantsDocx = String(format).toLowerCase() === 'docx';
+
   try {
     const stream = await getFileStream(sourceKey);
     const sourceBytes = await streamToBuffer(stream.Body);
+    const baseName = (policy.file?.original_name || policy.title || 'policy').replace(/\.[^.]+$/, '');
 
-    let pdfBytes = null;
-    if (policy.file?.format === 'pdf') {
-      pdfBytes = sourceBytes;
+    let deliveredBytes;
+    let deliveredFileName;
+    let deliveredMime;
+    let deliveredFormat;
+
+    if (wantsDocx) {
+      // Branded but EDITABLE Word doc so the buyer can tweak the wording
+      // before adopting it. policyDocxService handles PDF- or DOCX-source
+      // templates uniformly (PDF needs LibreOffice on the host).
+      logInfo(`[public marketplace] generating branded DOCX for ${policy.title}`);
+      const { generateBrandedPolicyDocx, DOCX_MIME } = await import('./policyDocxService.js');
+      deliveredBytes = await generateBrandedPolicyDocx({
+        sourceBytes,
+        sourceFormat: policy.file?.format || 'pdf',
+        orgName,
+        logoBytes,
+        logoMime,
+        policyTitle: policy.title
+      });
+      deliveredFileName = `${baseName}.docx`;
+      deliveredMime = DOCX_MIME;
+      deliveredFormat = 'docx';
     } else {
-      logInfo(`[public marketplace] converting DOCX → PDF for ${policy.title}`);
-      pdfBytes = await convertDocxBufferToPdfBuffer(sourceBytes);
+      let pdfBytes = null;
+      if (policy.file?.format === 'pdf') {
+        pdfBytes = sourceBytes;
+      } else {
+        logInfo(`[public marketplace] converting DOCX → PDF for ${policy.title}`);
+        pdfBytes = await convertDocxBufferToPdfBuffer(sourceBytes);
+      }
+      deliveredBytes = await brandMarketplacePdf(pdfBytes, {
+        orgName,
+        logoBytes,
+        logoMime,
+        policyTitle: policy.title,
+        purchasedAt: new Date()
+      });
+      deliveredFileName = `${baseName}.pdf`;
+      deliveredMime = 'application/pdf';
+      deliveredFormat = 'pdf';
     }
 
-    const watermarkedBytes = await brandMarketplacePdf(pdfBytes, {
-      orgName,
-      logoBytes,
-      logoMime,
-      policyTitle: policy.title,
-      purchasedAt: new Date()
-    });
-
-    const baseName = (policy.file?.original_name || policy.title || 'policy').replace(/\.[^.]+$/, '');
-    const deliveredFileName = `${baseName}.pdf`;
     const upload = await uploadToS3(
-      watermarkedBytes,
+      deliveredBytes,
       deliveredFileName,
-      'application/pdf',
+      deliveredMime,
       '_marketplace_public',
       'policy-delivery'
     );
@@ -91,13 +119,14 @@ export async function deliverPublicPurchase({
         delivery_error: '',
         delivered_s3_key: upload.key,
         delivered_file_name: deliveredFileName,
+        delivered_format: deliveredFormat,
         buyer_org_name: String(orgName).slice(0, 200),
         claimed_at: new Date()
       }
     });
 
-    logInfo(`[public marketplace] delivered ${policy._id} for purchase ${purchaseId}, size=${watermarkedBytes.length}b`);
-    return { ok: true, deliveredFileName };
+    logInfo(`[public marketplace] delivered ${policy._id} (${deliveredFormat}) for purchase ${purchaseId}, size=${deliveredBytes.length}b`);
+    return { ok: true, deliveredFileName, deliveredFormat };
   } catch (err) {
     logError('[public marketplace] delivery failed:', err?.message || err);
     return { ok: false, error: err?.message || 'Delivery failed.' };

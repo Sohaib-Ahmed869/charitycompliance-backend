@@ -59,10 +59,14 @@ const marketplacePublicPurchaseSchema = new mongoose.Schema({
   // Branding the buyer entered at claim time.
   buyer_org_name: { type: String, default: '' },
 
-  // S3 key of the watermarked PDF produced at claim time. Empty
-  // until the buyer completes the claim form.
+  // S3 key of the file produced at claim time (watermarked PDF or
+  // branded editable .docx). Empty until the buyer completes the claim.
   delivered_s3_key: { type: String, default: '' },
   delivered_file_name: { type: String, default: '' },
+  // Which format the buyer chose on the claim page — 'pdf' (watermarked,
+  // locked-down) or 'docx' (branded but editable, for tweaking before
+  // an approval workflow).
+  delivered_format: { type: String, enum: ['pdf', 'docx'], default: 'pdf' },
 
   // Atomic-claim lock for parallel webhook + reconcile delivery
   // attempts (same pattern as MarketplacePurchase.delivery_status).

@@ -177,7 +177,8 @@ async function handleCheckoutCompleted(session, req) {
         status: 'paid',
         purchased_at: new Date(),
         policy_title_snapshot: session.metadata?.policy_title || '',
-        policy_version_snapshot: Number(session.metadata?.policy_version) || 1
+        policy_version_snapshot: Number(session.metadata?.policy_version) || 1,
+        download_format: session.metadata?.download_format === 'docx' ? 'docx' : 'pdf'
       }).catch((err) => {
         // Duplicate-key under concurrent webhooks (Stripe occasionally
         // retries) — safe to swallow; the existing row is correct.

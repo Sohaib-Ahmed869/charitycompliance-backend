@@ -57,6 +57,14 @@ const marketplacePurchaseSchema = new mongoose.Schema({
   policy_title_snapshot: { type: String, default: '' },
   policy_version_snapshot: { type: Number, default: 1 },
 
+  // Format the buyer chose at checkout:
+  //   'pdf'  — a watermarked, locked-down PDF copied into the org's
+  //            Policy library under review (the existing behaviour).
+  //   'docx' — a branded but EDITABLE Word doc, copied in as a DRAFT
+  //            with no approval workflow, so the org can tweak the
+  //            wording and publish it themselves.
+  download_format: { type: String, enum: ['pdf', 'docx'], default: 'pdf' },
+
   // After a successful payment we copy the marketplace PDF (watermarked
   // with the org's own logo) into the tenant's local policy library.
   // The resulting tenant Policy._id is stored here so the frontend can

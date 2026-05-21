@@ -278,13 +278,18 @@ router.post(
   [
     param('id').isMongoId(),
     body('success_url').optional().isURL({ require_tld: false }),
-    body('cancel_url').optional().isURL({ require_tld: false })
+    body('cancel_url').optional().isURL({ require_tld: false }),
+    body('format').optional().isIn(['pdf', 'docx'])
   ],
   validate,
   asyncHandler(async (req, res) => {
     const { MarketplacePolicy, MarketplacePurchase, OrganizationSubscription } = getRouterModels();
     const policy = await MarketplacePolicy.findOne({ _id: req.params.id, status: 'published' }).lean();
     if (!policy) throw new AppError('Policy not found', 404, 'POLICY_NOT_FOUND');
+
+    // 'docx' → branded editable Word draft; 'pdf' → watermarked PDF
+    // under review. Carried through Stripe metadata to delivery time.
+    const downloadFormat = String(req.body.format || 'pdf').toLowerCase() === 'docx' ? 'docx' : 'pdf';
 
     // Block re-purchase if the org already owns it.
     const existing = await MarketplacePurchase.findOne({
@@ -318,7 +323,8 @@ router.post(
             status: 'paid',
             purchased_at: new Date(),
             policy_title_snapshot: policy.title,
-            policy_version_snapshot: policy.version || 1
+            policy_version_snapshot: policy.version || 1,
+            download_format: downloadFormat
           }
         },
         { upsert: true, new: true }
@@ -429,14 +435,16 @@ router.post(
         orgId: req.orgId,
         policy_id: policy._id.toString(),
         policy_title: policy.title.slice(0, 100),
-        policy_version: String(policy.version || 1)
+        policy_version: String(policy.version || 1),
+        download_format: downloadFormat
       },
       payment_intent_data: {
         description: `Stewardex policy: ${policy.title}`.slice(0, 200),
         metadata: {
           kind: 'marketplace_policy',
           orgId: req.orgId,
-          policy_id: policy._id.toString()
+          policy_id: policy._id.toString(),
+          download_format: downloadFormat
         }
       }
     });
@@ -452,7 +460,8 @@ router.post(
       stripe_customer_id: customerId,
       status: 'pending',
       policy_title_snapshot: policy.title,
-      policy_version_snapshot: policy.version || 1
+      policy_version_snapshot: policy.version || 1,
+      download_format: downloadFormat
     }).catch((err) => {
       // Duplicate-key on stripe_session_id means we already recorded
       // it — safe to ignore.
@@ -529,6 +538,9 @@ router.post(
         ? session.customer
         : session.customer?.id || '';
       purchase.purchased_at = purchase.purchased_at || new Date();
+      if (session.metadata?.download_format) {
+        purchase.download_format = session.metadata.download_format === 'docx' ? 'docx' : 'pdf';
+      }
       await purchase.save();
     } else {
       purchase = await MarketplacePurchase.create({
@@ -542,7 +554,8 @@ router.post(
         status: 'paid',
         purchased_at: new Date(),
         policy_title_snapshot: session.metadata?.policy_title || '',
-        policy_version_snapshot: Number(session.metadata?.policy_version) || 1
+        policy_version_snapshot: Number(session.metadata?.policy_version) || 1,
+        download_format: session.metadata?.download_format === 'docx' ? 'docx' : 'pdf'
       });
     }
 

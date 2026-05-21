@@ -354,7 +354,7 @@ class EmailService {
 
     try {
       const mailOptions = {
-        from: `"${process.env.EMAIL_FROM_NAME || 'Charity Compliance'}" <${process.env.EMAIL_USER}>`,
+        from: `"${process.env.EMAIL_FROM_NAME || 'Stewardex'}" <${process.env.EMAIL_USER}>`,
         to,
         subject,
         html,

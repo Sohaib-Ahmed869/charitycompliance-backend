@@ -354,6 +354,9 @@ router.post(
     if (!orgName) {
       throw new AppError('Organisation name is required.', 400, 'ORG_NAME_REQUIRED');
     }
+    // 'pdf' (watermarked, locked) or 'docx' (branded, editable). Anything
+    // unrecognised falls back to PDF.
+    const format = String(req.body.format || 'pdf').toLowerCase() === 'docx' ? 'docx' : 'pdf';
 
     const { MarketplacePublicPurchase, MarketplacePolicy } = getRouterModels();
     const purchase = await MarketplacePublicPurchase.findOne({ claim_token: req.params.token });
@@ -409,7 +412,8 @@ router.post(
         orgName,
         logoBytes,
         logoMime,
-        policy
+        policy,
+        format
       });
       if (!result.ok) {
         purchase.delivery_status = 'failed';
@@ -441,6 +445,7 @@ router.post(
           claim_token: purchase.claim_token,
           status: fresh.status,
           delivered_file_name: fresh.delivered_file_name,
+          delivered_format: fresh.delivered_format || 'pdf',
           download_url: `/api/v1/public/marketplace/download/${purchase.claim_token}`
         }
       });
