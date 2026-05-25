@@ -34,6 +34,7 @@ import {
   emitNewMessage, emitUpdatedMessage, emitDeletedMessage,
   emitChannelListChanged, emitMention, emitMessagesRead
 } from '../services/chatSocketService.js';
+import { sendPushToUsers, isPushConfigured } from '../services/pushService.js';
 
 /**
  * Modules surfaced in the #-mention picker. Each entry is a stable mention
@@ -550,7 +551,64 @@ export class ChatRepository {
       if (id) emitMention(this._orgIdSlug, id, { channelId: String(channel._id), messageId: String(doc._id) });
     }
 
+    // Web Push — notify channel members of the new message. The browser
+    // Service Worker suppresses the notification when the app window is
+    // focused, so an active user isn't double-notified. Fire-and-forget
+    // so it never delays the API response.
+    this._notifyChannelMembers(channel, populated, senderUserId).catch(() => {});
+
     return populated;
+  }
+
+  /**
+   * Send a Web Push notification to channel members for a new message.
+   * Honours each member's per-channel `notify` preference. The browser
+   * Service Worker decides whether to actually display it — it skips the
+   * notification when a Stewardex window is focused, so an active user
+   * isn't double-notified. Best-effort — wrapped so it can never disturb
+   * message creation.
+   */
+  async _notifyChannelMembers(channel, message, senderUserId) {
+    try {
+      if (!isPushConfigured()) return;
+      const senderId = String(senderUserId);
+      const mentioned = new Set(
+        (message?.mentioned_user_ids || []).map((u) => String(u?._id || u))
+      );
+
+      const memberRows = await this.Membership
+        .find({ channel_id: channel._id })
+        .select('user_id notify')
+        .lean();
+
+      const recipientIds = [];
+      for (const row of memberRows) {
+        const uid = String(row.user_id);
+        if (uid === senderId) continue;                                 // the author
+        if (row.notify === 'muted') continue;                           // channel muted
+        if (row.notify === 'mentions' && !mentioned.has(uid)) continue;  // mentions-only
+        recipientIds.push(row.user_id);
+      }
+      if (recipientIds.length === 0) return;
+
+      const sender = message?.sender_user_id || {};
+      const senderName = `${sender.first_name || ''} ${sender.last_name || ''}`.trim()
+        || sender.email || 'Someone';
+      const channelLabel = channel?.name ? `#${channel.name}` : '';
+      const text = String(message?.body || '').replace(/\s+/g, ' ').trim();
+      const preview = text
+        ? (text.length > 140 ? `${text.slice(0, 139)}…` : text)
+        : 'Sent an attachment';
+
+      await sendPushToUsers(this.tenantDb, recipientIds, {
+        title: channelLabel ? `${senderName} · ${channelLabel}` : senderName,
+        body: preview,
+        url: '/chat',
+        tag: `chat-${String(channel._id)}`
+      });
+    } catch {
+      /* push is best-effort — never disturb the message flow */
+    }
   }
 
   async editMessage({ messageId, userId, body }) {

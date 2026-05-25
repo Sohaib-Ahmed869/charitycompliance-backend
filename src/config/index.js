@@ -82,6 +82,16 @@ export const features = {
   notifications: process.env.ENABLE_NOTIFICATIONS !== 'false'
 };
 
+// Web Push (browser notifications) — OPTIONAL. When the VAPID keys are
+// unset, push is simply disabled and the app still boots normally; it is
+// deliberately not in requiredVars. Generate keys with:
+//   node -e "console.log(require('web-push').generateVAPIDKeys())"
+export const webPush = {
+  vapidPublicKey: (process.env.WEB_PUSH_VAPID_PUBLIC_KEY || '').trim(),
+  vapidPrivateKey: (process.env.WEB_PUSH_VAPID_PRIVATE_KEY || '').trim(),
+  vapidSubject: (process.env.WEB_PUSH_VAPID_SUBJECT || 'mailto:notifications@stewardex.com').trim()
+};
+
 // Password Requirements
 export const password = {
   minLength: parseInt(process.env.MIN_PASSWORD_LENGTH) || 8,
@@ -120,5 +130,6 @@ export default {
   rateLimit,
   logging,
   features,
+  webPush,
   password
 };

@@ -55,7 +55,7 @@ export const DEFAULT_FEATURE_FLAGS = [
   ['auditor.read_only_access',         'governance', 'External Auditor Access',                      ['P','E'],     'Give an external auditor a time-limited, view-only seat that spans every module.', []],
   ['ai.compliance_assistant',          'ai',         'AI Compliance Assistant',                      ['P','E'],     'A chat assistant that answers compliance questions using your organisation\'s own data.', ['AI Chatbot widget']],
   ['people.hr',                        'hr',         'People & HR',                                  ['P','E'],     'Employees, training register, inductions, disciplinary records, volunteers, and offboarding in one module.', ['People & HR', 'Volunteers', 'Access Control & Offboarding']],
-  ['it.register',                      'operations', 'IT Systems & Software Register',               ['P','E'],     'Track every IT subscription, admin account, two-step status, and access log.', ['IT System Register']],
+  ['it.register',                      'operations', 'Systems Register',                             ['P','E'],     'Track every IT subscription, admin account, two-step status, and access log.', ['Systems Register']],
   // Enterprise-only
   ['group.multi_entity',               'enterprise', 'Multi-Entity Management',                      ['E'],         'Manage a parent organisation and its subsidiaries together, with consolidated reporting.', []],
   ['workflow.custom_builder',          'enterprise', 'Custom Approval Workflow Builder',             ['E'],         'A no-code builder for approval flows beyond the ones that ship with the platform.', []],

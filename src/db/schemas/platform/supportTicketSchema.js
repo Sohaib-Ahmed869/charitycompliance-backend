@@ -48,7 +48,7 @@ const supportTicketSchema = new mongoose.Schema({
   module: {
     type: String,
     enum: [
-      'IT Systems Register', 'Risk Register', 'Policy Register',
+      'Systems Register', 'Risk Register', 'Policy Register',
       'Financial Management', 'Human Resources', 'Meetings & Calendar',
       'Compliance', 'Asset Register', 'Grants & Donors',
       'Board & Governance', 'BCP', 'Expenses', 'Other'

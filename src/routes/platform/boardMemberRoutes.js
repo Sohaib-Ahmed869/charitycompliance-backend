@@ -125,6 +125,9 @@ router.post(
       .notEmpty()
       .withMessage('Family name is required'),
     body('date_of_birth')
+      // Volunteers don't need DOB on create — they're just a contact /
+      // submission identity. Only board members must supply it.
+      .if((value, { req }) => !req.body.is_volunteer)
       .isISO8601()
       .withMessage('Valid date of birth is required')
       .custom((value) => {
@@ -183,18 +186,25 @@ router.post(
     body('email')
       .isEmail()
       .withMessage('Valid email is required'),
+    // Residential address is only required for board members. Volunteers
+    // can be created with just name + email + phone; they can fill in
+    // address later from their own profile if needed.
     body('residential_address.line1')
+      .if((value, { req }) => !req.body.is_volunteer)
       .trim()
       .notEmpty()
       .withMessage('Address line 1 is required'),
     body('residential_address.suburb')
+      .if((value, { req }) => !req.body.is_volunteer)
       .trim()
       .notEmpty()
       .withMessage('Suburb is required'),
     body('residential_address.state')
+      .if((value, { req }) => !req.body.is_volunteer)
       .isIn(['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT'])
       .withMessage('Valid state is required'),
     body('residential_address.postcode')
+      .if((value, { req }) => !req.body.is_volunteer)
       .trim()
       .notEmpty()
       .withMessage('Postcode is required')

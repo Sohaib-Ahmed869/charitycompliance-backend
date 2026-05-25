@@ -33,7 +33,8 @@ const boardMemberSchema = new mongoose.Schema({
   },
   date_of_birth: {
     type: Date,
-    required: true,
+    // Volunteers are just contacts; only board members must supply DOB.
+    required: function () { return !this.is_volunteer; },
     encrypted: true
   },
   // Governance/responsible person role title (not limited to board positions)
@@ -95,24 +96,30 @@ const boardMemberSchema = new mongoose.Schema({
     encrypted: true
   },
   residential_address: {
+    // Required for board members, optional for volunteers — a volunteer
+    // record is created from just name + email, address can be added
+    // later via their profile.
     line1: {
       type: String,
-      required: true,
+      required: function () { return !this.is_volunteer; },
       encrypted: true
     },
     suburb: {
       type: String,
-      required: true,
+      required: function () { return !this.is_volunteer; },
       encrypted: true
     },
     state: {
       type: String,
-      required: true,
-      enum: ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT']
+      required: function () { return !this.is_volunteer; },
+      enum: {
+        values: ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT', ''],
+        message: 'Valid state is required'
+      }
     },
     postcode: {
       type: String,
-      required: true,
+      required: function () { return !this.is_volunteer; },
       encrypted: true
     }
   },
