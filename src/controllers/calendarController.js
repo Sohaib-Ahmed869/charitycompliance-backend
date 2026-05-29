@@ -393,7 +393,14 @@ export const updateCustomEvent = asyncHandler(async (req, res) => {
     throw new AppError('Cannot edit system-generated events', 403, 'FORBIDDEN');
   }
 
-  if (existingEvent.user_id.toString() !== userId) {
+  // Creator can always edit. Admins and org owners can edit/complete
+  // any custom event in their tenant — the calendar surfaces every
+  // user's custom events to admins for triage, so blocking the edit
+  // would leave them looking at a read-only list with no recourse.
+  const isAdmin = Array.isArray(req.user?.roles) && req.user.roles.includes('admin');
+  const isOwner = req.user?.is_org_owner === true;
+  const isCreator = existingEvent.user_id.toString() === userId;
+  if (!isCreator && !isAdmin && !isOwner) {
     throw new AppError('You do not have permission to edit this event', 403, 'FORBIDDEN');
   }
 
@@ -437,7 +444,14 @@ export const deleteCustomEvent = asyncHandler(async (req, res) => {
     throw new AppError('Cannot delete system-generated events', 403, 'FORBIDDEN');
   }
 
-  if (existingEvent.user_id.toString() !== userId) {
+  // Same authorisation model as updateCustomEvent: creator OR an
+  // admin / org owner can delete. Admins see every user's custom
+  // events in their calendar; they need to be able to clear stale
+  // entries too.
+  const isAdminDel = Array.isArray(req.user?.roles) && req.user.roles.includes('admin');
+  const isOwnerDel = req.user?.is_org_owner === true;
+  const isCreatorDel = existingEvent.user_id.toString() === userId;
+  if (!isCreatorDel && !isAdminDel && !isOwnerDel) {
     throw new AppError('You do not have permission to delete this event', 403, 'FORBIDDEN');
   }
 
