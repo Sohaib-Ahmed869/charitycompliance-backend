@@ -8,7 +8,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
-import { connectRouterDB } from './config/database.js';
+import { connectRouterDB, getRouterConnection } from './config/database.js';
 import { logDebug, logInfo, logWarn } from './utils/logger.js';
 
 dotenv.config();
@@ -105,15 +105,91 @@ if (process.env.NODE_ENV === 'development') {
   });
 }
 
-// Health Check Endpoint (before auth)
-app.get('/health', (req, res) => {
+// ============================================
+// HEALTH CHECK
+// ============================================
+//
+// Two flavours, both unauthenticated:
+//
+//   GET /health          - LIVENESS. Returns 200 the moment Express
+//                          is responsive. No DB ping. This is what
+//                          the AWS load balancer / target group
+//                          should hit to decide whether to keep the
+//                          instance in rotation. We don't want a
+//                          transient Mongo blip to deregister us.
+//
+//   GET /api/v1/health   - READINESS. Pings the Router DB and only
+//                          returns 200 when Mongo is connected. This
+//                          is what the deploy pipeline + smoke tests
+//                          hit after a pm2 reload to confirm the
+//                          new process can actually serve requests.
+//                          Returns 503 (NOT 200) when the DB is down,
+//                          so a broken deploy fails fast.
+//
+// We also alias readiness at `/healthz` for any kubernetes-style
+// probe that goes looking for it by convention.
+
+// Liveness: cheap, always green if the event loop is alive.
+app.get('/health', (_req, res) => {
   res.json({
     success: true,
+    status: 'live',
     message: 'Charity Compliance API is running',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV
+    environment: process.env.NODE_ENV,
+    uptime_s: Math.floor(process.uptime())
   });
 });
+
+// Readiness: confirms the Router DB is connected and answers a ping.
+// Uses a 1.5s timeout so a half-dead Mongo doesn't keep the health
+// check hanging indefinitely.
+const readinessHandler = async (_req, res) => {
+  const started = Date.now();
+  let dbState = 'unknown';
+  let dbOk = false;
+  let dbPingMs = null;
+
+  try {
+    const conn = getRouterConnection();
+    // mongoose readyState: 0 disconnected, 1 connected, 2 connecting, 3 disconnecting
+    const stateMap = { 0: 'disconnected', 1: 'connected', 2: 'connecting', 3: 'disconnecting' };
+    dbState = stateMap[conn.readyState] || `state-${conn.readyState}`;
+
+    if (conn.readyState === 1) {
+      const pingStart = Date.now();
+      // 1.5s race so a wedged primary doesn't stall the response.
+      await Promise.race([
+        conn.db.admin().command({ ping: 1 }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('ping timeout')), 1500))
+      ]);
+      dbPingMs = Date.now() - pingStart;
+      dbOk = true;
+    }
+  } catch (err) {
+    dbState = `error: ${err.message || 'unknown'}`;
+    dbOk = false;
+  }
+
+  const status = dbOk ? 200 : 503;
+  res.status(status).json({
+    success: dbOk,
+    status: dbOk ? 'ready' : 'not-ready',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    uptime_s: Math.floor(process.uptime()),
+    checks: {
+      router_db: {
+        state: dbState,
+        ping_ms: dbPingMs
+      }
+    },
+    elapsed_ms: Date.now() - started
+  });
+};
+
+app.get('/api/v1/health', readinessHandler);
+app.get('/healthz',         readinessHandler);
 
 // ============================================
 // ROUTES

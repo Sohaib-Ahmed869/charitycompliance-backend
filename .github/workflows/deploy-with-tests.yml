@@ -1,0 +1,338 @@
+# Deploy + Validate pipeline.
+#
+# Trigger: push to the `charity-compliance` branch.
+# Target:  the EC2 instance running PM2.
+#
+# Flow:
+#   1. SSH to the box, capture the CURRENT commit SHA (this is our
+#      safety net to roll back to if anything below fails).
+#   2. SSH again: git pull origin charity-compliance, npm install,
+#      pm2 reload all, wait for /health.
+#   3. Clone Stewardex-BE (which holds the test suites) and run the
+#      critical tests against the live URL: smoke + login flow +
+#      profile fetch.
+#   4. If critical tests PASS: run the full API suite for telemetry
+#      (does not gate the deploy), then email success.
+#   5. If critical tests FAIL: SSH back, git reset --hard to the SHA
+#      we saved in step 1, npm install, pm2 reload, wait for /health,
+#      email a "rolled back" report, and exit non-zero so the workflow
+#      run shows red.
+#
+# Why two SSH steps for the rollback rather than one big script: the
+# rollback step uses `if: failure()`, so it only fires when an earlier
+# step failed. Keeping the SHA capture separate means we always have a
+# clean previous-pointer even if the pull itself died mid-way.
+
+name: Deploy charity-compliance + run tests
+
+on:
+  push:
+    branches:
+      - charity-compliance
+  workflow_dispatch: {}
+
+concurrency:
+  # Only one deploy at a time to this branch. If you push twice quickly,
+  # the second push waits for the first to finish; we don't want two
+  # simultaneous pm2 reloads or two rollbacks fighting each other.
+  group: deploy-charity-compliance
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      # Used by the test-runner steps when they hit the live backend.
+      SMOKE_API_BASE_URL: ${{ secrets.SMOKE_API_BASE_URL }}
+      SMOKE_FRONTEND_URL: ${{ secrets.SMOKE_FRONTEND_URL }}
+      LOGIN_USERNAME:     ${{ secrets.LOGIN_USERNAME }}
+      LOGIN_PASSWORD:     ${{ secrets.LOGIN_PASSWORD }}
+      SMOKE_FIXED_OTP:    ${{ secrets.SMOKE_FIXED_OTP }}
+      CI: "true"
+
+    steps:
+      # ----------------------------------------------------------------
+      # 1. Record the SHA that's currently deployed so we can roll back
+      # to it later if anything fails. Done over SSH because the EC2
+      # instance might be ahead of (or behind) the GitHub HEAD.
+      # ----------------------------------------------------------------
+      - name: Capture currently-deployed commit
+        id: previous
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host:     ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key:      ${{ secrets.SSH_PRIVATE_KEY }}
+          port:     ${{ secrets.SSH_PORT || 22 }}
+          script: |
+            cd "${{ secrets.BACKEND_PATH }}"
+            git rev-parse HEAD
+
+      # The previous step prints the SHA to its output. Capture it into
+      # an output variable so the rollback step can read it back.
+      - name: Save previous SHA for rollback
+        id: save_sha
+        run: |
+          PREV="${{ steps.previous.outputs.stdout }}"
+          PREV=$(echo "$PREV" | tr -d '\r\n ' | tail -c 41)
+          echo "Saved previous SHA: $PREV"
+          echo "prev_sha=$PREV" >> "$GITHUB_OUTPUT"
+
+      # ----------------------------------------------------------------
+      # 2. Deploy: pull, install, pm2 reload, health check.
+      # ----------------------------------------------------------------
+      - name: Pull + install + pm2 reload
+        id: deploy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host:     ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key:      ${{ secrets.SSH_PRIVATE_KEY }}
+          port:     ${{ secrets.SSH_PORT || 22 }}
+          # 5 min hard cap; if the pull/install hangs that long
+          # something is seriously wrong and we want to fall back.
+          command_timeout: 5m
+          script: |
+            set -e
+            cd "${{ secrets.BACKEND_PATH }}"
+            echo "==> git status (pre-pull)"
+            git status --short || true
+            echo "==> git pull"
+            git fetch --prune origin
+            git checkout charity-compliance
+            git pull --ff-only origin charity-compliance
+            echo "==> Deployed commit: $(git rev-parse HEAD)"
+            echo "==> npm install"
+            npm install --omit=dev --no-audit --no-fund
+            echo "==> pm2 reload all"
+            pm2 reload all --update-env
+            pm2 save
+
+      - name: Wait for health endpoint
+        id: health
+        run: |
+          set +e
+          URL="${{ secrets.SMOKE_API_BASE_URL }}/health"
+          echo "Polling $URL ..."
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" -m 5 "$URL" || echo "000")
+            echo "  attempt $i: $CODE"
+            if [ "$CODE" = "200" ]; then
+              echo "Healthy."
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Health check never returned 200 in 60s."
+          exit 1
+
+      # ----------------------------------------------------------------
+      # 3. Critical tests — these gate the deploy. If any one of these
+      # fails we roll back. Pull the test suite from Stewardex-BE.
+      # ----------------------------------------------------------------
+      - name: Check out test suite (Stewardex-BE)
+        uses: actions/checkout@v4
+        with:
+          repository: Calcite-Technologies/Stewardex-BE
+          # If Stewardex-BE is private, add a PAT secret with
+          # Contents: Read on that repo and use it here.
+          token: ${{ secrets.STEWARDEX_BE_TOKEN }}
+          path:  tests-repo
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install smoke deps
+        working-directory: tests-repo/smoke
+        run: npm ci
+
+      - name: Install api deps
+        working-directory: tests-repo/api
+        run: npm ci
+
+      - name: Install e2e deps
+        working-directory: tests-repo/e2e
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: tests-repo/e2e
+        run: npx playwright install --with-deps chromium
+
+      - name: Run smoke (CRITICAL)
+        id: smoke
+        continue-on-error: true
+        working-directory: tests-repo/smoke
+        run: |
+          set +e
+          npm test -- --reporter=verbose 2>&1 | tee ../../smoke-output.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # Only the auth flow (login + verify-otp + me-profile) is critical
+      # for rollback. The rest of the API suite runs after the gate
+      # below so it doesn't block deploys for non-essential breakage.
+      - name: Run login + auth-flow + profile (CRITICAL)
+        id: critical_api
+        continue-on-error: true
+        working-directory: tests-repo/api
+        run: |
+          set +e
+          npx vitest run auth/login.test.js auth/verify-otp.test.js platform/me-profile.test.js --reporter=verbose 2>&1 | tee ../../critical-api-output.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Run Playwright auth E2E (CRITICAL)
+        id: critical_e2e
+        continue-on-error: true
+        working-directory: tests-repo/e2e
+        run: |
+          set +e
+          npx playwright test tests/auth.spec.js tests/dashboard.spec.js --reporter=list 2>&1 | tee ../../critical-e2e-output.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # Gate. If any critical step failed → flip a flag and trigger
+      # the rollback branch below. Every subsequent step uses this flag
+      # rather than re-evaluating the three exit codes.
+      - name: Decide pass/fail
+        id: gate
+        if: always()
+        run: |
+          S=${{ steps.smoke.outputs.exit_code }}
+          C=${{ steps.critical_api.outputs.exit_code }}
+          E=${{ steps.critical_e2e.outputs.exit_code }}
+          if [ "$S" = "0" ] && [ "$C" = "0" ] && [ "$E" = "0" ]; then
+            echo "outcome=pass" >> "$GITHUB_OUTPUT"
+            echo "Critical tests PASSED."
+          else
+            echo "outcome=fail" >> "$GITHUB_OUTPUT"
+            REASON=""
+            [ "$S" != "0" ] && REASON="smoke ($S)"
+            [ "$C" != "0" ] && REASON="$REASON critical-api ($C)"
+            [ "$E" != "0" ] && REASON="$REASON critical-e2e ($E)"
+            echo "reason=$REASON" >> "$GITHUB_OUTPUT"
+            echo "Critical tests FAILED: $REASON"
+          fi
+
+      # ----------------------------------------------------------------
+      # 4a. Critical PASSED: run the full API suite for telemetry.
+      # A failure here does NOT roll back — it only goes into the email
+      # so you know there's regression somewhere non-essential.
+      # ----------------------------------------------------------------
+      - name: Run full API suite (informational only)
+        id: full_api
+        if: steps.gate.outputs.outcome == 'pass'
+        continue-on-error: true
+        working-directory: tests-repo/api
+        run: |
+          set +e
+          npm test -- --reporter=verbose 2>&1 | tee ../../full-api-output.log
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # ----------------------------------------------------------------
+      # 4b. Critical FAILED: roll back the deploy.
+      # ----------------------------------------------------------------
+      - name: ROLLBACK to previous commit
+        id: rollback
+        if: steps.gate.outputs.outcome == 'fail'
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host:     ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key:      ${{ secrets.SSH_PRIVATE_KEY }}
+          port:     ${{ secrets.SSH_PORT || 22 }}
+          command_timeout: 5m
+          script: |
+            set -e
+            cd "${{ secrets.BACKEND_PATH }}"
+            echo "==> Rolling back to ${{ steps.save_sha.outputs.prev_sha }}"
+            git reset --hard "${{ steps.save_sha.outputs.prev_sha }}"
+            npm install --omit=dev --no-audit --no-fund
+            pm2 reload all --update-env
+            pm2 save
+            echo "==> Now at: $(git rev-parse HEAD)"
+
+      - name: Wait for health after rollback
+        if: steps.gate.outputs.outcome == 'fail'
+        run: |
+          set +e
+          URL="${{ secrets.SMOKE_API_BASE_URL }}/health"
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" -m 5 "$URL" || echo "000")
+            echo "rollback health attempt $i: $CODE"
+            [ "$CODE" = "200" ] && exit 0
+            sleep 2
+          done
+          echo "WARNING: backend did not return healthy after rollback."
+          exit 0  # don't double-fail; the rollback already shipped
+
+      # ----------------------------------------------------------------
+      # 5. Email — every run, pass or fail. Body is intentionally short
+      # (per the project policy: no raw logs in the inbox); the logs are
+      # attached. Subject + body make it clear which scenario happened.
+      # ----------------------------------------------------------------
+      - name: Build email body
+        id: body
+        if: always()
+        run: |
+          OUTCOME="${{ steps.gate.outputs.outcome }}"
+          SHA_NEW="${{ github.sha }}"
+          SHA_OLD="${{ steps.save_sha.outputs.prev_sha }}"
+          {
+            echo "Stewardex deploy pipeline"
+            echo "Branch:        charity-compliance"
+            echo "Triggered by:  ${{ github.actor }}"
+            echo "Commit:        $SHA_NEW"
+            echo "Previous:      $SHA_OLD"
+            echo "Run:           $(date -u +'%Y-%m-%d %H:%M UTC')"
+            echo
+            if [ "$OUTCOME" = "pass" ]; then
+              echo "Result: DEPLOY SUCCEEDED"
+              echo "Critical tests passed. Full API suite was run informationally."
+              FULL=${{ steps.full_api.outputs.exit_code }}
+              if [ "$FULL" = "0" ]; then
+                echo "Full API suite: PASSED."
+              else
+                echo "Full API suite: FAILED (non-blocking) — see full-api-output.log."
+              fi
+            else
+              echo "Result: ROLLED BACK"
+              echo "Failure: ${{ steps.gate.outputs.reason }}"
+              echo "The deploy was reverted to $SHA_OLD and pm2 was reloaded."
+            fi
+            echo
+            echo "Workflow run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            echo
+            echo "Logs attached."
+          } > email-body.txt
+
+      - name: Send email
+        if: always()
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port:    ${{ secrets.SMTP_PORT }}
+          secure:         true
+          username:       ${{ secrets.SMTP_USERNAME }}
+          password:       ${{ secrets.SMTP_PASSWORD }}
+          from:           "Stewardex Deploy Bot <${{ secrets.NOTIFY_EMAIL_FROM }}>"
+          to:             ${{ secrets.NOTIFY_EMAIL_TO }}
+          subject: >-
+            ${{ steps.gate.outputs.outcome == 'pass'
+                && format('Stewardex deploy SUCCEEDED - {0}', github.sha)
+                || format('Stewardex deploy ROLLED BACK - {0}', github.sha) }}
+          body: file://email-body.txt
+          # Some attachments may not exist if a step was skipped; the
+          # action tolerates missing files when listed as a glob.
+          attachments: |
+            smoke-output.log
+            critical-api-output.log
+            critical-e2e-output.log
+            full-api-output.log
+
+      # Make the workflow run itself red when we rolled back, so the
+      # Actions tab agrees with the email.
+      - name: Fail the run if rolled back
+        if: steps.gate.outputs.outcome == 'fail'
+        run: |
+          echo "Deploy was rolled back. See email + attached logs."
+          exit 1
