@@ -105,6 +105,7 @@ const approvalRequestSchema = new mongoose.Schema({
       'risk',
       'risk_treatment',
       'partner_vetting',
+      'supplier_vetting',
       'funding_agreement',
       'project',
       'emergency',
@@ -113,6 +114,12 @@ const approvalRequestSchema = new mongoose.Schema({
       'sweep_funds',
       'financial_reporting',
       'bas_lodgement',
+      'refunds',
+      // User-defined inquiry register (Inquiries Register feature).
+      // Each record submitted against an inquiry template spawns a
+      // workflow request of this type so it appears in the central
+      // /approval-workflows view.
+      'inquiry_record',
       // legacy
       'policy_approval',
       'document_approval',
@@ -146,10 +153,14 @@ const approvalRequestSchema = new mongoose.Schema({
       'donation_milestone',
       'social_media_campaign',
       'partner',
+      'supplier',
       'funding_agreement',
       'project',
       'authority_transfer',
       'complaint',
+      // Records submitted against an Inquiry Template — the
+      // record's workflow runs as an ApprovalRequest of this type.
+      'inquiry_record',
       'other'
     ]
   },
@@ -244,6 +255,14 @@ const approvalRequestSchema = new mongoose.Schema({
   },
   coi_request_ids: [{
     type: mongoose.Schema.Types.ObjectId
+  }],
+  // Risks attached to this approval during its lifetime. Mirror of
+  // coi_request_ids — but unlike COI, attaching a risk does NOT change
+  // approval.status. The approval keeps progressing while the risk runs
+  // its own treatment lifecycle in the Risk Register.
+  attached_risk_ids: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Risk'
   }],
   // Rejection Review Tracking
   rejection_reviews: [{

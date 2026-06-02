@@ -20,6 +20,7 @@ import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
 import { notifyVolunteerOfActivePolicies } from '../services/volunteerPolicyNotifier.js';
+import { runBulkVolunteerImport } from '../services/bulkVolunteerImportService.js';
 
 const NORMALIZED_SUITABILITY_TYPES = new Set([
   'criminal_history_declaration',
@@ -123,6 +124,80 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
     success: true,
     data: list
   });
+});
+
+/**
+ * GET /platform/board-members/expired-ids?within=90
+ *
+ * Returns people whose driver's licence OR passport has already expired
+ * OR will expire within the next `within` days (default 90). Used by:
+ *   - The Expired IDs register page (the headline list)
+ *   - The dashboard's expiring-soon strip
+ *   - The calendar feed
+ *
+ * Response shape (lean, projection-trimmed):
+ *   {
+ *     people: [{
+ *       _id, given_names, family_name, position, department,
+ *       is_board_member, is_volunteer, is_head_of_department,
+ *       identification: { licence: { expiry_date }, passport: { expiry_date } }
+ *     }],
+ *     summary: { expired, expiring_30d, expiring_90d, total_tracked }
+ *   }
+ */
+export const getExpiredIdsList = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const within = Math.max(1, Math.min(365, Number(req.query.within) || 90));
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+
+  // Resolve the org's ObjectId — board_members.org_id is an ObjectId,
+  // not the slug. Passing req.orgId (a slug like "organization_5")
+  // would silently return zero rows.
+  const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+  const now = new Date();
+  const horizon = new Date();
+  horizon.setDate(now.getDate() + within);
+
+  // Match rows where EITHER licence.expiry_date or passport.expiry_date
+  // is set AND falls anywhere from the start of time up to the horizon.
+  // Includes already-expired rows (expiry < now) which is what the
+  // Expired IDs page primarily surfaces.
+  const records = await boardMemberRepo.BoardMember.find({
+    org_id: org._id,
+    is_active: true,
+    $or: [
+      { 'identification.licence.expiry_date': { $lte: horizon } },
+      { 'identification.passport.expiry_date': { $lte: horizon } }
+    ]
+  })
+    .select(
+      'given_names family_name position department position_id ' +
+      'is_board_member is_volunteer is_head_of_department ' +
+      'identification.licence.expiry_date identification.passport.expiry_date'
+    )
+    .lean();
+
+  // Categorise so the frontend doesn't have to recompute.
+  const summary = { expired: 0, expiring_30d: 0, expiring_90d: 0, total_tracked: records.length };
+  const day = 24 * 60 * 60 * 1000;
+  const in30 = new Date(now.getTime() + 30 * day);
+  for (const r of records) {
+    const dates = [
+      r?.identification?.licence?.expiry_date,
+      r?.identification?.passport?.expiry_date
+    ].filter(Boolean).map((d) => new Date(d).getTime());
+    const earliest = dates.length ? Math.min(...dates) : null;
+    if (earliest == null) continue;
+    if (earliest < now.getTime()) summary.expired++;
+    else if (earliest <= in30.getTime()) summary.expiring_30d++;
+    else summary.expiring_90d++;
+  }
+
+  res.json({ success: true, data: { people: records, summary } });
 });
 
 export const getBoardMemberById = asyncHandler(async (req, res) => {
@@ -378,6 +453,36 @@ export const createBoardMember = asyncHandler(async (req, res) => {
     success: true,
     data: createObj
   });
+});
+
+/**
+ * Bulk volunteer import — POST /platform/board-members/volunteers/bulk-import
+ *
+ * Body: `{ rows: [{ given_names, family_name, email, phone, position,
+ *                   licence_number, licence_issue_date, licence_expiry_date,
+ *                   passport_number, passport_issue_date, passport_expiry_date }] }`
+ *
+ * Per-row creation triggers the same invitation email + volunteer
+ * action tokens + policy backfill that the single-volunteer panel does.
+ * Returns a per-row summary so the import modal can show which rows
+ * succeeded and which failed.
+ */
+export const bulkImportVolunteers = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+
+  const result = await runBulkVolunteerImport({
+    tenantDb,
+    orgId,
+    inviter: {
+      firstName: req.user?.firstName || null,
+      lastName: req.user?.lastName || null
+    },
+    rows
+  });
+
+  res.status(207).json({ success: true, data: result });
 });
 
 export const updateBoardMember = asyncHandler(async (req, res) => {

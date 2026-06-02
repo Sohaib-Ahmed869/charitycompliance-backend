@@ -76,6 +76,27 @@ export const createAsset = asyncHandler(async (req, res) => {
       assetData.policyCompliance = {};
     }
   }
+  // bank_cards arrives as a JSON-stringified array when posted via
+  // multipart (which the create modal uses for file upload). Parse so
+  // the asset schema receives the proper array shape. Also normalise
+  // numeric fields — multipart stringifies everything.
+  if (typeof assetData?.bank_cards === 'string') {
+    try {
+      assetData.bank_cards = JSON.parse(assetData.bank_cards);
+    } catch {
+      assetData.bank_cards = [];
+    }
+  }
+  if (Array.isArray(assetData.bank_cards)) {
+    assetData.bank_cards = assetData.bank_cards.map((c) => ({
+      ...c,
+      expiry_month: c?.expiry_month ? Number(c.expiry_month) : undefined,
+      expiry_year:  c?.expiry_year  ? Number(c.expiry_year)  : undefined,
+      credit_limit: (c?.credit_limit !== undefined && c?.credit_limit !== '')
+        ? Number(c.credit_limit)
+        : undefined
+    }));
+  }
 
   const creationIntent = assetData.creation_intent === 'credentials' ? 'credentials' : 'subscription';
   delete assetData.creation_intent;
@@ -226,6 +247,27 @@ export const updateAsset = asyncHandler(async (req, res) => {
     } catch {
       assetData.policyCompliance = {};
     }
+  }
+  // bank_cards arrives as a JSON-stringified array when posted via
+  // multipart (which the create modal uses for file upload). Parse so
+  // the asset schema receives the proper array shape. Also normalise
+  // numeric fields — multipart stringifies everything.
+  if (typeof assetData?.bank_cards === 'string') {
+    try {
+      assetData.bank_cards = JSON.parse(assetData.bank_cards);
+    } catch {
+      assetData.bank_cards = [];
+    }
+  }
+  if (Array.isArray(assetData.bank_cards)) {
+    assetData.bank_cards = assetData.bank_cards.map((c) => ({
+      ...c,
+      expiry_month: c?.expiry_month ? Number(c.expiry_month) : undefined,
+      expiry_year:  c?.expiry_year  ? Number(c.expiry_year)  : undefined,
+      credit_limit: (c?.credit_limit !== undefined && c?.credit_limit !== '')
+        ? Number(c.credit_limit)
+        : undefined
+    }));
   }
 
   if (req.file) {

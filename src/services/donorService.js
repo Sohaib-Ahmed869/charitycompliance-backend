@@ -141,6 +141,132 @@ export class DonorService {
   }
 
   /**
+   * Manually record a donor refund — bookkeeping entry for a donor not
+   * in the system. Skips the public donor form but DOES trigger the
+   * standard refunds approval workflow so the refund is on the audit
+   * trail with the right sign-offs.
+   *
+   * Flow:
+   *   1. Validate fields
+   *   2. Resolve the refunds approval matrix + approvers
+   *      - if no matrix configured: WORKFLOW_NOT_CONFIGURED (frontend
+   *        opens the global guard dialog as it does for other modules)
+   *   3. Save refund row with status 'awaiting_internal_approval'
+   *   4. Create ApprovalRequest pointing back at this refund
+   *   5. Link refund.internal_approval_request_id → approval
+   *   6. (Approval engine completion handler) when approvers sign off,
+   *      flip refund.status → 'completed'. That's handled in
+   *      approvalWorkflowService.
+   *
+   * @param {string} userId — who's recording the entry
+   * @param {object} payload — manual_* fields (see frontend form)
+   */
+  async createManualDonorRefund(userId, payload = {}) {
+    if (!payload?.manual_donor_name?.trim()) {
+      throw new AppError('Donor name is required for manual refunds', 400, 'VALIDATION_ERROR');
+    }
+    const amt = Number(payload.manual_refund_amount || 0);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      throw new AppError('Refund amount must be a positive number', 400, 'VALIDATION_ERROR');
+    }
+
+    // Look up the refunds workflow matrix (workflow_category 'refunds_approval'
+    // OR a rule with action_type 'refunds'). Same belt-and-braces lookup we
+    // use for supplier vetting.
+    const { ApprovalMatrixRepository } = await import('../repositories/approvalMatrixRepository.js');
+    const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+    const orgRepo = new OrganizationRepository(this.tenantDb);
+    const org = await orgRepo.findOne();
+    if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+    const matrixRepo = new ApprovalMatrixRepository(this.tenantDb);
+    const matrices = await matrixRepo.findByOrgId(org._id);
+    const matrix = (matrices || []).find((m) => {
+      if (m.is_active === false) return false;
+      if (m.workflow_category === 'refunds_approval' || m.workflow_category === 'refunds') return true;
+      const rules = m.rules || m.approval_rules || [];
+      return rules.some((r) => r.action_type === 'refunds' && r.is_active !== false);
+    });
+    if (!matrix) {
+      throw new AppError(
+        'No active Refunds workflow is configured. Configure one in Role Permissions → Approval Workflows.',
+        400,
+        'WORKFLOW_NOT_CONFIGURED'
+      );
+    }
+
+    // Resolve the approver list using the same helper supplier vetting uses.
+    const { CoiWorkflowService } = await import('./coiWorkflowService.js');
+    const workflowService = new CoiWorkflowService(this.orgId);
+    const rule = matrix.rules?.[0] || matrix.approval_rules?.[0] || matrix;
+    const approvers = await workflowService.resolveApprovers(
+      matrix.rules ? { approval_rules: [rule] } : matrix,
+      org._id
+    );
+    if (!approvers || approvers.length === 0) {
+      throw new AppError(
+        'Refunds workflow has no approvers configured.',
+        400,
+        'NO_APPROVERS'
+      );
+    }
+
+    const refundRepo = new DonorRefundRepository(this.tenantDb);
+    const now = new Date();
+    const refund = await refundRepo.create({
+      org_key: this.orgId,
+      org_id: this.orgId,
+      source: 'manual',
+      status: 'awaiting_internal_approval',
+      initiated_at: now,
+      initiated_by: userId,
+      donor_contact_email: payload.manual_donor_email?.trim() || '',
+      admin_notes: payload.admin_notes || '',
+      manual_donor_name:     payload.manual_donor_name.trim(),
+      manual_donor_email:    payload.manual_donor_email?.trim() || '',
+      manual_receipt_number: payload.manual_receipt_number?.trim() || '',
+      manual_refund_amount:  amt,
+      manual_refund_date:    payload.manual_refund_date || '',
+      manual_payment_method: payload.manual_payment_method?.trim() || '',
+      manual_reason:         payload.manual_reason?.trim() || '',
+      manual_attachments:    Array.isArray(payload.manual_attachments) ? payload.manual_attachments : []
+    });
+
+    // Create the approval request now that we have the refund's _id.
+    // entity_type: 'other' because donor refund isn't its own entity_type
+    // in the ApprovalRequest enum; the engine correlates back to this
+    // row via the internal_approval_request_id we set below.
+    const { ApprovalRequestRepository } = await import('../repositories/approvalRequestRepository.js');
+    const approvalRepo = new ApprovalRequestRepository(this.tenantDb);
+    const approvalSteps = approvers.map((a) => ({
+      level: a.level,
+      approver_user_id: a.user_id,
+      approver_position_id: a.position_id,
+      approver_department_id: a.department_id,
+      status: 'pending'
+    }));
+    const approvalRequest = await approvalRepo.create({
+      org_id: org._id,
+      request_type: 'refunds',
+      entity_id: refund._id,
+      entity_type: 'other',
+      amount: amt,
+      workflow_category: 'refunds_approval',
+      approval_matrix_id: matrix._id,
+      approval_type: matrix.approval_type || 'sequential',
+      approval_steps: approvalSteps,
+      submitted_by: userId,
+      status: 'pending',
+      title: `Donor refund — ${payload.manual_donor_name.trim()}`,
+      description: `Manual donor refund · $${amt.toFixed(2)}${payload.manual_reason ? ` · ${payload.manual_reason}` : ''}`
+    });
+
+    // Link the refund back to the approval request so the engine can
+    // flip status when sign-offs complete.
+    await refundRepo.updateById(refund._id, { internal_approval_request_id: approvalRequest._id });
+    return { ...refund.toObject(), internal_approval_request_id: approvalRequest._id };
+  }
+
+  /**
    * List donor refunds for this org, with optional filters.
    */
   async listDonorRefunds(filters = {}) {

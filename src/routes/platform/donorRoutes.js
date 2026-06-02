@@ -16,7 +16,9 @@ import {
   updateDonor,
   uploadDonorKycDocuments,
   initiateDonorRefund,
+  createManualDonorRefund,
   listDonorRefunds,
+  getRefundById,
   submitDonorRefundPublicForm,
   getDonorRefundPaymentAckContext,
   submitDonorRefundPaymentAck,
@@ -116,6 +118,36 @@ router.post(
 
 // Donor refunds (internal)
 router.get('/refunds', listDonorRefunds);
+
+// Get a single refund by id — used by the approval detail page so the
+// approver can see who / what they're approving. Works for BOTH donor
+// and project refunds (same physical collection). Mounted BEFORE the
+// other parameterised refund routes so the literal `/refunds/manual`
+// still wins for its specific path.
+router.get(
+  '/refunds/by-id/:refundId',
+  [param('refundId').isMongoId().withMessage('Invalid refund ID')],
+  validate,
+  getRefundById
+);
+
+// Manual refund entry — bookkeeping for small donors not in the system.
+// Mounted BEFORE the parameterised /:donorId/refunds/initiate route so
+// the literal "/refunds/manual" wins the URL race.
+router.post(
+  '/refunds/manual',
+  [
+    body('manual_donor_name').trim().notEmpty().withMessage('Donor name is required'),
+    body('manual_donor_email').optional({ checkFalsy: true }).isEmail().withMessage('Donor email must be valid'),
+    body('manual_refund_amount').isFloat({ gt: 0 }).withMessage('Refund amount must be greater than 0'),
+    body('manual_refund_date').optional().trim(),
+    body('manual_receipt_number').optional().trim(),
+    body('manual_payment_method').optional().trim(),
+    body('manual_reason').optional().trim()
+  ],
+  validate,
+  createManualDonorRefund
+);
 
 router.post(
   '/:donorId/refunds/initiate',

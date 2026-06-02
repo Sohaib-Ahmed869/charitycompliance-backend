@@ -14,7 +14,9 @@ import {
   downloadAisPdf,
   downloadAisDocx,
   downloadAcncFinancialPdf,
-  downloadAcncFinancialDocx
+  downloadAcncFinancialDocx,
+  getExpensesBySupplierReport,
+  getExpensesByProjectReport
 } from '../../controllers/reportingController.js';
 
 const router = express.Router();
@@ -63,6 +65,31 @@ router.post(
   [query('fyEnd').notEmpty().withMessage('fyEnd is required')],
   validate,
   downloadAcncFinancialDocx
+);
+
+/* --------- Spend analysis: by supplier / by project --------- */
+
+// Common optional filter validators used by both pivots. Status enum
+// mirrors the expense schema; sending an unknown status is treated as
+// "no status filter" by the service rather than rejected here.
+const spendAnalysisFilterValidators = [
+  query('startDate').optional().isISO8601().withMessage('startDate must be ISO 8601'),
+  query('endDate').optional().isISO8601().withMessage('endDate must be ISO 8601'),
+  query('status').optional().isString()
+];
+
+router.get(
+  '/expenses/by-supplier',
+  spendAnalysisFilterValidators,
+  validate,
+  getExpensesBySupplierReport
+);
+
+router.get(
+  '/expenses/by-project',
+  spendAnalysisFilterValidators,
+  validate,
+  getExpensesByProjectReport
 );
 
 export default router;

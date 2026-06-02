@@ -62,6 +62,10 @@ router.post(
     body('supplier_information')
       .optional()
       .trim(),
+    body('supplier_id')
+      .optional({ checkFalsy: true })
+      .isMongoId()
+      .withMessage('supplier_id must be a valid id'),
     body('status')
       .optional()
       .isIn(['draft', 'pending'])

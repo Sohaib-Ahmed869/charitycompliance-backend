@@ -15,6 +15,8 @@ import { DepartmentRepository } from '../repositories/departmentRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
 import { CoiRequestRepository } from '../repositories/coiRequestRepository.js';
 import { RiskRepository } from '../repositories/riskRepository.js';
+import { RiskService } from '../services/riskService.js';
+import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import checklistInstanceSchema from '../db/schemas/platform/checklistInstanceSchema.js';
 import { ChecklistService } from '../services/checklistService.js';
 import { checkWorkflowConfigured } from '../services/workflowGuardService.js';
@@ -26,6 +28,10 @@ const getCategoryDisplayName = (category) => {
     risk_management: 'Risk Management',
     coi: 'Conflict of Interest',
     partner_vetting: 'Partner Vetting',
+    // Supplier vetting — runs against records in the Supplier Register
+    // under Expenses. Single workflow per org (same rules as COI /
+    // partner vetting).
+    supplier_vetting: 'Supplier Vetting',
     funding_agreement: 'Funding Agreement',
     project_approval: 'Project Approval',
     expense_approval: 'Expense Approval',
@@ -198,7 +204,24 @@ export const listApprovalRequests = asyncHandler(async (req, res) => {
       partner_vetting: { collection: 'partner_vettings', fields: ['partner_name', 'name', 'organization_name'] },
       social_media_campaign: { collection: 'social_media_campaigns', fields: ['campaign_name', 'title', 'name'] },
       sweep_funds: { collection: 'sweep_funds_requests', fields: ['title', 'reference', 'name'] },
-      donor_refund: { collection: 'donor_refunds', fields: ['title', 'reference'] }
+      donor_refund: { collection: 'donor_refunds', fields: ['title', 'reference'] },
+      // Inquiry records have no single "title" field — we compose one
+      // from the template name + the record's parent entity label so
+      // the list view shows e.g. "Donor Background Checks — James"
+      // instead of the generic "Inquiry Record".
+      inquiry_record: {
+        // Mongoose's default pluralisation: model name 'InquiryRecord'
+        // → collection 'inquiryrecords' (lowercased, single word). NOT
+        // 'inquiry_records' — that'd silently miss every record.
+        collection: 'inquiryrecords',
+        fields: ['template_name', 'parent_entity_label'],
+        compose: (d) => {
+          const tpl = String(d?.template_name || '').trim();
+          const lbl = String(d?.parent_entity_label || '').trim();
+          if (!tpl) return null;
+          return lbl ? `${tpl} — ${lbl}` : tpl;
+        }
+      }
     };
 
     const titleById = new Map(); // `${type}:${id}` -> title
@@ -216,7 +239,14 @@ export const listApprovalRequests = asyncHandler(async (req, res) => {
           resolver.fields.forEach((f) => { projection[f] = 1; });
           const docs = await coll.find({ _id: { $in: ids } }, { projection }).toArray();
           for (const d of docs) {
-            const title = resolver.fields.map((f) => d[f]).find((v) => typeof v === 'string' && v.trim());
+            // Prefer the resolver's `compose` fn if it has one — lets
+            // a type build a multi-field title (e.g. inquiry_record
+            // = "<template_name> — <parent_entity_label>"). Otherwise
+            // fall back to the first non-empty field in `fields`.
+            const composed = typeof resolver.compose === 'function' ? resolver.compose(d) : null;
+            const title = (composed && typeof composed === 'string' && composed.trim())
+              ? composed.trim()
+              : resolver.fields.map((f) => d[f]).find((v) => typeof v === 'string' && v.trim());
             if (title) titleById.set(`${type}:${d._id.toString()}`, String(title).trim());
           }
         } catch (e) {
@@ -484,6 +514,118 @@ export const submitCoiRequest = asyncHandler(async (req, res) => {
       coiRequest
     }
   });
+});
+
+/* ------------------------------------------------------------------ */
+/* Attached risks — trigger risk from inside a workflow               */
+/* ------------------------------------------------------------------ */
+/*
+ * Mirror of `submitCoiRequest`, with two deliberate differences:
+ *   1. The approval is NOT paused. attached_risk_ids grows but
+ *      approval.status stays whatever it was.
+ *   2. The risk record runs the standard RiskService.createRisk
+ *      lifecycle (HoD assessment → treatments → resolved), so it
+ *      shows up in the Risk Register exactly like any other risk.
+ *
+ * Back-links on both ends:
+ *   - approval.attached_risk_ids   →  [Risk._id, ...]
+ *   - risk.source_approval_request_id  →  approval._id
+ */
+export const attachRiskToApproval = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Validation failed', details: errors.array() }
+    });
+  }
+
+  const orgId = req.orgId;
+  const { approvalRequestId } = req.params;
+  const userId = req.user?.userId;
+  const tenantDb = await getTenantConnection(orgId);
+
+  const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+  const approvalRequest = await approvalRequestRepo.findById(approvalRequestId);
+  if (!approvalRequest) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Approval request not found' }
+    });
+  }
+
+  // RiskService handles the org_id lookup, owner defaulting, HoD
+  // assessment workflow, checklist creation, and auto-approve
+  // fallback when no matrix is configured. We forward only the
+  // fields the create form collects plus the source back-link.
+  const riskService = new RiskService(orgId);
+  const risk = await riskService.createRisk(
+    {
+      title:                       req.body.title,
+      description:                 req.body.description,
+      category:                    req.body.category,
+      department_id:               req.body.department_id || null,
+      existing_controls:           req.body.existing_controls,
+      next_review_date:            req.body.next_review_date || null,
+      source_approval_request_id:  approvalRequest._id,
+      source_entity_type:          approvalRequest.entity_type || null,
+      source_entity_id:            approvalRequest.entity_id || null
+    },
+    userId
+  );
+
+  // Append to the approval's attached_risk_ids — never mutate status.
+  approvalRequest.attached_risk_ids = [
+    ...(approvalRequest.attached_risk_ids || []),
+    risk._id
+  ];
+  await approvalRequest.save();
+
+  logInfo('Risk attached to approval workflow', {
+    approvalRequestId: String(approvalRequest._id),
+    riskId: String(risk._id),
+    submittedBy: String(userId),
+    orgId
+  });
+
+  res.status(201).json({
+    success: true,
+    data: {
+      risk,
+      attached_risk_ids: approvalRequest.attached_risk_ids
+    }
+  });
+});
+
+/**
+ * Return populated risk documents for every id in
+ * `approval.attached_risk_ids`. The workflow viewer renders these as
+ * inline cards so it can show full risk details without a per-row
+ * fetch. Empty array (not 404) when the approval has no attached risks.
+ */
+export const listAttachedRisks = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { approvalRequestId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+
+  const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+  const approvalRequest = await approvalRequestRepo.findById(approvalRequestId);
+  if (!approvalRequest) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Approval request not found' }
+    });
+  }
+
+  const ids = Array.isArray(approvalRequest.attached_risk_ids) ? approvalRequest.attached_risk_ids : [];
+  if (ids.length === 0) {
+    return res.json({ success: true, data: { risks: [] } });
+  }
+
+  const riskRepo = new RiskRepository(tenantDb);
+  const risks = await riskRepo.findByIds(ids);
+
+  res.json({ success: true, data: { risks } });
 });
 
 export const rejectRequest = asyncHandler(async (req, res) => {
@@ -937,7 +1079,7 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
     }
 
     // Single-workflow categories cannot have workflow_type
-    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'complaint_resolution', 'financial_reporting', 'bas_lodgement'];
+    const singleWorkflowCategories = ['coi', 'partner_vetting', 'supplier_vetting', 'policy_approval', 'hr_approval', 'complaint_resolution', 'financial_reporting', 'bas_lodgement'];
     if (singleWorkflowCategories.includes(workflow_category) && workflow_type) {
       return res.status(400).json({
         success: false,
@@ -1102,7 +1244,7 @@ export const updateApprovalMatrix = asyncHandler(async (req, res) => {
     }
 
     // Single-workflow categories cannot have workflow_type
-    const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'complaint_resolution', 'financial_reporting', 'bas_lodgement'];
+    const singleWorkflowCategories = ['coi', 'partner_vetting', 'supplier_vetting', 'policy_approval', 'hr_approval', 'complaint_resolution', 'financial_reporting', 'bas_lodgement'];
     if (singleWorkflowCategories.includes(categoryToValidate) && typeToValidate) {
       return res.status(400).json({
         success: false,

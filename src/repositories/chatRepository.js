@@ -61,7 +61,7 @@ export const COMPLIANCE_MODULE_TARGETS = [
   { id: 'donation-boxes',     label: 'Donation Boxes',         href: '/donation-boxes',                    moduleId: 'donation_boxes' },
   { id: 'social-campaigns',   label: 'Marketing Campaigns',    href: '/social-media-campaigns',            moduleId: 'social_media_campaigns' },
   { id: 'volunteers',         label: 'Volunteers',             href: '/volunteers',                        moduleId: 'human_resources' },
-  { id: 'assets',             label: 'IT Asset Register',      href: '/assets',                            moduleId: 'asset_mgmt' },
+  { id: 'assets',             label: 'Systems Register',       href: '/assets',                            moduleId: 'asset_mgmt' },
   { id: 'bcp',                label: 'Business Continuity',    href: '/bcp',                               moduleId: 'bcp' },
   { id: 'legal-docs',         label: 'Legal Documents',        href: '/legal-documents',                   moduleId: 'legal_docs' },
   { id: 'reporting',          label: 'Reporting & Compliance', href: '/reporting',                         moduleId: 'reporting' },
@@ -90,7 +90,7 @@ const COMPLIANCE_ENTITY_TARGETS = [
   { type: 'funding-agreement',label: 'Funding Agreement', modelName: 'FundingAgreement',    schema: fundingAgreementSchema,    titleField: 'agreement_title',  statusField: 'status',          moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/funding-agreements/${id}` },
   { type: 'project',          label: 'Project',           modelName: 'ProjectRegister',     schema: projectRegisterSchema,     titleField: 'project_name',     statusField: 'status',          moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/project-monitoring/${id}` },
   { type: 'social-campaign',  label: 'Marketing Campaign',modelName: 'SocialMediaCampaign', schema: socialMediaCampaignSchema, titleField: 'title',            statusField: 'status',          moduleId: 'social_media_campaigns',  hrefBuilder: (id) => `/social-media-campaigns/${id}` },
-  { type: 'asset',            label: 'IT Asset',          modelName: 'Asset',               schema: assetSchema,               titleField: 'asset_name',       statusField: 'status',          moduleId: 'asset_mgmt',              hrefBuilder: (id) => `/assets/${id}` },
+  { type: 'asset',            label: 'System Asset',      modelName: 'Asset',               schema: assetSchema,               titleField: 'asset_name',       statusField: 'status',          moduleId: 'asset_mgmt',              hrefBuilder: (id) => `/assets/${id}` },
   { type: 'legal-doc',        label: 'Legal Document',    modelName: 'LegalDocument',       schema: legalDocumentSchema,       titleField: 'document_name',    statusField: null,              moduleId: 'legal_docs',              hrefBuilder: () => `/legal-documents` },
   { type: 'donor',            label: 'Donor',             modelName: 'Donor',               schema: donorSchema,               titleField: 'name',             statusField: null,              moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/donors/${id}` }
 ];

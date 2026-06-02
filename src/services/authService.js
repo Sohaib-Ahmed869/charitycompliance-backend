@@ -104,6 +104,7 @@ export const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => 
       'policies',
       'human_resources',
       'financial_mgmt',
+      'supplier_register',
       'donation_boxes',
       'risk_mgmt',
 

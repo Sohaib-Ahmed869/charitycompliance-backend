@@ -417,6 +417,35 @@ router.post(
   approvalController.submitCoiRequest
 );
 
+// ─── Attached risks ────────────────────────────────────────────────
+// Trigger a risk from inside an approval workflow. Unlike COI, this
+// does NOT pause the approval — the risk runs its own treatment
+// lifecycle in the Risk Register while the approval keeps progressing.
+router.post(
+  '/:approvalRequestId/attached-risk',
+  [
+    param('approvalRequestId').isMongoId().withMessage('Invalid approval request ID'),
+    body('title').trim().notEmpty().withMessage('Risk title is required'),
+    body('category').trim().notEmpty().withMessage('Risk category is required'),
+    body('department_id').optional({ checkFalsy: true }).isMongoId().withMessage('department_id must be a valid id'),
+    body('description').optional().isString(),
+    body('existing_controls').optional().isString(),
+    body('next_review_date').optional({ checkFalsy: true }).isISO8601().withMessage('next_review_date must be ISO 8601')
+  ],
+  validate,
+  approvalController.attachRiskToApproval
+);
+
+// Workflow viewers fetch full details of every risk attached to this
+// approval (populated, decrypted as needed) so the approval-detail
+// page can render the "Attached risks" panel without N+1 calls.
+router.get(
+  '/:approvalRequestId/attached-risks',
+  [param('approvalRequestId').isMongoId().withMessage('Invalid approval request ID')],
+  validate,
+  approvalController.listAttachedRisks
+);
+
 // Rejection Workflow Routes
 
 // Get pending rejection reviews for current user

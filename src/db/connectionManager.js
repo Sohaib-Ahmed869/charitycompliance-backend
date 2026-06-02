@@ -109,11 +109,94 @@ export const getTenantConnection = async (orgId) => {
 
     // 4. Get tenant-specific database (encryption plugin uses master key)
     const tenantDb = podConnection.useDb(dbName, { useCache: true });
+
+    // 5. One-time self-healing — `project_refunds` historically had a
+    //    plain unique index on { org_key, token }. Manual refunds (added
+    //    later) have null tokens, so a second manual entry collides.
+    //    Schema now uses a PARTIAL unique index (string tokens only), but
+    //    Mongoose autoIndex doesn't drop the old plain one on existing
+    //    collections. Detect + replace it lazily on first tenant access.
+    //    Cached per tenantDb instance so this is a no-op after the first call.
+    await ensureRefundTokenIndexFixed(tenantDb).catch((err) => {
+      logWarn('Refund index self-heal skipped', {
+        orgId,
+        error: err?.message || String(err)
+      });
+    });
+
     return tenantDb;
   } catch (error) {
     throw new Error(`Failed to get tenant connection: ${error.message}`);
   }
 };
+
+// Track which tenant DBs we've already healed in this process. Cheap
+// WeakSet on the connection object itself so a connection drop + reopen
+// re-runs the check (necessary if a different process altered indexes).
+const _refundIndexHealed = new WeakSet();
+
+async function ensureRefundTokenIndexFixed(tenantDb) {
+  if (_refundIndexHealed.has(tenantDb)) return;
+  // Mark FIRST so a failure mid-way still avoids retry-storms; we'll log
+  // any failure but won't keep hammering the same broken collection.
+  _refundIndexHealed.add(tenantDb);
+
+  const collection = tenantDb.collection('project_refunds');
+  let indexes;
+  try {
+    indexes = await collection.indexes();
+  } catch (err) {
+    if (err?.code === 26) return; // collection doesn't exist yet
+    throw err;
+  }
+
+  const PARTIAL_FIELDS = ['token', 'payment_ack_token'];
+  for (const field of PARTIAL_FIELDS) {
+    const bad = indexes.find((i) =>
+      i.name !== '_id_'
+      && i.unique === true
+      && !i.partialFilterExpression
+      && i.key && Object.prototype.hasOwnProperty.call(i.key, field)
+    );
+    if (bad) {
+      logWarn(`Self-healing refund index: dropping ${bad.name}`, {});
+      try {
+        await collection.dropIndex(bad.name);
+      } catch (err) {
+        // Another process may have already dropped it — that's fine.
+        if (err?.code !== 27 /* IndexNotFound */) throw err;
+      }
+    }
+    const targetSpec = { org_key: 1, [field]: 1 };
+    const targetExists = indexes.some((i) =>
+      i.unique === true
+      && i.partialFilterExpression
+      && JSON.stringify(i.key) === JSON.stringify(targetSpec)
+    );
+    if (!targetExists) {
+      try {
+        await collection.createIndex(targetSpec, {
+          unique: true,
+          partialFilterExpression: { [field]: { $type: 'string' } }
+        });
+      } catch (err) {
+        // 85 IndexOptionsConflict / 86 IndexKeySpecsConflict — leftover
+        // index with same spec but wrong options. Drop by spec-derived
+        // name and retry once.
+        if (err?.code === 85 || err?.code === 86) {
+          const derivedName = `org_key_1_${field}_1`;
+          try { await collection.dropIndex(derivedName); } catch (_) {}
+          await collection.createIndex(targetSpec, {
+            unique: true,
+            partialFilterExpression: { [field]: { $type: 'string' } }
+          });
+        } else {
+          throw err;
+        }
+      }
+    }
+  }
+}
 
 /**
  * Close a specific Pod connection

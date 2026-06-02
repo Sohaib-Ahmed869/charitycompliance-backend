@@ -259,6 +259,141 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
       logError('Error retrieving physical record review events', { orgId, error: error.message, stack: error.stack });
     }
   }
+
+  // Supplier vetting expiry events — every approved supplier with an
+  // `expires_at` within the dateOptions window becomes a calendar dot.
+  // Surfaced under the `compliance` event type so it shows up in the
+  // "Expiring Soon" filter automatically (compliance is already in the
+  // EXPIRING_TYPES whitelist on the frontend).
+  try {
+    const { SupplierRepository } = await import('../repositories/supplierRepository.js');
+    const supplierRepo = new SupplierRepository(tenantDb);
+    const supplierExpiries = await supplierRepo.findExpiringSoon(orgObjectId, 365);
+    const supplierEvents = supplierExpiries.map((s) => formatCalendarEvent(
+      {
+        ...s,
+        title: `${s.legal_name} - Re-vetting Due`,
+        date: s.expires_at,
+        description: `Supplier ${s.supplier_number || ''} re-vet required`.trim()
+      },
+      'compliance',
+      s._id?.toString()
+    ));
+    logInfo('Supplier expiry events retrieved', { orgId, count: supplierEvents.length });
+    // Push into a local var that gets spread into the events array below.
+    physicalRecordEvents = physicalRecordEvents.concat(supplierEvents);
+  } catch (error) {
+    logError('Error retrieving supplier expiry events', { orgId, error: error.message, stack: error.stack });
+  }
+
+  // ID-document expiry events — driver's licence / passport for every
+  // person tracked (directors, responsible people, volunteers,
+  // employees — all share the board_members collection). Emitted under
+  // the `compliance` event type so they ride the existing Expiring
+  // Soon filter; no new EXPIRING_TYPES entry needed.
+  //
+  // CRITICAL: board_members.org_id is an ObjectId, NOT the slug. Pass
+  // `orgObjectId` (resolved earlier in this handler) not the `orgId`
+  // string or the query silently returns zero rows.
+  try {
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const bmRepo = new BoardMemberRepository(tenantDb);
+    const horizon = new Date();
+    horizon.setDate(horizon.getDate() + 365);
+    const people = await bmRepo.BoardMember.find({
+      org_id: orgObjectId,
+      is_active: true,
+      $or: [
+        { 'identification.licence.expiry_date': { $exists: true, $ne: null, $lte: horizon } },
+        { 'identification.passport.expiry_date': { $exists: true, $ne: null, $lte: horizon } }
+      ]
+    })
+      .select(
+        'given_names family_name position ' +
+        'identification.licence.expiry_date identification.passport.expiry_date'
+      )
+      .lean();
+
+    const idEvents = [];
+    for (const p of people) {
+      const name = `${p.given_names || ''} ${p.family_name || ''}`.trim() || 'Person';
+      const lic = p?.identification?.licence?.expiry_date;
+      const pas = p?.identification?.passport?.expiry_date;
+      if (lic) {
+        idEvents.push(formatCalendarEvent(
+          {
+            _id: p._id,
+            title: `${name} — Driver's licence expires`,
+            date: lic,
+            description: `ID renewal needed${p.position ? ` · ${p.position}` : ''}`
+          },
+          'compliance',
+          `${p._id}-licence`
+        ));
+      }
+      if (pas) {
+        idEvents.push(formatCalendarEvent(
+          {
+            _id: p._id,
+            title: `${name} — Passport expires`,
+            date: pas,
+            description: `ID renewal needed${p.position ? ` · ${p.position}` : ''}`
+          },
+          'compliance',
+          `${p._id}-passport`
+        ));
+      }
+    }
+    logInfo('ID expiry events retrieved', { orgId, count: idEvents.length });
+    physicalRecordEvents = physicalRecordEvents.concat(idEvents);
+  } catch (error) {
+    logError('Error retrieving ID expiry events', { orgId, error: error.message, stack: error.stack });
+  }
+
+  // Bank card expiries — only on assets categorised as "Banking
+  // Details". Surfaced as 'asset' type events so they ride the
+  // existing Expiring Soon filter (asset is already in EXPIRING_TYPES).
+  // Note: assets.org_id is a STRING slug, not an ObjectId — different
+  // convention from board_members. Don't normalise.
+  try {
+    const assetSchemaImport = (await import('../db/schemas/platform/assetSchema.js')).default;
+    const Asset = tenantDb.models.Asset || tenantDb.model('Asset', assetSchemaImport);
+    const cardHorizon = new Date();
+    cardHorizon.setDate(cardHorizon.getDate() + 365);
+    const bankAssets = await Asset.find({
+      org_id: orgId,
+      category: 'Banking Details',
+      'bank_cards.expiry_date': { $exists: true, $ne: null, $lte: cardHorizon }
+    })
+      .select('asset_name bank_cards')
+      .lean();
+
+    const cardEvents = [];
+    for (const a of bankAssets) {
+      for (const c of (a.bank_cards || [])) {
+        if (!c.expiry_date) continue;
+        if (new Date(c.expiry_date) > cardHorizon) continue;
+        // Cancelled / lost / stolen cards shouldn't keep nagging on the calendar.
+        if (['cancelled', 'lost', 'stolen'].includes(c.status)) continue;
+        const last4 = c.last4 ? ` ending ${c.last4}` : '';
+        const brand = c.brand ? `${c.brand} ` : '';
+        cardEvents.push(formatCalendarEvent(
+          {
+            _id: c._id,
+            title: `${a.asset_name} — ${brand}card${last4} expires`,
+            date: c.expiry_date,
+            description: `${c.label || 'Bank card'} expiry · renew before this date`
+          },
+          'asset',
+          `${a._id}-card-${c._id}`
+        ));
+      }
+    }
+    logInfo('Bank card expiry events retrieved', { orgId, count: cardEvents.length });
+    physicalRecordEvents = physicalRecordEvents.concat(cardEvents);
+  } catch (error) {
+    logError('Error retrieving bank card expiry events', { orgId, error: error.message, stack: error.stack });
+  }
   } // if (orgObjectId)
 
   try {

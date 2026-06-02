@@ -110,6 +110,11 @@ export class RiskService {
       trend: riskData.trend || 'stable',
       status: 'draft',
       submitted_by: submittedBy,
+      // Workflow back-links — populated when the risk was triggered
+      // from an approval-detail "Trigger risk" panel. Null elsewhere.
+      ...(riskData.source_approval_request_id ? { source_approval_request_id: riskData.source_approval_request_id } : {}),
+      ...(riskData.source_entity_type        ? { source_entity_type:        riskData.source_entity_type }        : {}),
+      ...(riskData.source_entity_id          ? { source_entity_id:          riskData.source_entity_id }          : {}),
       metadata: { ...(riskData.metadata || {}), awaiting_hod_assessment: true }
     });
 

@@ -192,6 +192,24 @@ router.get(
   projectDeliveryController.listProjectRefunds
 );
 
+// Manual project refund — bookkeeping for projects outside the
+// variance/partner-receipts workflow. Mounted BEFORE the parameterised
+// /:refundId routes so the literal '/refunds/manual' wins URL routing.
+router.post(
+  '/refunds/manual',
+  [
+    body('manual_project_name').trim().notEmpty().withMessage('Project name is required'),
+    body('refund_amount').optional().isFloat({ gt: 0 }),
+    body('manual_refund_amount').optional().isFloat({ gt: 0 }),
+    body('manual_funder_name').optional().trim(),
+    body('manual_refund_date').optional().trim(),
+    body('manual_payment_method').optional().trim(),
+    body('manual_reason').optional().trim()
+  ],
+  validate,
+  projectDeliveryController.createManualProjectRefund
+);
+
 router.post(
   '/refunds/:refundId/initiate',
   [param('refundId').isMongoId().withMessage('Invalid refundId')],

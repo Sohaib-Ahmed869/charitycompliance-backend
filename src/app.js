@@ -213,6 +213,7 @@ import organizationRoutes from './routes/platform/organizationRoutes.js';
 import roleRoutes from './routes/platform/roleRoutes.js';
 import onboardingRoutes from './routes/platform/onboardingRoutes.js';
 import expenseRoutes from './routes/platform/expenseRoutes.js';
+import supplierRoutes from './routes/platform/supplierRoutes.js';
 import approvalRoutes from './routes/platform/approvalRoutes.js';
 import boardMemberRoutes from './routes/platform/boardMemberRoutes.js';
 import documentRoutes from './routes/platform/documentRoutes.js';
@@ -222,6 +223,7 @@ import financialControlsRoutes from './routes/platform/financialControlsRoutes.j
 import governanceStructureRoutes from './routes/platform/governanceStructureRoutes.js';
 import trainingRoutes from './routes/platform/trainingRoutes.js';
 import riskRoutes from './routes/platform/riskRoutes.js';
+import inquiryRoutes from './routes/platform/inquiryRoutes.js';
 import policyRoutes from './routes/platform/policyRoutes.js';
 import marketplaceRoutes from './routes/platform/marketplaceRoutes.js';
 import meRoutes from './routes/platform/meRoutes.js';
@@ -271,6 +273,7 @@ app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
 if (isModuleEnabled('expenses')) app.use('/api/v1/platform/expenses', expenseRoutes);
+if (isModuleEnabled('suppliers')) app.use('/api/v1/platform/suppliers', supplierRoutes);
 if (isModuleEnabled('approvals')) app.use('/api/v1/platform/approvals', approvalRoutes);
 if (isModuleEnabled('checklists')) app.use('/api/v1/platform/checklists', checklistRoutes);
 if (isModuleEnabled('approval-thresholds')) app.use('/api/v1/platform/approval-thresholds', approvalThresholdRoutes);
@@ -283,6 +286,10 @@ if (isModuleEnabled('financial-controls')) app.use('/api/v1/platform/financial-c
 if (isModuleEnabled('governance-structure')) app.use('/api/v1/platform/governance-structure', governanceStructureRoutes);
 if (isModuleEnabled('training')) app.use('/api/v1/platform/training', trainingRoutes);
 if (isModuleEnabled('risks')) app.use('/api/v1/platform/risks', riskRoutes);
+// Inquiries Register — user-defined "mini registers" for ad-hoc data
+// not covered by the hard-coded modules. Always mounted (no DISABLED
+// flag) so new tenants get the feature out of the box.
+app.use('/api/v1/platform/inquiries', inquiryRoutes);
 if (isModuleEnabled('policies')) app.use('/api/v1/platform/policies', policyRoutes);
 if (isModuleEnabled('policies')) app.use('/api/v1/platform/marketplace', marketplaceRoutes);
 app.use('/api/v1/platform/me', meRoutes);

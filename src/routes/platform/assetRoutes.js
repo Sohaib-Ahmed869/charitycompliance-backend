@@ -186,7 +186,34 @@ router.put(
     body('purchase_date')
       .optional()
       .isISO8601()
-      .withMessage('Invalid purchase date format')
+      .withMessage('Invalid purchase date format'),
+
+    // ─── Bank cards (only meaningful on Banking Details assets) ───
+    // Cards arrive as an array of objects. Each field is validated
+    // independently; the schema's pre-save hook derives expiry_date
+    // from month + year.
+    body('bank_cards').optional().isArray().withMessage('bank_cards must be an array'),
+    body('bank_cards.*.label').optional().trim().notEmpty().withMessage('Card label is required'),
+    body('bank_cards.*.card_type').optional().isIn(['credit', 'debit', 'prepaid', 'virtual', 'other']),
+    body('bank_cards.*.brand').optional().isIn(['Visa', 'Mastercard', 'Amex', 'EFTPOS', 'Other']),
+    body('bank_cards.*.last4').optional({ checkFalsy: true })
+      .matches(/^\d{4}$/).withMessage('Card last4 must be exactly 4 digits'),
+    body('bank_cards.*.cardholder_name').optional().trim(),
+    body('bank_cards.*.issue_date').optional({ checkFalsy: true }).isISO8601(),
+    body('bank_cards.*.expiry_month').optional({ checkFalsy: true })
+      .isInt({ min: 1, max: 12 }).withMessage('expiry_month must be 1-12'),
+    body('bank_cards.*.expiry_year').optional({ checkFalsy: true })
+      .isInt({ min: 2000, max: 2099 }).withMessage('expiry_year must be 2000-2099'),
+    body('bank_cards.*.credit_limit').optional({ checkFalsy: true })
+      .isFloat({ min: 0 }).withMessage('credit_limit must be a positive number'),
+    body('bank_cards.*.status').optional()
+      .isIn(['active', 'blocked', 'cancelled', 'expired', 'lost', 'stolen']),
+    // Hard refuse if the caller tries to send a full PAN or CVV. If
+    // someone copy-pastes a 16-digit number into `last4` we already
+    // catch it above; this is the second defence at the API boundary.
+    body('bank_cards.*.pan').not().exists().withMessage('Full card numbers must never be sent'),
+    body('bank_cards.*.cvv').not().exists().withMessage('CVV must never be sent'),
+    body('bank_cards.*.pin').not().exists().withMessage('PINs must never be sent')
   ],
   validate,
   assetController.updateAsset

@@ -52,12 +52,21 @@ export class DonorRefundRepository {
   }
 
   async findByOrgKey(orgKey, donorId = null) {
-    const query = {
-      org_key: orgKey,
-      // Donor refunds share collection with project refunds; enforce donor shape.
-      donor_id: { $exists: true, $ne: null }
+    // Donor refunds share the physical `project_refunds` collection with
+    // project refunds. The discriminator is donor shape:
+    //   - workflow path → donor_id is set (real Donor record)
+    //   - manual path   → manual_donor_name is set (free-text, no FK)
+    // Either condition qualifies a row as donor-shaped. Project rows
+    // satisfy neither and stay out of this query.
+    const donorShape = {
+      $or: [
+        { donor_id: { $exists: true, $ne: null } },
+        { source: 'manual', manual_donor_name: { $exists: true, $ne: '' } }
+      ]
     };
-    if (donorId) query.donor_id = donorId;
+    const query = donorId
+      ? { org_key: orgKey, donor_id: donorId }
+      : { org_key: orgKey, ...donorShape };
     return this.DonorRefund.find(query)
       .populate('donor_id', 'name primary_contact.email')
       .sort({ createdAt: -1 })

@@ -58,6 +58,24 @@ export class RiskRepository {
       .populate('approval_request_id');
   }
 
+  /**
+   * Batch lookup used by the "attached risks" panel on the approval
+   * detail page. Preserves the original id order so the UI can render
+   * the list in the order they were attached.
+   */
+  async findByIds(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return [];
+    const docs = await this.Risk.find({ _id: { $in: ids } })
+      .populate('risk_owner_id', 'first_name last_name email')
+      .populate('submitted_by', 'first_name last_name email')
+      .populate('approval_request_id', 'status workflow_stage')
+      .lean();
+    const byId = new Map(docs.map((d) => [String(d._id), d]));
+    return ids
+      .map((id) => byId.get(String(id)))
+      .filter(Boolean);
+  }
+
   async create(data) {
     const risk = new this.Risk(data);
     return await risk.save();

@@ -30,6 +30,7 @@ const approvalRuleSchema = new mongoose.Schema({
       'risk_treatment',
       'coi',
       'partner_vetting',
+      'supplier_vetting',
       'funding_agreement',
       'project',
       'emergency',
@@ -107,6 +108,7 @@ const approvalMatrixSchema = new mongoose.Schema({
       'complaint_resolution',
       'coi',
       'partner_vetting',
+      'supplier_vetting',
       'policy_approval',
       'hr_approval',
       'funding_agreement',
@@ -220,6 +222,7 @@ const getCategoryDisplayName = (category) => {
     complaint_resolution: 'Complaint Resolution',
     coi: 'Conflict of Interest',
     partner_vetting: 'Partner Vetting',
+    supplier_vetting: 'Supplier Vetting',
     funding_agreement: 'Funding Agreement',
     project_approval: 'Project Approval',
     expense_approval: 'Expense Approval',
@@ -280,7 +283,7 @@ approvalMatrixSchema.pre('save', async function(next) {
   }
   
   // Single-workflow categories: no workflow_type allowed
-  const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'risk_treatment', 'complaint_resolution'];
+  const singleWorkflowCategories = ['coi', 'partner_vetting', 'supplier_vetting', 'policy_approval', 'hr_approval', 'risk_treatment', 'complaint_resolution'];
   if (singleWorkflowCategories.includes(doc.workflow_category)) {
     if (doc.workflow_type) {
       return next(new Error(`${getCategoryDisplayName(doc.workflow_category)} workflows cannot have a workflow type`));

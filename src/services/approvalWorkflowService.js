@@ -1500,6 +1500,18 @@ export class ApprovalWorkflowService {
         } else if (request.entity_type === 'policy') {
           const policyRepo = new PolicyRepository(tenantDb);
           await policyRepo.update(request.entity_id, { status: 'draft' });
+        } else if (request.entity_type === 'supplier') {
+          // Supplier rejected during parallel approval — mirror to the
+          // supplier finalizer so the register reflects the outcome.
+          try {
+            const { finalizeFromApprovalRequest } = await import('../controllers/supplierController.js');
+            await finalizeFromApprovalRequest(tenantDb, {
+              ...request.toObject?.() || request,
+              status: 'rejected',
+              rejection_reason: 'Rejected by one or more approvers',
+              last_action_by: userId
+            });
+          } catch (_) { /* finalizer log handles it */ }
         }
         return updatedRequest;
       }
@@ -1536,8 +1548,10 @@ export class ApprovalWorkflowService {
         });
       } catch (_) { /* metering must never fail the approval */ }
 
-      // If this approval corresponds to a project refund sign-off, close the project after approval.
-      // We correlate using ProjectRefund.internal_approval_request_id.
+      // If this approval corresponds to a refund sign-off, complete the
+      // refund. We correlate using internal_approval_request_id on the
+      // shared `project_refunds` collection (which holds both donor +
+      // project refunds, manual + workflow-initiated).
       try {
         const { ProjectRefundRepository } = await import('../repositories/projectRefundRepository.js');
         const refundRepo = new ProjectRefundRepository(tenantDb);
@@ -1545,12 +1559,20 @@ export class ApprovalWorkflowService {
           .findOne({ internal_approval_request_id: approvalRequestId })
           .lean();
 
-        if (refund && refund.project_id) {
+        // Any refund linked to this approval flips to completed —
+        // donor manual, project manual, AND the existing variance flow.
+        if (refund) {
           await refundRepo.updateById(refund._id, {
             status: 'completed',
-            internal_approved_at: new Date()
+            internal_approved_at: new Date(),
+            completed_at: new Date()
           });
+        }
 
+        // The project-close side-effect only runs when there's a real
+        // linked project (workflow path with project_id). Manual refunds
+        // don't close any project — they're bookkeeping entries.
+        if (refund && refund.project_id) {
           const projectRepo = new ProjectRegisterRepository(tenantDb);
           const projId = refund.project_id?._id || refund.project_id;
 
@@ -1703,6 +1725,28 @@ export class ApprovalWorkflowService {
         const Partner = tenantDb.model('PartnerVetting');
         await Partner.findByIdAndUpdate(request.entity_id, { status: 'approved' });
         logInfo('Partner status updated from approval', { approvalRequestId, entityId: request.entity_id });
+      } else if (request.entity_type === 'supplier') {
+        // Supplier vetting workflow completed — delegate to the
+        // supplier controller's finalizer so the status flip,
+        // expiry stamp, and vetted_at/vetted_by audit fields all
+        // land in one place. The controller's repository expects
+        // the tenant db connection, which we already have here.
+        try {
+          const { finalizeFromApprovalRequest } = await import('../controllers/supplierController.js');
+          await finalizeFromApprovalRequest(tenantDb, {
+            ...request.toObject?.() || request,
+            status: 'approved',
+            last_action_by: userId
+          });
+          logInfo('Supplier vetting finalised (approved)', { approvalRequestId, entityId: request.entity_id });
+        } catch (supplierErr) {
+          logError('Error finalising supplier after workflow approval', {
+            approvalRequestId,
+            entityId: request.entity_id,
+            error: supplierErr.message,
+            stack: supplierErr.stack
+          });
+        }
       } else if (request.entity_type === 'authority_transfer') {
         try {
           const { BcpService } = await import('./bcpService.js');
@@ -1730,6 +1774,8 @@ export class ApprovalWorkflowService {
         grant: 'Grant',
         funding_agreement: 'Funding Agreement',
         partner_vetting: 'Partner Vetting',
+        supplier: 'Supplier Vetting',
+        supplier_vetting: 'Supplier Vetting',
         project: 'Project',
         policy: 'Policy',
         policy_approval: 'Policy Approval',

@@ -22,7 +22,7 @@ PLATFORM KNOWLEDGE:
 RECENT SYSTEM UPDATES (IMPORTANT — reflect current behavior):
 - Project Monitoring is a full-page guided experience (not a modal). It uses step-wise gating: users may be blocked from later steps until required information is provided, and the UI should explain what is missing.
 - Auditor access is read-only in key areas: auditors should not be able to initiate or perform actions in Project Delivery, Refunds, COI assignments, Calendar/Approval Workflow navigation, or other editable workflows (they can view only).
-- Refund processing includes a payment method dropdown sourced from Systems Register banking/payment assets. If a user cannot find their bank/payment account, the UI may instruct them to add a Banking Details asset under IT Assets so it appears in the dropdown.
+- Refund processing includes a payment method dropdown sourced from Systems Register banking/payment assets. If a user cannot find their bank/payment account, the UI may instruct them to add a Banking Details asset under the Systems Register so it appears in the dropdown.
 - Donor refund public form: core fields are mandatory (donation date/amount/payment method/reason and at least one evidence file). Additional notes are optional.
 - Volunteer quick action links (Complaint/Risk/COI) can be generated, shown in the Volunteers page, and resent via a "Resend links" action.
 - Approval workflow details for Project Delivery Changes include context like extra expense amount, requester, notes, receipts, and applied entries after approval.
@@ -222,7 +222,7 @@ Completion:
 
 Refunds (if needed):
 - If funds must be returned (unspent/overpaid), initiate a refund workflow in **Refunds** (/grants-donors/refunds).
-- When recording refund payments, the payment method dropdown is sourced from IT Assets “Banking Details”. If the right account isn’t listed, add it in **IT Assets** (/assets) so it appears.
+- When recording refund payments, the payment method dropdown is sourced from the Systems Register “Banking Details”. If the right account isn’t listed, add it in the **Systems Register** (/assets) so it appears.
 
 GOVERNANCE / CHARITY ADMINISTRATION
 Go to **Governance** (/charity-administration).
