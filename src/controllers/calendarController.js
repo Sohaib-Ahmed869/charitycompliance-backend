@@ -319,29 +319,41 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
       const name = `${p.given_names || ''} ${p.family_name || ''}`.trim() || 'Person';
       const lic = p?.identification?.licence?.expiry_date;
       const pas = p?.identification?.passport?.expiry_date;
+      // Explicit `route` so the calendar's "View details" handler
+      // takes the user to the person's detail page rather than the
+      // generic compliance → risk-management fallback. Without this,
+      // these events used the `compliance` mapping and landed on a
+      // non-existent risk id (the source_id is a board member id).
+      const personRoute = `/charity-administration/responsible-people/${p._id}`;
       if (lic) {
-        idEvents.push(formatCalendarEvent(
-          {
-            _id: p._id,
-            title: `${name} — Driver's licence expires`,
-            date: lic,
-            description: `ID renewal needed${p.position ? ` · ${p.position}` : ''}`
-          },
-          'compliance',
-          `${p._id}-licence`
-        ));
+        idEvents.push({
+          ...formatCalendarEvent(
+            {
+              _id: p._id,
+              title: `${name} — Driver's licence expires`,
+              date: lic,
+              description: `ID renewal needed${p.position ? ` · ${p.position}` : ''}`
+            },
+            'compliance',
+            `${p._id}-licence`
+          ),
+          route: personRoute
+        });
       }
       if (pas) {
-        idEvents.push(formatCalendarEvent(
-          {
-            _id: p._id,
-            title: `${name} — Passport expires`,
-            date: pas,
-            description: `ID renewal needed${p.position ? ` · ${p.position}` : ''}`
-          },
-          'compliance',
-          `${p._id}-passport`
-        ));
+        idEvents.push({
+          ...formatCalendarEvent(
+            {
+              _id: p._id,
+              title: `${name} — Passport expires`,
+              date: pas,
+              description: `ID renewal needed${p.position ? ` · ${p.position}` : ''}`
+            },
+            'compliance',
+            `${p._id}-passport`
+          ),
+          route: personRoute
+        });
       }
     }
     logInfo('ID expiry events retrieved', { orgId, count: idEvents.length });

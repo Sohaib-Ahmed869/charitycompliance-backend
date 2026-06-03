@@ -34,6 +34,28 @@ import {
 
 const router = express.Router();
 
+/**
+ * Hard cap on the number of plans that can simultaneously be both
+ * `visibility: 'public'` AND `status: 'active'`. The marketing pricing
+ * page renders horizontally and only has room for four cards — letting
+ * a fifth in would silently truncate the catalogue on a 1440px screen
+ * and look broken on anything narrower. Enforced at the API layer so it
+ * survives super-admins editing plans directly via the JSON endpoint.
+ */
+const MAX_PUBLIC_ACTIVE_PLANS = 4;
+
+/**
+ * Returns the current count of public+active plans, optionally excluding
+ * a specific plan code (so a PATCH on an already-public-active plan
+ * doesn't see itself in the count).
+ */
+async function countPublicActivePlans(excludeCode = null) {
+  const { SubscriptionPlan } = getRouterModels();
+  const q = { visibility: 'public', status: 'active' };
+  if (excludeCode) q.plan_code = { $ne: String(excludeCode).toLowerCase() };
+  return SubscriptionPlan.countDocuments(q);
+}
+
 router.use(authenticate);
 // All Calcite staff can READ plans + feature catalogue + matrix.
 // Mutating endpoints add requireSuperAdmin individually.
@@ -49,7 +71,19 @@ router.get('/plans', asyncHandler(async (req, res) => {
     .sort({ 'metadata.sortOrder': 1, plan_code: 1 })
     .lean();
   const merged = mergePlansWithTemplates(dbPlans.map(serializePlan));
-  res.json({ success: true, data: merged });
+  // `meta.public_active_count` lets the UI disable the "New plan" button
+  // and surface a callout when the catalogue has hit MAX_PUBLIC_ACTIVE_PLANS.
+  // We count from the merged list (DB + templates) because an unmaterialised
+  // template still occupies a slot on the customer-facing pricing page.
+  const publicActiveCount = merged.filter((p) => (p.visibility || 'public') === 'public' && (p.status || 'active') === 'active').length;
+  res.json({
+    success: true,
+    data: merged,
+    meta: {
+      public_active_count: publicActiveCount,
+      public_active_cap: MAX_PUBLIC_ACTIVE_PLANS
+    }
+  });
 }));
 
 /** GET /admin/plans/:code — DB plan + revisions, or template if not yet saved. */
@@ -110,6 +144,41 @@ router.patch(
     const code = String(req.params.code).toLowerCase();
     const patch = req.body || {};
     const reason = String(patch.reason || '').trim();
+
+    // Public-active cap: if this patch would move the plan INTO the
+    // public+active bucket (either materialising a template as public+
+    // active, or flipping an existing private/archived plan), reject if
+    // that would push the catalogue over MAX_PUBLIC_ACTIVE_PLANS.
+    {
+      const { SubscriptionPlan: SPCount } = getRouterModels();
+      const existing = await SPCount.findOne({ plan_code: code }).lean();
+      const prevPublicActive = existing
+        ? (existing.visibility === 'public' && existing.status === 'active')
+        : (() => {
+            const tpl = findTemplateByCode(code);
+            return tpl && (tpl.visibility || 'public') === 'public' && (tpl.status || 'active') === 'active';
+          })();
+      const nextVisibility = patch.visibility || existing?.visibility || findTemplateByCode(code)?.visibility || 'public';
+      const nextStatus = patch.status || existing?.status || findTemplateByCode(code)?.status || 'active';
+      const nextPublicActive = nextVisibility === 'public' && nextStatus === 'active';
+      if (nextPublicActive && !prevPublicActive) {
+        const dbPlans = await SPCount.find({}).lean();
+        const merged = mergePlansWithTemplates(dbPlans.map(serializePlan));
+        const currentPublicActive = merged.filter(
+          (p) => p.code !== code && (p.visibility || 'public') === 'public' && (p.status || 'active') === 'active'
+        ).length;
+        if (currentPublicActive + 1 > MAX_PUBLIC_ACTIVE_PLANS) {
+          return res.status(409).json({
+            success: false,
+            error: {
+              code: 'PUBLIC_PLAN_CAP_REACHED',
+              message: `The customer-facing pricing page can only show ${MAX_PUBLIC_ACTIVE_PLANS} plans. Archive or hide an existing public plan before activating another.`,
+              details: { cap: MAX_PUBLIC_ACTIVE_PLANS, current: currentPublicActive }
+            }
+          });
+        }
+      }
+    }
 
     // Two-person approval gate (handbook §7.3): if the proposed update
     // would raise a price, reduce a quota, or remove a feature, we DO
@@ -193,6 +262,7 @@ function projectPlanUpdate(prevSnap, patch) {
   if (patch.feature_flags) proposed.feature_flags = { ...prevSnap.feature_flags, ...patch.feature_flags };
   if (patch.support) proposed.support = { ...prevSnap.support, ...patch.support };
   if (patch.trial_days != null) proposed.trial_days = patch.trial_days;
+  if (patch.is_contact_sales != null) proposed.is_contact_sales = !!patch.is_contact_sales;
   if (patch.metadata) proposed.metadata = { ...prevSnap.metadata, ...patch.metadata };
   return proposed;
 }
@@ -207,7 +277,7 @@ export async function applyPlanPatch({ req, code, patch, reason = '', autoApplie
   const { SubscriptionPlan, PlanRevision } = getRouterModels();
   const editorId = req?.user?.userId || null;
 
-  const editable = ['name', 'visibility', 'status', 'pricing', 'limits', 'feature_flags', 'support', 'trial_days', 'metadata'];
+  const editable = ['name', 'visibility', 'status', 'pricing', 'limits', 'feature_flags', 'support', 'trial_days', 'is_contact_sales', 'metadata'];
   const cleaned = {};
   for (const k of editable) {
     if (Object.prototype.hasOwnProperty.call(patch, k)) cleaned[k] = patch[k];
@@ -222,6 +292,7 @@ export async function applyPlanPatch({ req, code, patch, reason = '', autoApplie
   if (cleaned.feature_flags) update.feature_flags = cleaned.feature_flags;
   if (cleaned.support) update.support = cleaned.support;
   if (cleaned.trial_days != null) update.trial_days = cleaned.trial_days;
+  if (cleaned.is_contact_sales != null) update.is_contact_sales = !!cleaned.is_contact_sales;
   if (cleaned.metadata) update.metadata = cleaned.metadata;
   if (cleaned.pricing?.monthlyAUD != null) update.monthly_price = Number(cleaned.pricing.monthlyAUD);
   if (cleaned.pricing?.annualAUD != null)  update.yearly_price  = Number(cleaned.pricing.annualAUD);
@@ -340,6 +411,30 @@ router.post(
       });
     }
 
+    // Enforce the public-active cap. A brand-new plan defaults to private
+    // unless the caller explicitly requested public, so we only count
+    // when the create would land in the public+active bucket. Templates
+    // that haven't been materialised yet (e.g. a default Bespoke tier the
+    // admin hasn't customised) DO already occupy a slot on the marketing
+    // page, so they're included in the count.
+    const requestedVisibility = String(req.body.visibility || 'private').toLowerCase();
+    if (requestedVisibility === 'public') {
+      const { SubscriptionPlan: SP2 } = getRouterModels();
+      const dbPlans = await SP2.find({}).lean();
+      const merged = mergePlansWithTemplates(dbPlans.map(serializePlan));
+      const publicActive = merged.filter((p) => (p.visibility || 'public') === 'public' && (p.status || 'active') === 'active').length;
+      if (publicActive >= MAX_PUBLIC_ACTIVE_PLANS) {
+        return res.status(409).json({
+          success: false,
+          error: {
+            code: 'PUBLIC_PLAN_CAP_REACHED',
+            message: `The customer-facing pricing page can only show ${MAX_PUBLIC_ACTIVE_PLANS} plans. Archive or hide an existing public plan before adding another.`,
+            details: { cap: MAX_PUBLIC_ACTIVE_PLANS, current: publicActive }
+          }
+        });
+      }
+    }
+
     // Optional fork: copy fields from another plan (template or DB).
     const forkFromCode = String(req.body.fork_from || '').toLowerCase().trim();
     let base = null;
@@ -352,6 +447,7 @@ router.post(
     initial.plan_name = name;
     initial.visibility = req.body.visibility || initial.visibility || 'private';
     initial.status = 'active';
+    if (req.body.is_contact_sales != null) initial.is_contact_sales = !!req.body.is_contact_sales;
     initial.current_revision = 1;
     initial.updated_by = req.user?.userId || null;
 
@@ -726,6 +822,7 @@ function serializePlan(p) {
     feature_flags: featureFlags,
     support: p.support || {},
     trial_days: p.trial_days ?? 14,
+    is_contact_sales: !!p.is_contact_sales,
     metadata: p.metadata || {},
     current_revision: p.current_revision ?? 1,
     created_at: p.created_at,
@@ -757,6 +854,7 @@ function templateToDocument(t) {
     feature_flags: { ...(t.feature_flags || {}) },
     support: { ...(t.support || {}) },
     trial_days: t.trial_days ?? 14,
+    is_contact_sales: !!t.is_contact_sales,
     metadata: { ...(t.metadata || {}) },
     monthly_price: Number(t.pricing?.monthlyAUD || 0),
     yearly_price: Number(t.pricing?.annualAUD || 0)
@@ -776,6 +874,7 @@ function blankPlanDocument() {
     feature_flags: feature_flags_default_map(),
     support: { channel: 'email', responseSLAHours: 48, uptimeSLAPct: null },
     trial_days: 14,
+    is_contact_sales: false,
     metadata: { description: '', targetCustomer: '', sortOrder: 100 },
     monthly_price: 0,
     yearly_price: 0

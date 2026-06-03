@@ -137,6 +137,17 @@ const subscriptionPlanSchema = new mongoose.Schema({
 
   trial_days: { type: Number, default: 14, min: 0 },
 
+  /**
+   * Contact-sales (a.k.a. "talk to us") flag — when true, the public
+   * pricing page renders this plan with a "Contact support" CTA in
+   * place of the price + the usual Get-Started flow. Calcite admins
+   * toggle this on for the top tier (or any plan they want hand-
+   * crafted onboarding for). The plan can still carry a price in the
+   * DB if desired (useful for internal reference), but the customer-
+   * facing UI hides it.
+   */
+  is_contact_sales: { type: Boolean, default: false },
+
   // ── Metadata for the customer-facing pricing page ──────────────────────
   metadata: {
     description: { type: String, default: '' },

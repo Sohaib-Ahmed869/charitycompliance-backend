@@ -690,6 +690,7 @@ router.get('/available-plans', asyncHandler(async (req, res) => {
     feature_flags: p.feature_flags instanceof Map ? Object.fromEntries(p.feature_flags) : (p.feature_flags || {}),
     support: p.support || {},
     trial_days: p.trial_days ?? 14,
+    is_contact_sales: !!p.is_contact_sales,
     metadata: p.metadata || {},
     current_revision: p.current_revision ?? 1
   })));

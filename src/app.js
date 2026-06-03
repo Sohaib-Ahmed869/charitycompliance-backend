@@ -208,6 +208,13 @@ app.use('/api/v1/public/plans', publicPlansRoutes);
 import publicMarketplaceRoutes from './routes/public/publicMarketplaceRoutes.js';
 app.use('/api/v1/public/marketplace', publicMarketplaceRoutes);
 
+// Public "contact-sales" / bespoke plan request form — POST only, no JWT.
+// On submit we persist a PlanRequest in the Router DB and fire dual emails
+// (one to SUPPORT_EMAIL, one to the requester). Triage happens from the
+// Calcite admin portal under /calcite-admin/plan-requests.
+import planRequestRoutes from './routes/public/planRequestRoutes.js';
+app.use('/api/v1/public/plan-request', planRequestRoutes);
+
 // Platform routes (auth required)
 import organizationRoutes from './routes/platform/organizationRoutes.js';
 import roleRoutes from './routes/platform/roleRoutes.js';
@@ -267,6 +274,7 @@ import adminStaffRoutes from './routes/admin/staffRoutes.js';
 import adminTicketsRoutes from './routes/admin/ticketsRoutes.js';
 import adminApprovalsRoutes from './routes/admin/approvalsRoutes.js';
 import adminMarketplacePoliciesRoutes from './routes/admin/marketplacePoliciesRoutes.js';
+import adminPlanRequestRoutes from './routes/admin/planRequestRoutes.js';
 import { requireIpAllowlist } from './middleware/requireIpAllowlist.js';
 import billingRoutes from './routes/platform/billingRoutes.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
@@ -339,6 +347,7 @@ app.use('/api/v1/admin', adminStaffRoutes);
 app.use('/api/v1/admin', adminTicketsRoutes);
 app.use('/api/v1/admin', adminApprovalsRoutes);
 app.use('/api/v1/admin', adminMarketplacePoliciesRoutes);
+app.use('/api/v1/admin/plan-requests', adminPlanRequestRoutes);
 app.use('/api/v1/platform/billing', billingRoutes);
 
 // API info route

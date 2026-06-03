@@ -1,5 +1,5 @@
 /**
- * Default plan templates — Foundation, Professional, Enterprise.
+ * Default plan templates — Foundation, Professional, Enterprise, Bespoke.
  *
  * These are the canonical plans from the Pricing Strategy Handbook (§2.1).
  * They are NOT seeded into the DB; instead the admin catalogue endpoints
@@ -156,6 +156,38 @@ export const DEFAULT_PLANS = [
       description: 'Large charities ($3M+) / groups',
       targetCustomer: 'Large charities ($3M+) / groups',
       sortOrder: 30
+    }
+  },
+  // ── Bespoke / Contact-Sales tier ───────────────────────────────────────
+  // No public pricing. Pricing page renders this as the fourth horizontal
+  // card with a "Contact support" CTA. Internally still gets every flag
+  // (matches Enterprise) so a sales-closed deal flows through the same
+  // entitlement engine as the priced tiers.
+  {
+    code: 'bespoke',
+    name: 'Bespoke',
+    visibility: 'public',
+    status: 'active',
+    pricing: {
+      monthlyAUD: 0, annualAUD: 0,
+      setupFeeMonthlyAUD: 0, setupFeeAnnualAUD: 0,
+      overagePerWorkflowAUD: null, currency: 'AUD',
+      stripeProductId: '', stripeMonthlyPriceId: '',
+      stripeAnnualPriceId: '', stripeOverageMeterId: ''
+    },
+    limits: {
+      staffSeats: -1, boardSeats: -1, workflowsPerMonth: -1,
+      storageGB: -1, apiCallsPerDay: -1, customWorkflows: -1,
+      childEntities: -1, softCapPct: 80, hardCapPct: 100
+    },
+    feature_flags: flagsForTier('E'),
+    support: { channel: 'dedicated-csm', responseSLAHours: 1, uptimeSLAPct: 99.95 },
+    trial_days: 0,
+    is_contact_sales: true,
+    metadata: {
+      description: 'Networks, federations and complex group structures — built to fit.',
+      targetCustomer: 'Federations, peak bodies, multi-state groups',
+      sortOrder: 40
     }
   }
 ];

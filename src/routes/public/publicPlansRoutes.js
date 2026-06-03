@@ -36,6 +36,7 @@ router.get('/', asyncHandler(async (_req, res) => {
       : (p.feature_flags || {}),
     support: p.support || {},
     trial_days: p.trial_days ?? 14,
+    is_contact_sales: !!p.is_contact_sales,
     metadata: p.metadata || {},
     current_revision: p.current_revision ?? 1
   })));
@@ -65,6 +66,7 @@ router.get('/', asyncHandler(async (_req, res) => {
         uptimeSLAPct: p.support?.uptimeSLAPct ?? null
       },
       trial_days: p.trial_days ?? 14,
+      is_contact_sales: !!p.is_contact_sales,
       metadata: {
         description: p.metadata?.description || '',
         targetCustomer: p.metadata?.targetCustomer || '',
