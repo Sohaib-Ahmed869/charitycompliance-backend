@@ -27,6 +27,12 @@ import { validate } from '../../middleware/validation.js';
 import { asyncHandler, AppError } from '../../middleware/errorHandler.js';
 import { uploadPolicySingle, handlePolicyUploadError } from '../../middleware/upload.js';
 import { uploadToS3, getFileUrl, deleteFromS3 } from '../../services/s3Service.js';
+import {
+  seedPolicyMarketplace,
+  backfillMarketplacePreviews,
+  moduleFolderFromArg,
+  MODULES as SEED_MODULES
+} from '../../services/policyMarketplaceSeedService.js';
 import getRouterModels from '../../db/models/routerModels.js';
 
 const router = express.Router();
@@ -447,6 +453,118 @@ router.get(
     if (!doc.file?.s3_key) throw new AppError('Policy has no file attached', 404, 'FILE_MISSING');
     const url = await getFileUrl(doc.file.s3_key, 300); // 5 min
     res.json({ success: true, data: { url, expires_in: 300 } });
+  })
+);
+
+// ── Bulk seed ─────────────────────────────────────────────────────────
+
+/**
+ * POST /admin/policy-templates/seed-defaults
+ *
+ * Pull every DOCX bundled in the backend repo's
+ * `_Policy Templates (DOCX)/` folder into the Marketplace, grouped by
+ * Module. The bulk equivalent of the human-driven `POST .../policies`
+ * upload — same S3 helper, same Mongoose models — but it walks the
+ * folder for you instead of one form-submit at a time.
+ *
+ * Body (all optional):
+ *   {
+ *     published: boolean        // default false → policies created as 'draft'
+ *     price_aud_cents: number   // default 0 (free)
+ *     modules: string[]         // ["0", "addons", ...] — scope to a subset
+ *   }
+ *
+ * Idempotent — re-running skips groups (matched by slug) and policies
+ * (matched by group_id + title, case-insensitive). Returns a per-module
+ * breakdown so the UI can render a tidy "what just happened" table.
+ */
+router.get('/policy-templates/seed-defaults/preview', asyncHandler(async (_req, res) => {
+  // Quick handshake the UI can call BEFORE running the seeder, so a
+  // SuperAdmin can see "what's bundled" — module names and what
+  // already exists in the DB — before committing.
+  const { MarketplacePolicyGroup, MarketplacePolicy } = getRouterModels();
+  const preview = [];
+  for (const mod of SEED_MODULES) {
+    const existingGroup = await MarketplacePolicyGroup.findOne({ slug: mod.slug }).lean();
+    let existingPolicyCount = 0;
+    if (existingGroup) {
+      existingPolicyCount = await MarketplacePolicy.countDocuments({ group_id: existingGroup._id });
+    }
+    preview.push({
+      folder: mod.folder,
+      name: mod.name,
+      slug: mod.slug,
+      sort_order: mod.sort_order,
+      group_exists: !!existingGroup,
+      existing_policy_count: existingPolicyCount
+    });
+  }
+  res.json({ success: true, data: preview });
+}));
+
+router.post(
+  '/policy-templates/seed-defaults',
+  [
+    body('published').optional().isBoolean().toBoolean(),
+    body('price_aud_cents').optional().isInt({ min: 0 }).toInt(),
+    body('modules').optional().isArray()
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const published = req.body.published === true;
+    const priceCents = Number.isFinite(req.body.price_aud_cents) ? req.body.price_aud_cents : 0;
+
+    let onlyModules = null;
+    if (Array.isArray(req.body.modules) && req.body.modules.length) {
+      const mapped = req.body.modules
+        .map((m) => moduleFolderFromArg(m))
+        .filter(Boolean);
+      if (mapped.length === 0) {
+        throw new AppError('No valid module ids in `modules` (expected 0–8 or "addons")', 400, 'INVALID_MODULES');
+      }
+      onlyModules = mapped;
+    }
+
+    // The seeder will hit S3 + Mongo synchronously. With 111 docs at
+    // worst it can take a couple of minutes — but we hold the response
+    // open so the operator gets a definitive "done with counts" rather
+    // than having to poll.
+    const summary = await seedPolicyMarketplace({
+      published,
+      priceCents,
+      onlyModules,
+      createdById: req.user?.userId || null
+    });
+
+    res.json({
+      success: true,
+      data: summary,
+      // Soft 207 semantics — body still returned, but the client knows
+      // not everything was clean. We don't actually flip status code
+      // because the front-end already inspects `errors.length`.
+      partial: summary.errors.length > 0
+    });
+  })
+);
+
+/**
+ * POST /admin/policy-templates/regenerate-previews
+ *
+ * Scan every DOCX policy missing a `pdf_preview_key` and back-fill the
+ * preview by running the same DOCX→PDF conversion the public preview
+ * route uses. Useful after an old seed that pre-dated the inline
+ * preview generation, or to retry any preview that failed during seed.
+ *
+ * Body: { limit?: number } (default 200, max 500 per call).
+ */
+router.post(
+  '/policy-templates/regenerate-previews',
+  [body('limit').optional().isInt({ min: 1, max: 500 }).toInt()],
+  validate,
+  asyncHandler(async (req, res) => {
+    const limit = Number.isFinite(req.body.limit) ? req.body.limit : 200;
+    const result = await backfillMarketplacePreviews({ limit });
+    res.json({ success: true, data: result, partial: result.failed.length > 0 });
   })
 );
 
