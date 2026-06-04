@@ -316,9 +316,27 @@ function drawPageHeader(page, { fontBold, logoImage, orgName }) {
  * diagonal "STEWARDEX" watermark so the page is clearly a sample.
  * The org-name caption / purchase-date / cover page are all kept
  * for the buyer's actual delivered copy.
+ *
+ * @param {Buffer} pdfBytes — source PDF bytes
+ * @param {object} [opts]
+ * @param {boolean} [opts.firstPageOnly=false] — when true, the returned
+ *   PDF contains ONLY page 1. The public marketplace shows page 1 only
+ *   (card thumbnail + "page 1 only" modal), so streaming a one-page
+ *   document keeps the download tiny and pdf.js parse cheap instead of
+ *   shipping the whole policy on every card.
  */
-export async function brandStewardexPreviewPdf(pdfBytes /* , { policyTitle } = {} */) {
-  const doc = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+export async function brandStewardexPreviewPdf(pdfBytes, { firstPageOnly = false } = {}) {
+  const source = await PDFDocument.load(pdfBytes, { ignoreEncryption: true });
+
+  // For the one-page preview, copy just page 0 into a fresh document so
+  // the branding loop below only ever touches that single page.
+  let doc = source;
+  if (firstPageOnly && source.getPageCount() > 1) {
+    doc = await PDFDocument.create();
+    const [firstPage] = await doc.copyPages(source, [0]);
+    doc.addPage(firstPage);
+  }
+
   const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
   const stewardexLogo = await loadStewardexLogo();
   const logoImage = await embedLogo(doc, stewardexLogo.bytes, stewardexLogo.mime);

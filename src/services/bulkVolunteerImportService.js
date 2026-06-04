@@ -205,9 +205,10 @@ const createOneVolunteer = async ({ tenantDb, orgId, org, inviter, data }) => {
  *
  * Returns:
  *   {
- *     created:  [{ row_number, board_member_id, email, invited }],
- *     failed:   [{ row_number, email, errors: [{ field, message }] }],
- *     summary:  { total, created, failed }
+ *     created:    [{ row_number, board_member_id, email, invited }],
+ *     failed:     [{ row_number, email, errors: [{ field, message }] }],
+ *     duplicates: [{ row_number, email, reason, existing_id }],
+ *     summary:    { total, created, failed, duplicates }
  *   }
  */
 export const runBulkVolunteerImport = async ({ tenantDb, orgId, inviter, rows }) => {
@@ -221,6 +222,12 @@ export const runBulkVolunteerImport = async ({ tenantDb, orgId, inviter, rows })
 
   const created = [];
   const failed  = [];
+  const duplicates = [];
+
+  // Track emails seen earlier in THIS file so two identical rows in the
+  // same upload don't both create a record.
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+  const seenEmails = new Set();
 
   // Process sequentially rather than in parallel — the email service
   // and Mongoose connection don't love simultaneous bursts on a small
@@ -234,6 +241,26 @@ export const runBulkVolunteerImport = async ({ tenantDb, orgId, inviter, rows })
       failed.push({ row_number: rowNumber, email: raw.email || null, errors });
       continue;
     }
+
+    // Deduplicate on email — against earlier rows in this file and against
+    // any active person already in the org. A duplicate is skipped (not
+    // failed) so re-running an import is safe and idempotent-ish.
+    if (seenEmails.has(data.email)) {
+      duplicates.push({ row_number: rowNumber, email: data.email, reason: 'Duplicate of an earlier row in this file', existing_id: null });
+      continue;
+    }
+    let existingPerson = null;
+    try {
+      existingPerson = await boardMemberRepo.findActiveByEmailInOrg(data.email, org._id);
+    } catch (err) {
+      logError('Bulk volunteer import: dedup lookup failed', err, { rowNumber, email: data.email, orgId });
+    }
+    if (existingPerson) {
+      seenEmails.add(data.email);
+      duplicates.push({ row_number: rowNumber, email: data.email, reason: 'A person with this email already exists', existing_id: String(existingPerson._id) });
+      continue;
+    }
+    seenEmails.add(data.email);
 
     try {
       const result = await createOneVolunteer({ tenantDb, orgId, org, inviter, data });
@@ -253,7 +280,6 @@ export const runBulkVolunteerImport = async ({ tenantDb, orgId, inviter, rows })
   // complete.
   if (created.length > 0) {
     try {
-      const boardMemberRepo = new BoardMemberRepository(tenantDb);
       const count = await boardMemberRepo.countByOrgId(org._id);
       if (count === created.length) {
         const progressRepo = new OnboardingProgressRepository(tenantDb);
@@ -268,12 +294,19 @@ export const runBulkVolunteerImport = async ({ tenantDb, orgId, inviter, rows })
     orgId,
     total: rows.length,
     created: created.length,
-    failed: failed.length
+    failed: failed.length,
+    duplicates: duplicates.length
   });
 
   return {
     created,
     failed,
-    summary: { total: rows.length, created: created.length, failed: failed.length }
+    duplicates,
+    summary: {
+      total: rows.length,
+      created: created.length,
+      failed: failed.length,
+      duplicates: duplicates.length
+    }
   };
 };

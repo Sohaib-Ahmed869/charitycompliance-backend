@@ -8,6 +8,8 @@
 
 import supplierSchema from '../db/schemas/platform/supplierSchema.js';
 import approvalRequestSchema from '../db/schemas/platform/approvalRequestSchema.js';
+import { createBlindIndex } from '../utils/encryption.js';
+import { getMasterKeyHex } from '../config/encryption.js';
 
 export class SupplierRepository {
   constructor(tenantDb) {
@@ -71,6 +73,39 @@ export class SupplierRepository {
       abn_last4: d.abn ? String(d.abn).replace(/\s+/g, '').slice(-4) : null,
       abn: undefined
     }));
+  }
+
+  // ---- Dedup lookup ----------------------------------------------------
+  /**
+   * Find an active supplier in this org that matches any of the supplied
+   * dedup keys. ABN and contact_email are encrypted, so we match on the
+   * blind-index hash columns the encrypt plugin maintains (`abn_hash`,
+   * `contact_email_hash`); legal_name is plaintext and matched
+   * case-insensitively. Returns the first match or null.
+   *
+   * Used by the bulk-import engine to skip rows that duplicate a supplier
+   * already on file. Quietly returns null when no usable key is supplied.
+   */
+  async findActiveByDedupKeys(orgId, { abn, contactEmail, legalName } = {}) {
+    const or = [];
+    const keyHex = getMasterKeyHex();
+
+    if (keyHex && keyHex.length === 64) {
+      const cleanAbn = String(abn || '').replace(/\s+/g, '').trim();
+      if (cleanAbn) or.push({ abn_hash: createBlindIndex(cleanAbn, keyHex) });
+      const email = String(contactEmail || '').trim().toLowerCase();
+      if (email) or.push({ contact_email_hash: createBlindIndex(email, keyHex) });
+    }
+
+    const name = String(legalName || '').trim();
+    if (name) {
+      // Anchored, case-insensitive exact match on the (plaintext) legal name.
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      or.push({ legal_name: new RegExp(`^${escaped}$`, 'i') });
+    }
+
+    if (or.length === 0) return null;
+    return this.Supplier.findOne({ org_id: orgId, is_active: true, $or: or });
   }
 
   // ---- Single record ---------------------------------------------------

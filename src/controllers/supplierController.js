@@ -23,6 +23,8 @@ import { ApprovalRequestRepository } from '../repositories/approvalRequestReposi
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { ExpenseRepository } from '../repositories/expenseRepository.js';
 import { CoiWorkflowService } from '../services/coiWorkflowService.js';
+import { runBulkImport } from '../services/bulkImportService.js';
+import { supplierImporter } from '../services/importers/supplierImporter.js';
 import { logInfo, logError } from '../utils/logger.js';
 
 const orgObjectIdFromTenant = async (tenantDb) => {
@@ -92,6 +94,22 @@ export const createSupplier = asyncHandler(async (req, res) => {
   });
   logInfo('Supplier created', { supplierId: supplier._id, orgId });
   res.status(201).json({ success: true, data: supplier });
+});
+
+// ─── BULK IMPORT ───────────────────────────────────────────────────────
+// Each row → a draft supplier → submitted into the supplier_vetting
+// workflow. Dedupes on ABN / contact email / legal name. A missing
+// workflow config does not fail the import (suppliers land as draft and
+// the response flags `approval.configured: false`).
+export const bulkImportSuppliers = asyncHandler(async (req, res) => {
+  const result = await runBulkImport({
+    tenantDb: req.tenantDb,
+    orgId: req.orgId,
+    actor: { userId: req.user.userId },
+    rows: Array.isArray(req.body?.rows) ? req.body.rows : [],
+    importer: supplierImporter
+  });
+  res.status(207).json({ success: true, data: result });
 });
 
 // ─── UPDATE ────────────────────────────────────────────────────────────

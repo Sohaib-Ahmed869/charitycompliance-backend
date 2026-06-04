@@ -72,6 +72,16 @@ router.post(
   assetController.createAsset
 );
 
+// Bulk import — JSON array of pre-mapped rows from the frontend importer.
+// Dedupes on serial number / asset name. Gated like the create route
+// (auth + it.register feature flag). Returns 207 (multi-status).
+router.post(
+  '/import',
+  [body('rows').isArray({ min: 1 }).withMessage('rows must be a non-empty array')],
+  validate,
+  assetController.bulkImportAssets
+);
+
 // Get all assets
 router.get(
   '/',

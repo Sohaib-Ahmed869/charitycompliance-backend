@@ -25,7 +25,15 @@ const fileMetaSchema = new mongoose.Schema({
   // For DOCX uploads we generate a PDF copy for the in-browser viewer
   // (Phase 2 will populate this). For PDF uploads this can stay null
   // and the viewer falls back to s3_key.
-  pdf_preview_key: { type: String, default: '' }
+  pdf_preview_key: { type: String, default: '' },
+
+  // Cached, Stewardex-branded, SINGLE-PAGE preview PDF for the public
+  // marketplace card thumbnails + preview modal. Generated lazily on the
+  // first preview-stream request and reused thereafter, so we don't
+  // re-run pdf-lib branding (and re-stream the whole multi-page document)
+  // on every card render. Naturally cleared when `file` is reassigned on
+  // a file replacement, which is exactly when it needs regenerating.
+  branded_preview_key: { type: String, default: '' }
 }, { _id: false });
 
 const marketplacePolicySchema = new mongoose.Schema({

@@ -27,7 +27,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import multer from 'multer';
-import { param, body } from 'express-validator';
+import { param, body, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { asyncHandler, AppError } from '../../middleware/errorHandler.js';
 import getRouterModels from '../../db/models/routerModels.js';
@@ -50,6 +50,10 @@ const upload = multer({
 function serializePublic(p) {
   return {
     id: p._id?.toString(),
+    // group_id lets the frontend keep cards bucketed by group without a
+    // second round-trip for every render (the /groups endpoint still
+    // provides the human-readable name + slug + sort order).
+    group_id: p.group_id?.toString() || '',
     title: p.title,
     summary: p.summary || '',
     description: p.description || '',
@@ -65,14 +69,117 @@ function serializePublic(p) {
 
 // ── Listing ─────────────────────────────────────────────────────────
 
-router.get('/policies', asyncHandler(async (_req, res) => {
-  const { MarketplacePolicy } = getRouterModels();
-  const policies = await MarketplacePolicy
-    .find({ status: 'published' })
-    .sort({ sort_order: 1, title: 1 })
+/**
+ * GET /public/marketplace/groups
+ *
+ * Active groups with their published-policy count, sorted the same way
+ * the admin catalogue is. Used by the marketplace page to render group
+ * chips at the top; clicking a chip narrows the policies query, which
+ * is what keeps the PDF-preview thumbnail load down to a handful of
+ * cards at a time instead of every published policy at once.
+ */
+router.get('/groups', asyncHandler(async (_req, res) => {
+  const { MarketplacePolicyGroup, MarketplacePolicy } = getRouterModels();
+  const groups = await MarketplacePolicyGroup
+    .find({ status: 'active' })
+    .sort({ sort_order: 1, name: 1 })
     .lean();
-  res.json({ success: true, data: policies.map(serializePublic) });
+
+  // One round-trip to count policies per group. We use an aggregation
+  // grouped by group_id so this scales cleanly as the catalogue grows
+  // beyond the current ~120 policies.
+  const counts = await MarketplacePolicy.aggregate([
+    { $match: { status: 'published' } },
+    { $group: { _id: '$group_id', n: { $sum: 1 } } }
+  ]);
+  const countByGroup = new Map(counts.map((c) => [String(c._id), c.n]));
+
+  const data = groups.map((g) => ({
+    id: g._id?.toString(),
+    name: g.name,
+    slug: g.slug,
+    description: g.description || '',
+    sort_order: g.sort_order ?? 100,
+    accent_color: g.accent_color || '',
+    policy_count: countByGroup.get(String(g._id)) || 0
+  }));
+  res.json({ success: true, data });
 }));
+
+/**
+ * GET /public/marketplace/policies
+ *
+ * Pagination + filtering. Accepts:
+ *   group   — group id (hex) or slug. Narrows to one group only.
+ *   q       — title search (case-insensitive prefix match on `title`).
+ *   page    — 1-based, default 1.
+ *   limit   — default 12, max 50.
+ *
+ * Returns `{ data, meta: { total, page, limit, pages } }`. The meta
+ * envelope is what the frontend pagination controls render from.
+ */
+router.get(
+  '/policies',
+  [
+    query('group').optional().isString().trim().isLength({ max: 80 }),
+    query('q').optional().isString().trim().isLength({ max: 100 }),
+    query('page').optional().isInt({ min: 1 }).toInt(),
+    query('limit').optional().isInt({ min: 1, max: 50 }).toInt()
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { MarketplacePolicy, MarketplacePolicyGroup } = getRouterModels();
+
+    const page = req.query.page || 1;
+    const limit = req.query.limit || 12;
+    const skip = (page - 1) * limit;
+
+    const filter = { status: 'published' };
+
+    // Resolve `group` — accept either a 24-hex Mongo id or a slug. Falls
+    // back to "no group filter" if a slug doesn't match anything live, so
+    // a stale bookmark from a renamed group doesn't 404 the page.
+    if (req.query.group) {
+      const groupArg = String(req.query.group).trim();
+      if (/^[0-9a-fA-F]{24}$/.test(groupArg)) {
+        filter.group_id = groupArg;
+      } else {
+        const grp = await MarketplacePolicyGroup.findOne({ slug: groupArg.toLowerCase(), status: 'active' }).lean();
+        if (grp) filter.group_id = grp._id;
+      }
+    }
+
+    // Simple case-insensitive title contains-match. Mongo can't use an
+    // index on a leading-anchored regex with $options:'i', so this is a
+    // collection scan within the group filter — fine at our catalogue
+    // size; revisit if we ever cross ~10k policies.
+    if (req.query.q) {
+      const escaped = String(req.query.q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.title = { $regex: escaped, $options: 'i' };
+    }
+
+    const [total, policies] = await Promise.all([
+      MarketplacePolicy.countDocuments(filter),
+      MarketplacePolicy
+        .find(filter)
+        .sort({ sort_order: 1, title: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+    ]);
+
+    res.json({
+      success: true,
+      data: policies.map(serializePublic),
+      meta: {
+        total,
+        page,
+        limit,
+        pages: Math.max(1, Math.ceil(total / limit))
+      }
+    });
+  })
+);
 
 router.get(
   '/policies/:id',
@@ -100,6 +207,34 @@ router.get(
     const { MarketplacePolicy } = getRouterModels();
     const policy = await MarketplacePolicy.findOne({ _id: req.params.id, status: 'published' });
     if (!policy) throw new AppError('Policy not found', 404, 'POLICY_NOT_FOUND');
+
+    // ── Fast path: cached branded preview ────────────────────────────
+    // The first request brands a single-page preview and stows the S3
+    // key on the policy. Every subsequent card render / modal open just
+    // streams those bytes — no pdf-lib branding, no whole-document
+    // download. Cleared automatically when an admin replaces the file
+    // (the whole `file` subdoc is reassigned).
+    if (policy.file?.branded_preview_key) {
+      try {
+        const cached = await getFileStream(policy.file.branded_preview_key);
+        res.set({
+          'Content-Type': 'application/pdf',
+          'Content-Length': cached.ContentLength ?? undefined,
+          // Long cache — the bytes only change when the policy file is
+          // replaced, which mints a new key, so this URL is immutable
+          // for the life of the current file.
+          'Cache-Control': 'public, max-age=86400',
+          'Content-Disposition': 'inline',
+          'X-Frame-Options': 'SAMEORIGIN'
+        });
+        cached.Body.pipe(res);
+        return;
+      } catch (err) {
+        // Cached object went missing (e.g. S3 lifecycle / manual delete)
+        // — fall through and regenerate it below.
+        logError('[public marketplace] cached preview read failed, regenerating:', err?.message || err);
+      }
+    }
 
     let s3Key = policy.file?.pdf_preview_key || policy.file?.s3_key;
 
@@ -141,12 +276,26 @@ router.get(
       stream.Body.on('error', reject);
     });
     const { brandStewardexPreviewPdf } = await import('../../services/policyPdfBrandingService.js');
-    const branded = await brandStewardexPreviewPdf(sourceBytes, { policyTitle: policy.title || '' });
+    // Single-page preview: the marketplace only ever shows page 1, so we
+    // brand + ship one page rather than the whole document.
+    const branded = await brandStewardexPreviewPdf(sourceBytes, { firstPageOnly: true });
+
+    // Cache the branded preview on S3 so the next request hits the fast
+    // path above. Best-effort — a failed upload still serves this
+    // response, it just means we re-brand next time.
+    try {
+      const previewName = (policy.title || 'policy').replace(/[^a-z0-9._-]+/gi, '_').slice(0, 80) + '-card-preview.pdf';
+      const uploaded = await uploadToS3(branded, previewName, 'application/pdf', '_marketplace', 'policy-template-card-preview');
+      policy.file.branded_preview_key = uploaded.key;
+      await policy.save();
+    } catch (err) {
+      logError('[public marketplace] branded preview cache write failed:', err?.message || err);
+    }
 
     res.set({
       'Content-Type': 'application/pdf',
       'Content-Length': branded.length,
-      'Cache-Control': 'public, max-age=300',
+      'Cache-Control': 'public, max-age=86400',
       'Content-Disposition': 'inline',
       'X-Frame-Options': 'SAMEORIGIN'
     });

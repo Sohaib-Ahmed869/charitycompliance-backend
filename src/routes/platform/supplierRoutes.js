@@ -100,6 +100,18 @@ router.delete(
   supplierController.deleteSupplier
 );
 
+// ─── Bulk import ───────────────────────────────────────────────────────
+// Accepts a JSON array of pre-mapped rows from the frontend importer,
+// dedupes, creates draft suppliers, and submits each into the
+// supplier_vetting workflow. Returns 207 (multi-status).
+router.post(
+  '/import',
+  [body('rows').isArray({ min: 1 }).withMessage('rows must be a non-empty array')],
+  validate,
+  requirePermission('module:supplier_register:create'),
+  supplierController.bulkImportSuppliers
+);
+
 // ─── Workflow actions ──────────────────────────────────────────────────
 router.post(
   '/:supplierId/submit',

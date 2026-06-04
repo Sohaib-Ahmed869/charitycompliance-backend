@@ -253,6 +253,91 @@ router.get(
   })
 );
 
+/**
+ * POST /admin/policy-templates/policies/bulk-price
+ *
+ * Bulk-update prices across the catalogue in one shot. Modes:
+ *   set              — set every matched policy to `value` cents
+ *   increase_amount  — add `value` cents
+ *   decrease_amount  — subtract `value` cents (clamped at 0)
+ *   increase_pct     — multiply by (1 + value/100)
+ *   decrease_pct     — multiply by (1 - value/100), clamped at 0
+ *
+ * Scope (most specific wins):
+ *   policy_ids[]     — only these policies, OR
+ *   group_id         — only policies in this group, and/or
+ *   status           — 'draft' | 'published' | 'archived' (default: all)
+ * With no scope it applies to EVERY policy.
+ *
+ * Uses an aggregation-pipeline updateMany so each policy's new price is
+ * computed from its own current price atomically. Results are rounded to
+ * whole cents and never go below 0. `value` is read in CENTS for amount
+ * modes and as a PERCENT for pct modes.
+ */
+router.post(
+  '/policy-templates/policies/bulk-price',
+  [
+    body('mode').isIn(['set', 'increase_amount', 'decrease_amount', 'increase_pct', 'decrease_pct']),
+    body('value').isFloat({ min: 0 }).withMessage('value must be a non-negative number'),
+    body('group_id').optional({ checkFalsy: true }).isMongoId(),
+    body('status').optional().isIn(['draft', 'published', 'archived', 'all']),
+    body('policy_ids').optional().isArray(),
+    body('policy_ids.*').optional().isMongoId()
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const { MarketplacePolicy } = getRouterModels();
+    const { mode } = req.body;
+    const value = Number(req.body.value);
+
+    // Amount modes operate in integer cents; percentages can be fractional.
+    if ((mode === 'set' || mode === 'increase_amount' || mode === 'decrease_amount') && !Number.isInteger(value)) {
+      throw new AppError('value must be an integer number of cents for this mode', 400, 'PRICE_INVALID');
+    }
+    if (mode === 'decrease_pct' && value > 100) {
+      throw new AppError('A percentage decrease cannot exceed 100%', 400, 'PRICE_INVALID');
+    }
+
+    // Build the scope filter.
+    const filter = {};
+    const ids = Array.isArray(req.body.policy_ids) ? req.body.policy_ids.filter(Boolean) : [];
+    if (ids.length > 0) {
+      filter._id = { $in: ids };
+    } else {
+      if (req.body.group_id) filter.group_id = req.body.group_id;
+      if (req.body.status && req.body.status !== 'all') filter.status = req.body.status;
+    }
+
+    // Per-document price expression.
+    let priceExpr;
+    switch (mode) {
+      case 'set':             priceExpr = value; break;
+      case 'increase_amount': priceExpr = { $add: ['$price_aud_cents', value] }; break;
+      case 'decrease_amount': priceExpr = { $subtract: ['$price_aud_cents', value] }; break;
+      case 'increase_pct':    priceExpr = { $multiply: ['$price_aud_cents', 1 + value / 100] }; break;
+      case 'decrease_pct':    priceExpr = { $multiply: ['$price_aud_cents', 1 - value / 100] }; break;
+      default:                priceExpr = '$price_aud_cents';
+    }
+    // Round to whole cents and never below 0.
+    const finalExpr = { $max: [0, { $round: [priceExpr, 0] }] };
+
+    const result = await MarketplacePolicy.updateMany(
+      filter,
+      [{ $set: { price_aud_cents: finalExpr, updated_at: '$$NOW' } }]
+    );
+
+    res.json({
+      success: true,
+      data: {
+        matched: result.matchedCount ?? result.n ?? 0,
+        modified: result.modifiedCount ?? result.nModified ?? 0,
+        mode,
+        value
+      }
+    });
+  })
+);
+
 /** GET /admin/policy-templates/policies/:id */
 router.get(
   '/policy-templates/policies/:id',

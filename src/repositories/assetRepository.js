@@ -51,6 +51,21 @@ export class AssetRepository {
       .populate('updated_by', 'first_name last_name email');
   }
 
+  /**
+   * Dedup lookup for bulk import: find an asset in this org whose serial
+   * number or name matches (case-insensitive exact). serial_number and
+   * asset_name are plaintext, so a straight anchored regex suffices.
+   * Returns the first match or null.
+   */
+  async findExistingByDedup(orgId, { serialNumber, assetName } = {}) {
+    const or = [];
+    const exact = (v) => new RegExp(`^${String(v).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+    if (String(serialNumber || '').trim()) or.push({ serial_number: exact(serialNumber) });
+    if (String(assetName || '').trim()) or.push({ asset_name: exact(assetName) });
+    if (or.length === 0) return null;
+    return this.Asset.findOne({ org_id: orgId, $or: or });
+  }
+
   async create(data) {
     const asset = new this.Asset(data);
     return await asset.save();

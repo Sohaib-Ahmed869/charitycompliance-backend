@@ -21,6 +21,8 @@ import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decry
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
 import { notifyVolunteerOfActivePolicies } from '../services/volunteerPolicyNotifier.js';
 import { runBulkVolunteerImport } from '../services/bulkVolunteerImportService.js';
+import { runBulkImport } from '../services/bulkImportService.js';
+import { employeeImporter } from '../services/importers/employeeImporter.js';
 
 const NORMALIZED_SUITABILITY_TYPES = new Set([
   'criminal_history_declaration',
@@ -482,6 +484,25 @@ export const bulkImportVolunteers = asyncHandler(async (req, res) => {
     rows
   });
 
+  res.status(207).json({ success: true, data: result });
+});
+
+/**
+ * Bulk-import staff/employees from a spreadsheet. Each row becomes a
+ * board_member record with no discriminator flags (regular staff), with
+ * email-based deduplication. Returns 207 (multi-status) with
+ * created/failed/duplicates/summary.
+ */
+export const bulkImportEmployees = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+  const result = await runBulkImport({
+    tenantDb,
+    orgId,
+    actor: { userId: req.user?.userId },
+    rows: Array.isArray(req.body?.rows) ? req.body.rows : [],
+    importer: employeeImporter
+  });
   res.status(207).json({ success: true, data: result });
 });
 

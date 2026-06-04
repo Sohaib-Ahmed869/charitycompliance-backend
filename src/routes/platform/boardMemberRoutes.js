@@ -44,6 +44,19 @@ router.post(
   boardMemberController.bulkImportVolunteers
 );
 
+// Bulk staff/employee import — board_member rows with no discriminator
+// flags (regular staff). Email-deduplicated; no invitation email is sent.
+// Mounted BEFORE the `/:boardMemberId` route so the literal path wins.
+router.post(
+  '/employees/bulk-import',
+  requireAdminOrOwner,
+  [
+    body('rows').isArray({ min: 1, max: 500 }).withMessage('rows must be a non-empty array (max 500)')
+  ],
+  validate,
+  boardMemberController.bulkImportEmployees
+);
+
 // Create department at runtime (from Add Responsible Person)
 router.post(
   '/departments',
