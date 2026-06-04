@@ -283,6 +283,18 @@ export async function applyPlanPatch({ req, code, patch, reason = '', autoApplie
     if (Object.prototype.hasOwnProperty.call(patch, k)) cleaned[k] = patch[k];
   }
 
+  // Annual price is derived, not hand-entered: whenever a pricing patch
+  // carries a monthly price and an annual-discount %, recompute annualAUD
+  // = monthly × 12 × (1 − pct/100). This keeps the discount the single
+  // source of truth and feeds the value Stripe is synced to below.
+  if (cleaned.pricing && typeof cleaned.pricing === 'object') {
+    const monthly = Number(cleaned.pricing.monthlyAUD);
+    const disc = Number(cleaned.pricing.annualDiscountPct);
+    if (Number.isFinite(monthly) && Number.isFinite(disc)) {
+      cleaned.pricing.annualAUD = Math.max(0, Math.round(monthly * 12 * (1 - disc / 100)));
+    }
+  }
+
   const update = {};
   if (cleaned.name) update.plan_name = cleaned.name;
   if (cleaned.visibility) update.visibility = cleaned.visibility;

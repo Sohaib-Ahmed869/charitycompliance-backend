@@ -51,6 +51,7 @@ router.get('/', asyncHandler(async (_req, res) => {
       pricing: {
         monthlyAUD: Number(p.pricing?.monthlyAUD) || 0,
         annualAUD: Number(p.pricing?.annualAUD) || 0,
+        annualDiscountPct: Number(p.pricing?.annualDiscountPct) || 0,
         currency: p.pricing?.currency || 'AUD'
       },
       limits: {

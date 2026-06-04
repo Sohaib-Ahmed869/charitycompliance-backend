@@ -86,7 +86,7 @@ export const DEFAULT_PLANS = [
     visibility: 'public',
     status: 'active',
     pricing: {
-      monthlyAUD: 299, annualAUD: 2990,
+      monthlyAUD: 299, annualAUD: 3229, annualDiscountPct: 10,
       setupFeeMonthlyAUD: 500, setupFeeAnnualAUD: 0,
       overagePerWorkflowAUD: 2.00, currency: 'AUD',
       stripeProductId: '', stripeMonthlyPriceId: '',
@@ -112,7 +112,7 @@ export const DEFAULT_PLANS = [
     visibility: 'public',
     status: 'active',
     pricing: {
-      monthlyAUD: 1299, annualAUD: 12990,
+      monthlyAUD: 1299, annualAUD: 14029, annualDiscountPct: 10,
       setupFeeMonthlyAUD: 2500, setupFeeAnnualAUD: 0,
       overagePerWorkflowAUD: 0.50, currency: 'AUD',
       stripeProductId: '', stripeMonthlyPriceId: '',
@@ -138,7 +138,7 @@ export const DEFAULT_PLANS = [
     visibility: 'public',
     status: 'active',
     pricing: {
-      monthlyAUD: 4999, annualAUD: 49990,
+      monthlyAUD: 4999, annualAUD: 53989, annualDiscountPct: 10,
       setupFeeMonthlyAUD: 10000, setupFeeAnnualAUD: 10000,
       overagePerWorkflowAUD: null, currency: 'AUD',
       stripeProductId: '', stripeMonthlyPriceId: '',
@@ -169,7 +169,7 @@ export const DEFAULT_PLANS = [
     visibility: 'public',
     status: 'active',
     pricing: {
-      monthlyAUD: 0, annualAUD: 0,
+      monthlyAUD: 0, annualAUD: 0, annualDiscountPct: 10,
       setupFeeMonthlyAUD: 0, setupFeeAnnualAUD: 0,
       overagePerWorkflowAUD: null, currency: 'AUD',
       stripeProductId: '', stripeMonthlyPriceId: '',

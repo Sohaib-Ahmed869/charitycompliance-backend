@@ -58,6 +58,10 @@ const subscriptionPlanSchema = new mongoose.Schema({
   pricing: {
     monthlyAUD: { type: Number, default: 0, min: 0 },
     annualAUD: { type: Number, default: 0, min: 0 },
+    // Annual billing discount, as a percentage off 12× the monthly price.
+    // `annualAUD` is derived from this on save (monthly × 12 × (1 − pct/100)),
+    // so this is the single knob admins turn to change annual pricing.
+    annualDiscountPct: { type: Number, default: 10, min: 0, max: 100 },
     setupFeeMonthlyAUD: { type: Number, default: 0, min: 0 },
     setupFeeAnnualAUD: { type: Number, default: 0, min: 0 },
     overagePerWorkflowAUD: { type: Number, default: null }, // legacy — kept for back-compat with existing tenants
