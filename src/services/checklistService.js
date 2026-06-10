@@ -10,6 +10,9 @@ import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
 import { COMPLIANCE_CHECKLIST_CATALOG } from '../config/complianceChecklistCatalog.js';
 import { CHECKLIST_LIBRARY_V3 } from '../config/checklistLibraryV3.js';
+import { MONTHLY_COMPLIANCE_CATALOG } from '../config/monthlyComplianceCatalog.js';
+import { MONTHLY_COMPLIANCE_RULES, evaluateMonthlyRule, monthWindow } from './monthlyComplianceRules.js';
+import mongoose from 'mongoose';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -1463,6 +1466,11 @@ export class ChecklistService {
 
   async _evaluateChecklistInstance(instanceDoc, tenantDb) {
     const inst = instanceDoc;
+    // Period-based monthly compliance instances have no bound entity — they
+    // evaluate their auto items against module data for the period instead.
+    if (inst?.type === 'monthly_compliance') {
+      return await this._evaluateMonthlyComplianceInstance(inst, tenantDb);
+    }
     const entityType = String(inst?.context?.entityType || '').toLowerCase();
     const entityId = inst?.context?.entityId;
     if (!inst || !entityType || !entityId) return inst;
@@ -1593,6 +1601,204 @@ export class ChecklistService {
 
       if (!matched) continue;
       applyAutoState(item, satisfied, detail);
+    }
+
+    if (changed) {
+      await inst.save();
+      return await (new ChecklistInstanceRepository(tenantDb)).findById(inst._id);
+    }
+    return inst;
+  }
+
+  // ── Monthly Compliance Register ─────────────────────────────────────────
+
+  /** Create (idempotently) the tenant's monthly_compliance template from the catalogue. */
+  async ensureMonthlyComplianceTemplate() {
+    const tenantDb = await this.getTenantDb();
+    const templateRepo = new ChecklistTemplateRepository(tenantDb);
+    const existing = await templateRepo.findActiveByType(this.orgId, 'monthly_compliance');
+    if (existing) return existing;
+
+    let sortOrder = 10;
+    const items = [];
+    for (const moduleGroup of MONTHLY_COMPLIANCE_CATALOG) {
+      for (const ci of moduleGroup.items) {
+        const tail = [ci.code, ci.frequency].filter(Boolean).join(' · ');
+        items.push({
+          title: ci.title,
+          description: tail ? `${ci.description} (${tail})` : ci.description,
+          category: moduleGroup.module,
+          type: ci.type === 'auto' ? 'auto' : 'manual',
+          requiredEvidence: 'optional',
+          assigneeRole: ci.responsible || 'Compliance Officer',
+          autoRuleKey: ci.type === 'auto' ? ci.autoRuleKey : undefined,
+          sortOrder
+        });
+        sortOrder += 10;
+      }
+    }
+
+    const template = await templateRepo.create({
+      org_id: this.orgId,
+      name: 'Monthly Charity Compliance Checklist',
+      type: 'monthly_compliance',
+      description: 'Module-by-module monthly compliance register. Auto items resolve from platform data; manual items are ticked each month.',
+      metadata: { source: 'monthly_compliance_catalog', version: 1, modules: MONTHLY_COMPLIANCE_CATALOG.map((m) => m.module) },
+      items
+    });
+    logInfo('Created monthly compliance checklist template', { orgId: this.orgId, templateId: template._id, items: items.length });
+    return template;
+  }
+
+  /** Create (idempotently) the monthly_compliance instance for a given year/month. */
+  async createMonthlyComplianceInstance({ year, month }, _createdBy) {
+    const tenantDb = await this.getTenantDb();
+    const instanceRepo = new ChecklistInstanceRepository(tenantDb);
+    const template = await this.ensureMonthlyComplianceTemplate();
+
+    const y = Number(year);
+    const m = Number(month);
+    if (!Number.isInteger(y) || !Number.isInteger(m) || m < 1 || m > 12) {
+      throw new AppError('Valid year and month (1-12) are required', 400, 'INVALID_PERIOD');
+    }
+    const period = { year: y, month: m };
+    const existing = await instanceRepo.findByPeriod(this.orgId, 'monthly_compliance', period);
+    if (existing) return await this._evaluateMonthlyComplianceInstance(existing, tenantDb);
+
+    const items = (template.items || [])
+      .slice()
+      .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
+      .map((ti) => ({
+        template_item_id: ti._id,
+        title_snapshot: ti.title,
+        description_snapshot: ti.description,
+        category_snapshot: ti.category,
+        type_snapshot: ti.type,
+        auto_rule_key_snapshot: ti.autoRuleKey,
+        required_evidence_snapshot: ti.requiredEvidence,
+        state: 'pending',
+        checked: false,
+        notes: ''
+      }));
+
+    const instance = await instanceRepo.create({
+      org_id: this.orgId,
+      template_id: template._id,
+      type: 'monthly_compliance',
+      period,
+      status: 'open',
+      items
+    });
+    logInfo('Created monthly compliance instance', { orgId: this.orgId, instanceId: instance._id, period });
+    return await this._evaluateMonthlyComplianceInstance(instance, tenantDb);
+  }
+
+  /** List the whole register (every month), newest first, with per-module compliance summaries. */
+  async listMonthlyComplianceRegister() {
+    const tenantDb = await this.getTenantDb();
+    const repo = new ChecklistInstanceRepository(tenantDb);
+    const list = await repo.list(this.orgId, { type: 'monthly_compliance' });
+    const out = [];
+    for (const inst of list) {
+      const evaluated = await this._evaluateMonthlyComplianceInstance(inst, tenantDb);
+      out.push(this._summarizeMonthlyInstance(evaluated));
+    }
+    // Newest period first.
+    out.sort((a, b) => (b.period.year - a.period.year) || (b.period.month - a.period.month));
+    return out;
+  }
+
+  _summarizeMonthlyInstance(inst) {
+    const obj = typeof inst?.toObject === 'function' ? inst.toObject() : inst;
+    const items = obj.items || [];
+    const isDone = (it) => it.state === 'satisfied' || it.checked;
+    const byModule = new Map();
+    for (const it of items) {
+      const mod = it.category_snapshot || 'General';
+      if (!byModule.has(mod)) byModule.set(mod, { module: mod, total: 0, satisfied: 0 });
+      const row = byModule.get(mod);
+      row.total += 1;
+      if (isDone(it)) row.satisfied += 1;
+    }
+    const modules = [...byModule.values()].map((r) => ({ ...r, pct: r.total ? Math.round((r.satisfied / r.total) * 100) : 0 }));
+    const satisfiedItems = items.filter(isDone).length;
+    return {
+      ...obj,
+      summary: {
+        totalItems: items.length,
+        satisfiedItems,
+        overallPct: items.length ? Math.round((satisfiedItems / items.length) * 100) : 0,
+        modules
+      }
+    };
+  }
+
+  /** Add a custom item to a month's register — either a manual tick or a criteria-driven auto item. */
+  async addMonthlyComplianceManualItem({ instanceId, title, description, module, mode, criteriaKey }, _userId) {
+    const tenantDb = await this.getTenantDb();
+    const repo = new ChecklistInstanceRepository(tenantDb);
+    const inst = await repo.findById(instanceId);
+    if (!inst) throw new AppError('Checklist instance not found', 404, 'INSTANCE_NOT_FOUND');
+    if (inst.type !== 'monthly_compliance') throw new AppError('Not a monthly compliance register', 400, 'WRONG_TYPE');
+    if (inst.status === 'closed') throw new AppError('Register is closed', 400, 'CHECKLIST_CLOSED');
+
+    const cleanTitle = String(title || '').trim();
+    if (!cleanTitle) throw new AppError('Item title is required', 400, 'TITLE_REQUIRED');
+
+    const isCriteria = String(mode || 'manual') === 'criteria';
+    if (isCriteria) {
+      const key = String(criteriaKey || '').trim().toUpperCase();
+      if (!MONTHLY_COMPLIANCE_RULES[key]) throw new AppError('Unknown criteria', 400, 'UNKNOWN_CRITERIA');
+    }
+
+    inst.items.push({
+      template_item_id: new mongoose.Types.ObjectId(),
+      title_snapshot: cleanTitle,
+      description_snapshot: String(description || '').trim(),
+      category_snapshot: String(module || 'Custom').trim() || 'Custom',
+      type_snapshot: isCriteria ? 'auto' : 'manual',
+      auto_rule_key_snapshot: isCriteria ? String(criteriaKey).trim().toUpperCase() : undefined,
+      required_evidence_snapshot: 'optional',
+      state: 'pending',
+      checked: false,
+      notes: ''
+    });
+    await inst.save();
+    const refreshed = await repo.findById(instanceId);
+    return this._summarizeMonthlyInstance(await this._evaluateMonthlyComplianceInstance(refreshed, tenantDb));
+  }
+
+  /** Evaluate the auto/criteria items on a monthly register for its period. */
+  async _evaluateMonthlyComplianceInstance(instanceDoc, tenantDb) {
+    const inst = instanceDoc;
+    const year = inst?.period?.year;
+    const month = inst?.period?.month;
+    if (!year || !month) return inst;
+    const win = monthWindow(year, month);
+    const ctx = { tenantDb, win };
+    const now = new Date();
+    let changed = false;
+
+    for (const item of inst.items || []) {
+      if (item.type_snapshot !== 'auto') continue;
+      const ruleKey = item.auto_rule_key_snapshot;
+      if (!ruleKey || !MONTHLY_COMPLIANCE_RULES[String(ruleKey).trim().toUpperCase()]) continue;
+      const result = await evaluateMonthlyRule(ruleKey, ctx);
+      if (!result) continue;
+
+      // Never override an item a user explicitly checked; just refresh its detail.
+      if (item.checked_by) {
+        if (item.evaluation_detail !== result.detail) { item.evaluation_detail = result.detail; changed = true; }
+        item.last_evaluated_at = now;
+        continue;
+      }
+      const nextState = result.satisfied ? 'satisfied' : 'pending';
+      if (item.state !== nextState) { item.state = nextState; changed = true; }
+      if (item.checked !== result.satisfied) { item.checked = result.satisfied; changed = true; }
+      if (result.satisfied && !item.checked_at) { item.checked_at = now; changed = true; }
+      if (!result.satisfied && item.checked_at) { item.checked_at = null; changed = true; }
+      if (item.evaluation_detail !== result.detail) { item.evaluation_detail = result.detail; changed = true; }
+      item.last_evaluated_at = now;
     }
 
     if (changed) {

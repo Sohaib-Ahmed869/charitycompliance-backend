@@ -1512,6 +1512,16 @@ export class ApprovalWorkflowService {
               last_action_by: userId
             });
           } catch (_) { /* finalizer log handles it */ }
+        } else if (request.entity_type === 'member') {
+          try {
+            const { finalizeFromApprovalRequest } = await import('../controllers/memberController.js');
+            await finalizeFromApprovalRequest(tenantDb, {
+              ...request.toObject?.() || request,
+              status: 'rejected',
+              rejection_reason: 'Rejected by one or more approvers',
+              last_action_by: userId
+            });
+          } catch (_) { /* finalizer log handles it */ }
         }
         return updatedRequest;
       }
@@ -1745,6 +1755,23 @@ export class ApprovalWorkflowService {
             entityId: request.entity_id,
             error: supplierErr.message,
             stack: supplierErr.stack
+          });
+        }
+      } else if (request.entity_type === 'member') {
+        // Member Approvals workflow completed — flip the member to approved.
+        try {
+          const { finalizeFromApprovalRequest } = await import('../controllers/memberController.js');
+          await finalizeFromApprovalRequest(tenantDb, {
+            ...request.toObject?.() || request,
+            status: 'approved',
+            last_action_by: userId
+          });
+          logInfo('Member approval finalised (approved)', { approvalRequestId, entityId: request.entity_id });
+        } catch (memberErr) {
+          logError('Error finalising member after workflow approval', {
+            approvalRequestId,
+            entityId: request.entity_id,
+            error: memberErr.message
           });
         }
       } else if (request.entity_type === 'authority_transfer') {

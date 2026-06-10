@@ -8,6 +8,7 @@ import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
 import { ChecklistService } from '../services/checklistService.js';
 import { uploadToS3, getFileUrl as s3GetFileUrl } from '../services/s3Service.js';
+import { listMonthlyCriteriaOptions } from '../services/monthlyComplianceRules.js';
 
 export const listTemplates = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -199,5 +200,55 @@ export const getEvidenceFileUrl = asyncHandler(async (req, res) => {
   }
   const url = await s3GetFileUrl(key, 3600);
   res.json({ success: true, data: { url } });
+});
+
+// ── Monthly Compliance Register ───────────────────────────────────────────
+
+export const listMonthlyComplianceRegister = asyncHandler(async (req, res) => {
+  const service = new ChecklistService(req.orgId);
+  const register = await service.listMonthlyComplianceRegister();
+  res.json({ success: true, data: register });
+});
+
+export const createMonthlyComplianceInstance = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Validation failed', details: errors.array() }
+    });
+  }
+  const service = new ChecklistService(req.orgId);
+  const { year, month } = req.body;
+  const instance = await service.createMonthlyComplianceInstance({ year, month }, req.user.userId);
+  res.status(201).json({ success: true, data: instance });
+});
+
+export const bootstrapMonthlyCompliance = asyncHandler(async (req, res) => {
+  const service = new ChecklistService(req.orgId);
+  const template = await service.ensureMonthlyComplianceTemplate();
+  res.json({ success: true, data: { templateId: template._id, items: (template.items || []).length } });
+});
+
+export const addMonthlyComplianceItem = asyncHandler(async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
+      success: false,
+      error: { code: 'VALIDATION_ERROR', message: 'Validation failed', details: errors.array() }
+    });
+  }
+  const service = new ChecklistService(req.orgId);
+  const { instanceId } = req.params;
+  const { title, description, module, mode, criteriaKey } = req.body;
+  const updated = await service.addMonthlyComplianceManualItem(
+    { instanceId, title, description, module, mode, criteriaKey },
+    req.user.userId
+  );
+  res.status(201).json({ success: true, data: updated });
+});
+
+export const listMonthlyComplianceCriteria = asyncHandler(async (req, res) => {
+  res.json({ success: true, data: listMonthlyCriteriaOptions() });
 });
 

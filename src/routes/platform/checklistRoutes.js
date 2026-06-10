@@ -93,6 +93,33 @@ router.post(
   checklistController.closeInstance
 );
 
+// ── Monthly Compliance Register ───────────────────────────────────────────
+router.get('/monthly-compliance', checklistController.listMonthlyComplianceRegister);
+router.get('/monthly-compliance/criteria', checklistController.listMonthlyComplianceCriteria);
+router.post('/monthly-compliance/bootstrap', checklistController.bootstrapMonthlyCompliance);
+router.post(
+  '/monthly-compliance',
+  [
+    body('year').isInt({ min: 2000, max: 2100 }).withMessage('year is required'),
+    body('month').isInt({ min: 1, max: 12 }).withMessage('month (1-12) is required')
+  ],
+  validate,
+  checklistController.createMonthlyComplianceInstance
+);
+router.post(
+  '/monthly-compliance/:instanceId/items',
+  [
+    param('instanceId').isMongoId().withMessage('Invalid instance ID'),
+    body('title').trim().notEmpty().withMessage('title is required'),
+    body('mode').optional().isIn(['manual', 'criteria']).withMessage('Invalid mode'),
+    body('criteriaKey').optional().isString(),
+    body('module').optional().isString(),
+    body('description').optional().isString()
+  ],
+  validate,
+  checklistController.addMonthlyComplianceItem
+);
+
 // Dashboard helpers
 router.get('/overdue', checklistController.getOverdueSummary);
 

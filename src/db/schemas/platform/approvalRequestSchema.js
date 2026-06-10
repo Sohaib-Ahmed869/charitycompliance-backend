@@ -115,6 +115,7 @@ const approvalRequestSchema = new mongoose.Schema({
       'financial_reporting',
       'bas_lodgement',
       'refunds',
+      'members',
       // User-defined inquiry register (Inquiries Register feature).
       // Each record submitted against an inquiry template spawns a
       // workflow request of this type so it appears in the central
@@ -158,6 +159,7 @@ const approvalRequestSchema = new mongoose.Schema({
       'project',
       'authority_transfer',
       'complaint',
+      'member',
       // Records submitted against an Inquiry Template — the
       // record's workflow runs as an ApprovalRequest of this type.
       'inquiry_record',

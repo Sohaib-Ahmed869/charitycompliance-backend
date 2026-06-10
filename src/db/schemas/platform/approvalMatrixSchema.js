@@ -40,6 +40,7 @@ const approvalRuleSchema = new mongoose.Schema({
       'project_delivery',
       'project_delivery_changes',
       'refunds',
+      'members',
       // legacy
       'policy_approval',
       'document_approval',
@@ -127,6 +128,7 @@ const approvalMatrixSchema = new mongoose.Schema({
       'project_delivery_approval',
       'project_delivery_changes_approval',
       'refunds_approval',
+      'members_approval',
       'other'
     ],
     description: 'Categorizes workflow by module/purpose for validation'
@@ -240,7 +242,8 @@ const getCategoryDisplayName = (category) => {
     financial_reporting_approval: 'Fiscal Reports',
     project_delivery_approval: 'Project Delivery',
     project_delivery_changes_approval: 'Project Delivery Changes',
-    refunds_approval: 'Refunds'
+    refunds_approval: 'Refunds',
+    members_approval: 'Member Approvals'
   };
   return categoryNames[category] || category;
 };
@@ -283,7 +286,7 @@ approvalMatrixSchema.pre('save', async function(next) {
   }
   
   // Single-workflow categories: no workflow_type allowed
-  const singleWorkflowCategories = ['coi', 'partner_vetting', 'supplier_vetting', 'policy_approval', 'hr_approval', 'risk_treatment', 'complaint_resolution'];
+  const singleWorkflowCategories = ['coi', 'partner_vetting', 'supplier_vetting', 'policy_approval', 'hr_approval', 'risk_treatment', 'complaint_resolution', 'members_approval'];
   if (singleWorkflowCategories.includes(doc.workflow_category)) {
     if (doc.workflow_type) {
       return next(new Error(`${getCategoryDisplayName(doc.workflow_category)} workflows cannot have a workflow type`));

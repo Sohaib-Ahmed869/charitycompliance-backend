@@ -74,6 +74,12 @@ export async function runFinanceCloseSchedulerOnce() {
       if (shouldGenerateMonthEnd) {
         const p = prevMonth({ year, month });
         await service.createInstanceFromTemplate({ type: 'month_end', year: p.year, month: p.month }, null);
+        // Monthly compliance register for the month that just closed.
+        try {
+          await service.createMonthlyComplianceInstance({ year: p.year, month: p.month }, null);
+        } catch (err) {
+          logError('Monthly compliance instance creation failed', { orgId, error: err?.message });
+        }
       }
       if (shouldGenerateQuarterEnd) {
         const p = prevQuarter({ year, quarter });
