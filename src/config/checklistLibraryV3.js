@@ -983,6 +983,24 @@ export const ITEM_WISE_CHECKLISTS = [
       { title: 'The submission confirmation and evidence pack have been retained.', sortOrder: 40 },
       { title: 'The responsible persons register has been updated for the period.', sortOrder: 50 }
     ]
+  },
+  {
+    v3Id: 'I48',
+    name: 'Inquiry Register Record Review',
+    checklistType: 'item_wise',
+    category: 'Governance',
+    module: 'Governance',
+    submodule: 'Inquiries',
+    description: 'Generic review checklist for user-defined inquiry register records and their approval workflow',
+    entityTargets: ['inquiry_record'],
+    items: [
+      { title: 'The record has been completed against its inquiry template fields.', sortOrder: 10 },
+      { title: 'The record has been linked to the correct parent entity or register.', sortOrder: 20 },
+      { title: 'Supporting documents and evidence have been attached.', sortOrder: 30 },
+      { title: 'The approval workflow steps and signatories are configured correctly.', sortOrder: 40 },
+      { title: 'Each required approver has recorded their decision.', sortOrder: 50 },
+      { title: 'The outcome, status, and audit trail have been captured.', sortOrder: 60 }
+    ]
   }
 ];
 
@@ -993,11 +1011,11 @@ export const CHECKLIST_LIBRARY_V3 = [...GLOBAL_CHECKLISTS, ...ITEM_WISE_CHECKLIS
 export const V3_LIBRARY_STATS = {
   version: '3.1',
   sourceFile: 'checklists_v3_clean.xlsx + checklists_v2.xlsx enrichment',
-  total: 57,
+  total: 58,
   global: 10,
-  itemWise: 47,
+  itemWise: 48,
   categories: {
-    Governance: 2,
+    Governance: 3,
     Compliance: 1,
     Audit: 1,
     Risk: 1,

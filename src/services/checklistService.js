@@ -40,6 +40,13 @@ function normalizeModuleName(value) {
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\bpolicies\b/g, 'policy')
     .replace(/\bprocedures\b/g, 'procedure')
+    // Singular/plural module-label synonyms. The V3 library labels finance
+    // templates 'Finance' and the global complaints template 'Complaints',
+    // while the entity-target maps use 'Finances' / 'Complaint'. Without these
+    // the hard module filter in findBestTemplateForTarget rejects the correct
+    // template and the entity gets NO checklist (or the wrong one).
+    .replace(/\bfinances\b/g, 'finance')
+    .replace(/\bcomplaints\b/g, 'complaint')
     .trim();
 }
 
@@ -256,10 +263,13 @@ const ENTITY_MODULE_MAP = {
   financial_report: 'Reporting',
   fiscal_report: 'Reporting',
   complaint: 'Complaint',
-  authority_transfer: 'System & Legal',
+  // 'System & Legal' matches no checklist template — route to the real modules.
+  authority_transfer: 'BCP',
   social_media_campaign: 'Marketing',
   social_media_campaigns: 'Marketing',
-  emergency: 'System & Legal'
+  emergency: 'Finance',
+  // Inquiry register records are ad-hoc, user-defined governance registers.
+  inquiry_record: 'Governance'
 };
 
 const ENTITY_TEMPLATE_TARGETS = {
@@ -294,17 +304,36 @@ const ENTITY_TEMPLATE_TARGETS = {
   bas_lodgement: { module: 'Finance', submodule: 'BAS' },
   financial_report: { module: 'Reporting', submodule: 'Financial Reports' },
   fiscal_report: { module: 'Reporting', submodule: 'Fiscal Reports' },
-  complaint: { module: 'Complaint', submodule: 'Complaint Register' }
+  complaint: { module: 'Complaint', submodule: 'Complaint Register' },
+  // Previously unmapped — these fell through to a module-only (wrong submodule)
+  // or empty target and so attached an arbitrary/irrelevant checklist. Each
+  // target below points at an existing V3 template's module + submodule.
+  donation: { module: 'Grants & Donors', submodule: 'Donor Register' },
+  donation_milestone: { module: 'Grants & Donors', submodule: 'Project Monitoring' },
+  grant: { module: 'Grants & Donors', submodule: 'Funding Agreements' },
+  authority_transfer: { module: 'BCP' },
+  emergency: { module: 'Finance', submodule: 'Emergency' },
+  social_media_campaign: { module: 'Marketing', submodule: 'Campaigns' },
+  social_media_campaigns: { module: 'Marketing', submodule: 'Campaigns' },
+  // Inquiry register records → dedicated Governance / Inquiries checklist
+  // (I48 in checklistLibraryV3.js). Bootstrap the v3 library so it exists.
+  inquiry_record: { module: 'Governance', submodule: 'Inquiries' }
 };
 
 function findBestTemplateForTarget(moduleTemplates = [], target = {}) {
   const requestedModule = normalizeModuleName(target?.module || '');
   const requestedSubmodule = normalizeModuleName(target?.submodule || '');
   const requestedUseCase = String(target?.useCase || '').trim().toLowerCase();
+
+  // SAFEGUARD: with no usable target at all (an unmapped entity type — e.g. an
+  // inquiry_record that isn't in ENTITY_MODULE_MAP / ENTITY_TEMPLATE_TARGETS),
+  // never guess. Returning null means the workflow gets NO checklist rather
+  // than an arbitrary, unrelated one (the caller handles null gracefully).
+  if (!requestedModule && !requestedSubmodule && !requestedUseCase) return null;
+
   let best = null;
-  let bestScore = -1;
+  let bestScore = 0;
   for (const tpl of moduleTemplates || []) {
-    let score = 0;
     const moduleName = normalizeModuleName(tpl?.metadata?.module);
     const submoduleName = normalizeModuleName(tpl?.metadata?.submodule);
     const useCase = String(tpl?.metadata?.useCase || '').trim().toLowerCase();
@@ -314,16 +343,23 @@ function findBestTemplateForTarget(moduleTemplates = [], target = {}) {
     if (requestedModule && moduleName !== requestedModule) continue;
     if (requestedSubmodule && submoduleName !== requestedSubmodule) continue;
 
-    if (requestedUseCase && useCase === requestedUseCase) score += 6;
-    if (requestedModule && moduleName === requestedModule) score += 4;
-    if (requestedSubmodule && submoduleName === requestedSubmodule) score += 3;
-    if (tpl?.is_active !== false) score += 1;
-    if (score > bestScore) {
+    // Score ONLY real matches. is_active is a tie-break, never a qualifier —
+    // otherwise an under-specified target would clear the bar on activeness
+    // alone and return a confidently-wrong template.
+    let matchScore = 0;
+    if (requestedUseCase && useCase === requestedUseCase) matchScore += 6;
+    if (requestedModule && moduleName === requestedModule) matchScore += 4;
+    if (requestedSubmodule && submoduleName === requestedSubmodule) matchScore += 3;
+    if (matchScore === 0) continue; // nothing actually matched this template
+
+    const total = matchScore + (tpl?.is_active !== false ? 1 : 0);
+    if (total > bestScore) {
       best = tpl;
-      bestScore = score;
+      bestScore = total;
     }
   }
-  return bestScore > 0 ? best : null;
+  // `best` is only ever set on a real module/submodule/useCase match.
+  return best;
 }
 
 function doesTemplateMatchTarget(template, target = {}) {
@@ -467,6 +503,52 @@ export class ChecklistService {
 
     logInfo('Created default expense workflow checklist template', { orgId: this.orgId, templateId: template._id });
     return template;
+  }
+
+  /**
+   * Lazily ensure the dedicated inquiry-register checklist template (V3 I48)
+   * exists for this tenant. Inquiry workflows resolve a checklist on every
+   * approval view, but the v3 library is only bootstrapped on demand — so a
+   * tenant provisioned before I48 shipped would otherwise have no inquiry
+   * template and fall back to an unrelated checklist. Sourced from the V3
+   * definition so item text has a single source of truth.
+   */
+  async ensureDefaultInquiryWorkflowTemplate() {
+    const def = CHECKLIST_LIBRARY_V3.find((c) => c.v3Id === 'I48');
+    if (!def) return null;
+    const tenantDb = await this.getTenantDb();
+    const templateRepo = new ChecklistTemplateRepository(tenantDb);
+    const existing = (await templateRepo.list(this.orgId, {}))
+      .find((t) => t?.metadata?.v3_checklist_id === 'I48');
+    if (existing) return existing;
+
+    const created = await templateRepo.create({
+      org_id: this.orgId,
+      name: `[${def.v3Id}] ${def.name}`,
+      type: 'module',
+      description: def.description,
+      metadata: {
+        module: def.module,
+        submodule: def.submodule,
+        v3_checklist_id: def.v3Id,
+        v3Type: def.checklistType,
+        v3Category: def.category,
+        v3Version: '3.0',
+        entityTargets: def.entityTargets || [],
+        source: 'checklist_library_v3'
+      },
+      items: (def.items || []).map((it) => ({
+        title: it.title,
+        description: `${def.category} compliance check — ${def.name}.`,
+        category: def.category,
+        type: 'manual',
+        requiredEvidence: 'optional',
+        assigneeRole: 'Compliance Officer',
+        sortOrder: it.sortOrder
+      }))
+    });
+    logInfo('Created default inquiry workflow checklist template', { orgId: this.orgId, templateId: created._id });
+    return created;
   }
 
   async ensureDefaultRiskWorkflowTemplate() {
@@ -915,6 +997,15 @@ export class ChecklistService {
       throw new AppError('entityType and entityId are required', 400, 'INVALID_WORKFLOW_CONTEXT');
     }
 
+    // Inquiry workflows use a dedicated checklist (V3 I48). Ensure it exists for
+    // this tenant even if the v3 library bootstrap hasn't been re-run, so inquiry
+    // records get their own checklist instead of an unrelated fallback. Existing
+    // stale instances self-heal: once this template is found, the existing-
+    // instance branch below swaps its items to the correct ones.
+    if (normalizedEntityType === 'inquiry_record') {
+      await this.ensureDefaultInquiryWorkflowTemplate();
+    }
+
     const allModuleTemplates = await templateRepo.list(this.orgId, { type: 'module' });
     const target = ENTITY_TEMPLATE_TARGETS[normalizedEntityType] || {
       module: ENTITY_MODULE_MAP[normalizedEntityType]
@@ -1313,6 +1404,13 @@ export class ChecklistService {
 
     const item = (inst.items || []).find((it) => String(it._id) === String(itemId));
     if (!item) throw new AppError('Checklist item not found', 404, 'ITEM_NOT_FOUND');
+
+    // Auto items resolve from platform data via the evaluation engine — they
+    // must never be ticked (or un-ticked) by hand. Notes / evidence are still
+    // allowed; only a checked/state change is rejected.
+    if (item.type_snapshot === 'auto' && (typeof checked === 'boolean' || state)) {
+      throw new AppError('Auto items resolve automatically and cannot be set manually', 400, 'AUTO_ITEM_NOT_MANUAL');
+    }
 
     const updateEvidence = Array.isArray(addEvidence) ? addEvidence : (addEvidence ? [addEvidence] : []);
     if (updateEvidence.length > 0) {
