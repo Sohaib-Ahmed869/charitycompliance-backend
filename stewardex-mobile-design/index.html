@@ -1,0 +1,886 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stewardex Mobile — Premium Prototype</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest"></script>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- moving aurora backdrop -->
+<div class="aurora"><span class="a1"></span><span class="a2"></span><span class="a3"></span><span class="a4"></span></div>
+<div class="grain"></div>
+
+<main class="stage">
+
+  <!-- ===== Showcase hero ===== -->
+  <div class="hero">
+    <div class="brandbar"><img src="assets/logo-full.png" alt="Stewardex"></div>
+    <span class="eyebrow"><i data-lucide="sparkles" style="width:14px;height:14px"></i> Phase 1 · Interactive Prototype</span>
+    <h1>The charity compliance suite,<br><span class="g">reimagined for mobile.</span></h1>
+    <p>A high-fidelity prototype of Stewardex Mobile — governance, approvals, chat and registers in your pocket. Tap the rail or the tab bar to explore every screen.</p>
+  </div>
+
+  <!-- ===== Device + rail ===== -->
+  <div class="deck">
+
+    <!-- screen navigator rail -->
+    <nav class="rail rail-hidden">
+      <h3>Screens</h3>
+      <button data-go="springboard"><i data-lucide="smartphone"></i> Home screen</button>
+      <button data-go="login"><i data-lucide="fingerprint"></i> Sign in &amp; OTP</button>
+      <button data-go="home" class="on"><i data-lucide="layout-grid"></i> Home · My Tasks</button>
+      <button data-go="calendar"><i data-lucide="calendar"></i> Calendar</button>
+      <button data-go="meetings"><i data-lucide="calendar-clock"></i> Meetings</button>
+      <button data-go="meetingDetail"><i data-lucide="calendar-check-2"></i> Meeting detail</button>
+      <button data-go="chat"><i data-lucide="message-circle"></i> Chat</button>
+      <button data-go="chatThread"><i data-lucide="messages-square"></i> Chat thread</button>
+      <button data-go="approvals"><i data-lucide="badge-check"></i> Approvals</button>
+      <button data-go="approvalDetail"><i data-lucide="file-check-2"></i> Approval detail</button>
+      <button data-go="policies"><i data-lucide="file-text"></i> Policies</button>
+      <button data-go="risk"><i data-lucide="triangle-alert"></i> Risk register</button>
+      <button data-go="coi"><i data-lucide="scale"></i> COI register</button>
+      <button data-go="complaints"><i data-lucide="message-square-warning"></i> Complaints</button>
+      <button data-go="expenses"><i data-lucide="receipt"></i> Submit expense</button>
+      <button data-go="billing"><i data-lucide="credit-card"></i> Billing</button>
+      <button data-go="help"><i data-lucide="life-buoy"></i> Help center</button>
+      <button data-go="notifications"><i data-lucide="bell"></i> Notifications</button>
+      <button data-go="settings"><i data-lucide="settings"></i> Settings</button>
+      <button data-go="more"><i data-lucide="grip"></i> More menu</button>
+    </nav>
+
+    <!-- right-side notification simulator -->
+    <aside class="npanel">
+      <h3>Live notifications</h3>
+      <p class="nph">Trigger an iOS-style alert on the phone, then pull down the Notification Centre.</p>
+      <div class="nlabel">Trigger</div>
+      <button data-notif="approval"><span class="nd" style="background:var(--grad-amber)"><i data-lucide="receipt"></i></span> Approval request</button>
+      <button data-notif="chat"><span class="nd" style="background:var(--grad-violet)"><i data-lucide="at-sign"></i></span> Chat mention</button>
+      <button data-notif="meeting"><span class="nd" style="background:var(--grad-brand)"><i data-lucide="calendar-clock"></i></span> Meeting reminder</button>
+      <button data-notif="policy"><span class="nd" style="background:var(--grad-teal)"><i data-lucide="file-text"></i></span> Policy due</button>
+      <button data-notif="complaint"><span class="nd" style="background:var(--grad-teal)"><i data-lucide="message-square-warning"></i></span> New complaint</button>
+      <button data-notif="risk"><span class="nd" style="background:var(--grad-amber)"><i data-lucide="triangle-alert"></i></span> Risk escalated</button>
+      <div class="npanel-sep"></div>
+      <button class="npc" data-open-center><i data-lucide="chevron-down"></i> Open Notification Centre</button>
+      <button class="npx" data-clear><i data-lucide="trash-2" style="width:15px;height:15px"></i> Clear all</button>
+    </aside>
+
+    <!-- iPhone -->
+    <div class="phonecol">
+      <div class="themebar">
+        <button class="tbtn on" data-theme-set="light"><i data-lucide="sun"></i> Light</button>
+        <button class="tbtn" data-theme-set="dark"><i data-lucide="moon"></i> Dark</button>
+      </div>
+      <div class="device-wrap">
+      <div class="device-glow"></div>
+      <div class="device" id="device">
+        <div class="screen-vp">
+          <div class="island"></div>
+
+          <!-- persistent status bar -->
+          <div class="statusbar light" id="statusbar">
+            <span>9:41</span>
+            <div class="si">
+              <i data-lucide="signal"></i><i data-lucide="wifi"></i><i data-lucide="battery-full"></i>
+            </div>
+          </div>
+
+          <div class="screens" id="screens">
+
+            <!-- ============ SPRINGBOARD (iOS home) ============ -->
+            <section class="screen is-active" data-screen="springboard">
+              <div class="springboard">
+                <div class="sb-clock"><div class="t">9:41</div><div class="d">Monday, 15 June</div></div>
+                <div class="sb-grid">
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico brand" style="background:#1877f2"><img src="https://cdn.simpleicons.org/facebook/white"></div><span>Facebook</span></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico brand" style="background:linear-gradient(45deg,#feda75,#fa7e1e 35%,#d62976 65%,#962fbf)"><img src="https://cdn.simpleicons.org/instagram/white"></div><span>Instagram</span></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico brand" style="background:#25d366"><img src="https://cdn.simpleicons.org/whatsapp/white"></div><span>WhatsApp</span></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico brand" style="background:#0a0a0a"><img src="https://cdn.simpleicons.org/x/white"></div><span>X</span></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico brand" style="background:#ff0000"><img src="https://cdn.simpleicons.org/youtube/white"></div><span>YouTube</span></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico brand" style="background:#1db954"><img src="https://cdn.simpleicons.org/spotify/white"></div><span>Spotify</span></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico brand" style="background:linear-gradient(160deg,#4285f4,#34a853)"><img src="https://cdn.simpleicons.org/googlemaps/white"></div><span>Maps</span></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico" style="background:linear-gradient(160deg,#3a3a3c,#1c1c1e)"><i data-lucide="camera"></i></div><span>Camera</span></div>
+                  <div class="sb-app stx" data-go="splash"><div class="ico stx-ico"><img src="assets/logo-new.png"></div><span>Stewardex</span></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico" style="background:linear-gradient(160deg,#f6c945,#f59e0b)"><i data-lucide="image"></i></div><span>Photos</span></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico brand" style="background:#5865f2"><img src="https://cdn.simpleicons.org/discord/white"></div><span>Discord</span></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico" style="background:linear-gradient(160deg,#8e8e93,#5a5a5e)"><i data-lucide="settings"></i></div><span>Settings</span></div>
+                </div>
+                <div class="sb-dock">
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico" style="background:#34da50"><i data-lucide="phone"></i></div></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico" style="background:#0b84ff"><i data-lucide="mail"></i></div></div>
+                  <div class="sb-app" data-toast="Open Stewardex to explore the prototype"><div class="ico brand" style="background:#1da1f2"><img src="https://cdn.simpleicons.org/telegram/white"></div></div>
+                  <div class="sb-app stx" data-go="splash"><div class="ico stx-ico"><img src="assets/logo-new.png"></div></div>
+                </div>
+                <div class="sb-hint">Tap the Stewardex app to begin</div>
+              </div>
+            </section>
+
+            <!-- ============ SPLASH ============ -->
+            <section class="screen" data-screen="splash">
+              <div class="splash">
+                <div class="badge"><img src="assets/logo-new.png"></div>
+                <h2>Stewardex</h2>
+                <div class="sub">Governance &amp; compliance suite</div>
+                <div class="load"><i></i></div>
+              </div>
+            </section>
+
+            <!-- ============ LOGIN ============ -->
+            <section class="screen" data-screen="login">
+              <div class="login">
+                <div class="mark">
+                  <div class="appicon"><img src="assets/logo-new.png"></div>
+                  <h2>Stewardex</h2>
+                  <p>Governance &amp; compliance, on the go</p>
+                </div>
+                <div class="glass"><i data-lucide="mail"></i><span>angela.morgan@hopefdn.org</span></div>
+                <div class="glass"><i data-lucide="lock"></i><span>••••••••••••</span></div>
+                <button class="btn btn-w" data-go="otp">Continue <i data-lucide="arrow-right"></i></button>
+                <div class="alt">Secured with <b>two-factor authentication</b></div>
+                <div class="alt" style="margin-top:10px" data-toast="Reset link sent to your email"><b>Forgot password?</b></div>
+              </div>
+            </section>
+
+            <!-- ============ OTP ============ -->
+            <section class="screen" data-screen="otp">
+              <div class="login" style="justify-content:center">
+                <div style="text-align:center;margin-bottom:30px">
+                  <div class="appicon" style="margin-bottom:20px"><img src="assets/logo-new.png"></div>
+                  <h2 style="font-size:24px;font-weight:800">Verify it's you</h2>
+                  <p style="color:rgba(255,255,255,.78);font-size:14px;margin-top:8px">Enter the 6-digit code sent to<br><b style="color:#fff">angela.morgan@hopefdn.org</b></p>
+                </div>
+                <div class="otp">
+                  <b class="fill">4</b><b class="fill">8</b><b class="fill">2</b><b>·</b><b>·</b><b>·</b>
+                </div>
+                <button class="btn btn-w" style="margin-top:26px" data-toast="Verified ✓" data-go="home">Verify &amp; continue <i data-lucide="arrow-right"></i></button>
+                <div class="alt" style="margin-top:18px" data-toast="A new code has been sent">Didn’t get it? <b>Resend code</b></div>
+              </div>
+            </section>
+
+            <!-- ============ HOME / MY TASKS ============ -->
+            <section class="screen" data-screen="home">
+              <div class="scroll">
+                <div class="ghead">
+                  <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                    <div>
+                      <p style="opacity:.85;font-size:14px;font-weight:600">Good morning,</p>
+                      <h1 style="font-size:27px;font-weight:800;letter-spacing:-.5px;margin-top:2px">Angela 👋</h1>
+                      <p style="opacity:.8;font-size:13px;margin-top:6px">Hope Foundation · Treasurer</p>
+                    </div>
+                    <div style="position:relative">
+                      <button class="icobtn" data-go="notifications" style="background:rgba(255,255,255,.16);color:#fff">
+                        <i data-lucide="bell"></i></button>
+                      <span class="notif-dot"></span>
+                    </div>
+                  </div>
+                  <div class="stats" style="margin-top:20px">
+                    <div class="stat light"><i data-lucide="list-checks"></i><div class="lbl">To do today</div><div class="num">5</div></div>
+                    <div class="stat light"><i data-lucide="badge-check"></i><div class="lbl">Approvals</div><div class="num">3</div></div>
+                  </div>
+                </div>
+
+                <div class="section-h"><h2>My Tasks</h2><a data-go="more">View all</a></div>
+                <div class="pad">
+                  <div class="grouped">
+                    <div class="row" data-go="approvalDetail">
+                      <div class="ic" style="background:var(--grad-amber)"><i data-lucide="receipt"></i></div>
+                      <div class="tx"><b>Approve · Q3 Office Supplies</b><span>Expense · awaiting you</span></div>
+                      <div class="rt"><span class="amt">$1,240</span><span class="chip amber">Due today</span></div>
+                    </div>
+                    <div class="row" data-go="policies">
+                      <div class="ic" style="background:var(--grad-brand)"><i data-lucide="file-text"></i></div>
+                      <div class="tx"><b>Acknowledge Safeguarding Policy</b><span>Version 3.0 · sign-off required</span></div>
+                      <i data-lucide="chevron-right" class="chev"></i>
+                    </div>
+                    <div class="row" data-go="meetingDetail">
+                      <div class="ic" style="background:var(--grad-violet)"><i data-lucide="users"></i></div>
+                      <div class="tx"><b>Quarterly Board Meeting</b><span>Today · 2:00 PM · Boardroom</span></div>
+                      <span class="chip violet">2:00</span>
+                    </div>
+                    <div class="row" data-go="risk">
+                      <div class="ic" style="background:var(--grad-teal)"><i data-lucide="triangle-alert"></i></div>
+                      <div class="tx"><b>Review risk · Data breach</b><span>Residual rating updated</span></div>
+                      <i data-lucide="chevron-right" class="chev"></i>
+                    </div>
+                  </div>
+                </div>
+
+                <div class="section-h"><h2>Quick actions</h2></div>
+                <div class="menu-grid">
+                  <div class="mtile" data-go="expenses"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="plus"></i></div><b>New expense</b><span>Submit a claim</span></div>
+                  <div class="mtile" data-go="chat"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="message-circle"></i></div><b>Team chat</b><span>3 unread</span></div>
+                </div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+            <!-- ============ CALENDAR ============ -->
+            <section class="screen" data-screen="calendar">
+              <div class="scroll">
+                <div class="ltitle" style="padding-top:60px"><div class="sub">JUNE 2026</div><h1>Calendar</h1></div>
+                <div class="seg">
+                  <b class="on" data-view="month">Month</b><b data-view="week">Week</b>
+                  <b data-view="list">List</b><b data-view="expiring">Expiring</b>
+                </div>
+
+                <!-- MONTH VIEW -->
+                <div data-cal-view="month">
+                  <div class="pad"><div class="card">
+                    <div class="cal-dow"><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span></div>
+                    <div class="cal-grid" id="calGrid">
+                      <button class="cday dim">26</button><button class="cday dim">27</button><button class="cday dim">28</button><button class="cday dim">29</button><button class="cday dim">30</button><button class="cday dim">31</button><button class="cday" data-day="1">1</button>
+                      <button class="cday" data-day="2">2</button><button class="cday" data-day="3">3</button><button class="cday" data-day="4">4</button><button class="cday" data-day="5">5</button><button class="cday" data-day="6">6</button><button class="cday" data-day="7">7</button><button class="cday" data-day="8">8</button>
+                      <button class="cday" data-day="9">9</button><button class="cday" data-day="10">10</button><button class="cday" data-day="11">11<i class="cdot t"></i></button><button class="cday" data-day="12">12</button><button class="cday" data-day="13">13</button><button class="cday" data-day="14">14</button><button class="cday today day-sel" data-day="15">15<i class="cdot v"></i></button>
+                      <button class="cday" data-day="16">16</button><button class="cday" data-day="17">17<i class="cdot b"></i></button><button class="cday" data-day="18">18<i class="cdot v"></i></button><button class="cday" data-day="19">19<i class="cdot v"></i></button><button class="cday" data-day="20">20</button><button class="cday" data-day="21">21</button><button class="cday" data-day="22">22<i class="cdot a"></i></button>
+                      <button class="cday" data-day="23">23</button><button class="cday" data-day="24">24</button><button class="cday" data-day="25">25</button><button class="cday" data-day="26">26</button><button class="cday" data-day="27">27</button><button class="cday" data-day="28">28</button><button class="cday" data-day="29">29</button>
+                    </div>
+                  </div></div>
+                  <div class="timeline-day" id="calDayLabel">Today · Mon 15 June</div>
+                  <div class="pad"><div class="grouped" id="calDayList"></div></div>
+                </div>
+
+                <!-- WEEK VIEW -->
+                <div data-cal-view="week" style="display:none">
+                  <div class="pad">
+                    <div class="week-strip">
+                      <b>M<small>15</small></b><b>T<small>16</small></b><b class="on">W<small>17</small></b><b>T<small>18</small></b><b>F<small>19</small></b><b>S<small>20</small></b><b>S<small>21</small></b>
+                    </div>
+                  </div>
+                  <div class="timeline-day">Wednesday 17 June</div>
+                  <div class="pad"><div class="grouped">
+                    <div class="row"><div class="tx" style="flex:none;width:54px"><b>09:00</b></div><div class="ic" style="background:var(--grad-brand)"><i data-lucide="file-text"></i></div><div class="tx"><b>Safeguarding Policy review</b><span>Compliance · due today</span></div></div>
+                    <div class="row"><div class="tx" style="flex:none;width:54px"><b>11:30</b></div><div class="ic" style="background:var(--grad-teal)"><i data-lucide="phone"></i></div><div class="tx"><b>Call · Grant officer (NLCF)</b><span>30 min</span></div></div>
+                    <div class="row"><div class="tx" style="flex:none;width:54px"><b>14:00</b></div><div class="ic" style="background:var(--grad-violet)"><i data-lucide="users"></i></div><div class="tx"><b>Finance catch-up</b><span>Boardroom</span></div></div>
+                  </div></div>
+                </div>
+
+                <!-- LIST VIEW -->
+                <div data-cal-view="list" style="display:none">
+                  <div class="timeline-day">Mon 15 June</div>
+                  <div class="pad"><div class="grouped">
+                    <div class="row" data-go="meetingDetail"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="users"></i></div><div class="tx"><b>Quarterly Board Meeting</b><span>2:00 PM · Boardroom</span></div><span class="chip violet">Meeting</span></div>
+                    <div class="row"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="graduation-cap"></i></div><div class="tx"><b>First Aid Training expires</b><span>2 certifications</span></div><span class="chip amber">Renewal</span></div>
+                  </div></div>
+                  <div class="timeline-day">Wed 17 June</div>
+                  <div class="pad"><div class="grouped">
+                    <div class="row" data-go="policies"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="file-text"></i></div><div class="tx"><b>Safeguarding Policy review</b><span>Due in 2 days</span></div><span class="chip blue">Policy</span></div>
+                  </div></div>
+                  <div class="timeline-day">Mon 22 June</div>
+                  <div class="pad"><div class="grouped">
+                    <div class="row"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="shield-check"></i></div><div class="tx"><b>Public Liability Insurance</b><span>Renewal due</span></div><span class="chip teal">Reg.</span></div>
+                  </div></div>
+                </div>
+
+                <!-- EXPIRING VIEW -->
+                <div data-cal-view="expiring" style="display:none">
+                  <div class="timeline-day">Expiring soon</div>
+                  <div class="pad"><div class="grouped">
+                    <div class="row"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="graduation-cap"></i></div><div class="tx"><b>First Aid Training</b><span>2 staff certifications</span></div><span class="chip red">Today</span></div>
+                    <div class="row" data-go="policies"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="file-text"></i></div><div class="tx"><b>Safeguarding Policy review</b><span>Wed 17 June</span></div><span class="chip amber">2 days</span></div>
+                    <div class="row"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="shield-check"></i></div><div class="tx"><b>Public Liability Insurance</b><span>Mon 22 June</span></div><span class="chip teal">7 days</span></div>
+                    <div class="row"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="award"></i></div><div class="tx"><b>Charity registration renewal</b><span>Fri 10 July</span></div><span class="chip gray">25 days</span></div>
+                  </div></div>
+                </div>
+                <div class="spacer"></div>
+              </div>
+              <div class="fab" data-open-sheet="newEvent"><i data-lucide="plus"></i></div>
+
+              <!-- new event sheet -->
+              <div class="scrim" data-close-sheet></div>
+              <div class="sheet" id="sheetNewEvent">
+                <div class="grab"></div>
+                <h3>New event</h3>
+                <div class="field-l">Title</div><div class="input">Board sub-committee</div>
+                <div class="field-l">Date</div><div class="input"><span>Mon 15 June 2026</span><i data-lucide="calendar"></i></div>
+                <div class="field-l">Type</div><div class="input"><span>Meeting</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Time</div><div class="input"><span>2:00 PM</span><i data-lucide="clock"></i></div>
+                <button class="btn" style="margin-top:18px" data-toast="Event added to calendar" data-close-sheet><i data-lucide="check"></i> Add to calendar</button>
+              </div>
+            </section>
+
+            <!-- ============ MEETINGS ============ -->
+            <section class="screen" data-screen="meetings">
+              <div class="nav"><button class="back" data-go="more"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Meetings</div><button class="icobtn"><i data-lucide="sliders-horizontal"></i></button></div>
+              <div class="scroll">
+                <div class="seg"><b class="on">Upcoming</b><b>Past</b><b>Important</b></div>
+                <div class="timeline-day">Today</div>
+                <div class="pad">
+                  <div class="card" data-go="meetingDetail">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                      <span class="chip violet">Board · Trustee</span><span class="chip green"><span class="dot" style="background:var(--green)"></span>Scheduled</span>
+                    </div>
+                    <h2 style="font-size:17px;margin:12px 0 4px">Quarterly Board Meeting</h2>
+                    <div style="display:flex;gap:16px;color:var(--muted);font-size:13px;font-weight:600">
+                      <span style="display:flex;align-items:center;gap:5px"><i data-lucide="clock" style="width:14px;height:14px"></i>2:00–3:30 PM</span>
+                      <span style="display:flex;align-items:center;gap:5px"><i data-lucide="map-pin" style="width:14px;height:14px"></i>Boardroom</span>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:14px">
+                      <div class="avstack">
+                        <div class="av sm g1">AM</div><div class="av sm g2">JP</div><div class="av sm g3">SL</div><div class="av sm g4">+5</div>
+                      </div>
+                      <button class="chip teal" style="padding:7px 14px">RSVP · Attending</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="timeline-day">This week</div>
+                <div class="pad">
+                  <div class="grouped">
+                    <div class="row" data-go="meetingDetail"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="landmark"></i></div>
+                      <div class="tx"><b>Finance Sub-committee</b><span>Thu 18 June · 10:00 AM</span></div><i data-lucide="chevron-right" class="chev"></i></div>
+                    <div class="row" data-go="meetingDetail"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="gavel"></i></div>
+                      <div class="tx"><b>Special Resolution Vote</b><span>Fri 19 June · 4:00 PM</span></div><i data-lucide="chevron-right" class="chev"></i></div>
+                  </div>
+                </div>
+                <div class="spacer"></div>
+              </div>
+              <div class="fab" data-go="meetingDetail" data-toast="New meeting"><i data-lucide="plus"></i></div>
+            </section>
+
+            <!-- ============ MEETING DETAIL ============ -->
+            <section class="screen" data-screen="meetingDetail">
+              <div class="nav"><button class="back" data-go="meetings"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Meeting</div><button class="icobtn" data-toast="Meeting shared"><i data-lucide="share"></i></button></div>
+              <div class="scroll" style="padding-bottom:96px">
+                <div class="pad">
+                  <div class="card" style="background:var(--grad-violet);color:#fff;border:none">
+                    <span class="chip" style="background:rgba(255,255,255,.22);color:#fff">Board · Trustee</span>
+                    <h1 style="font-size:21px;font-weight:800;margin:11px 0 8px">Quarterly Board Meeting</h1>
+                    <div style="display:flex;flex-direction:column;gap:7px;font-size:13px;font-weight:600;opacity:.95">
+                      <span style="display:flex;align-items:center;gap:8px"><i data-lucide="calendar" style="width:15px;height:15px"></i> Monday, 15 June 2026</span>
+                      <span style="display:flex;align-items:center;gap:8px"><i data-lucide="clock" style="width:15px;height:15px"></i> 2:00 – 3:30 PM</span>
+                      <span style="display:flex;align-items:center;gap:8px"><i data-lucide="map-pin" style="width:15px;height:15px"></i> Boardroom · Level 2</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="field-l pad">Your RSVP</div>
+                <div class="pad" style="display:flex;gap:9px">
+                  <button class="rsvp-b on" data-rsvp><i data-lucide="check"></i> Attending</button>
+                  <button class="rsvp-b" data-rsvp><i data-lucide="help-circle"></i> Maybe</button>
+                  <button class="rsvp-b" data-rsvp><i data-lucide="x"></i> Decline</button>
+                </div>
+                <div class="field-l pad">Attendees · 8</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="av sm g1">AM</div><div class="tx"><b>Angela Morgan (You)</b><span>Treasurer</span></div><span class="chip green">Attending</span></div>
+                  <div class="row"><div class="av sm g2">JP</div><div class="tx"><b>James Patel</b><span>Finance Officer</span></div><span class="chip green">Attending</span></div>
+                  <div class="row"><div class="av sm g4">SL</div><div class="tx"><b>Sarah Lee</b><span>Secretary</span></div><span class="chip amber">Maybe</span></div>
+                  <div class="row"><div class="av sm g3">DC</div><div class="tx"><b>David Chen</b><span>Chair</span></div><span class="chip gray">Invited</span></div>
+                  <div class="row"><div class="av sm g1">MG</div><div class="tx"><b>Maria Gomez</b><span>Trustee</span></div><span class="chip red">Declined</span></div>
+                </div></div>
+                <div class="field-l pad">Agenda</div>
+                <div class="pad"><div class="card">
+                  <div style="display:flex;gap:10px;padding:4px 0"><span class="chip blue">1</span><div style="font-size:14px;font-weight:600">Approve previous minutes</div></div>
+                  <div style="display:flex;gap:10px;padding:8px 0;border-top:1px solid var(--line)"><span class="chip blue">2</span><div style="font-size:14px;font-weight:600">Q3 finance report &amp; budget review</div></div>
+                  <div style="display:flex;gap:10px;padding:8px 0 4px;border-top:1px solid var(--line)"><span class="chip blue">3</span><div style="font-size:14px;font-weight:600">Safeguarding policy v3.0 sign-off</div></div>
+                </div></div>
+                <div class="field-l pad">Minutes &amp; notes</div>
+                <div class="pad"><div class="card">
+                  <p style="font-size:13.5px;color:var(--muted);line-height:1.6">Previous minutes approved unanimously. Treasurer to circulate the Q3 finance pack ahead of the budget vote. Action: J. Patel to finalise the office-supplies expense.</p>
+                  <button class="btn ghost" style="margin-top:12px;font-size:13.5px" data-toast="Add a meeting note"><i data-lucide="file-plus"></i> Add note</button>
+                </div></div>
+                <div class="field-l pad">Comments</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="av sm g2">JP</div><div class="tx"><b>James Patel</b><span>Can we move the budget item earlier?</span></div><span style="font-size:11px;color:var(--muted2)">9:10</span></div>
+                  <div class="row"><div class="av sm g4">SL</div><div class="tx"><b>Sarah Lee</b><span>Agenda &amp; pack uploaded ✅</span></div><span style="font-size:11px;color:var(--muted2)">9:14</span></div>
+                </div></div>
+                <div class="spacer"></div>
+              </div>
+              <div class="chatbar">
+                <div class="field">Add a comment…</div>
+                <div class="snd" data-toast="Comment added"><i data-lucide="arrow-up"></i></div>
+              </div>
+            </section>
+
+            <!-- ============ CHAT LIST ============ -->
+            <section class="screen" data-screen="chat">
+              <div class="scroll">
+                <div class="ltitle" style="padding-top:60px;display:flex;justify-content:space-between;align-items:flex-end">
+                  <div><div class="sub">5 ONLINE</div><h1>Chat</h1></div>
+                  <button class="icobtn" style="margin-bottom:6px"><i data-lucide="square-pen"></i></button>
+                </div>
+                <div class="search"><i data-lucide="search"></i><span>Search channels &amp; messages</span></div>
+                <div class="pad"><div class="grouped">
+                  <div class="row" data-go="chatThread"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="hash"></i></div>
+                    <div class="tx"><b>General</b><span>Maria: Minutes uploaded ✅</span></div>
+                    <div class="rt"><span style="font-size:11px;color:var(--muted2)">9:24</span></div></div>
+                  <div class="row" data-go="chatThread"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="landmark"></i></div>
+                    <div class="tx"><b>Finance Team</b><span>James: Can you approve the Q3…</span></div>
+                    <div class="rt"><span style="font-size:11px;color:var(--muted2)">9:02</span><span class="chip teal" style="padding:2px 8px">3</span></div></div>
+                  <div class="row" data-go="chatThread"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="users"></i></div>
+                    <div class="tx"><b>Trustees</b><span>You: See you all at 2pm</span></div>
+                    <div class="rt"><span style="font-size:11px;color:var(--muted2)">Mon</span></div></div>
+                  <div class="row" data-go="chatThread"><div class="av g4">SL</div>
+                    <div class="tx"><b>Sarah Lee</b><span>Thanks for the update!</span></div>
+                    <div class="rt"><span style="font-size:11px;color:var(--muted2)">Sun</span></div></div>
+                  <div class="row" data-go="chatThread"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="shield"></i></div>
+                    <div class="tx"><b>Safeguarding</b><span>New policy draft shared</span></div>
+                    <div class="rt"><span style="font-size:11px;color:var(--muted2)">Fri</span></div></div>
+                </div></div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+            <!-- ============ CHAT THREAD ============ -->
+            <section class="screen" data-screen="chatThread">
+              <div class="nav" style="background:var(--glass);backdrop-filter:blur(12px)">
+                <button class="back" data-go="chat"><i data-lucide="chevron-left"></i></button>
+                <div class="ic" style="width:34px;height:34px;border-radius:11px;background:var(--grad-teal)"><i data-lucide="landmark"></i></div>
+                <div style="flex:1"><div style="font-size:15px;font-weight:700">Finance Team</div>
+                  <div style="font-size:11.5px;color:var(--green);font-weight:600">4 members · 3 online</div></div>
+                <button class="icobtn"><i data-lucide="info"></i></button>
+              </div>
+              <div class="scroll" style="padding-bottom:96px">
+                <div class="tac muted" style="font-size:11px;margin:14px 0;font-weight:600">TODAY</div>
+                <div class="msg them"><div class="av sm g2">JP</div><div class="stack">
+                  <div class="bubble">Hi Angela — the Q3 office supplies invoice is in. Can you approve when you get a sec?</div>
+                  <div class="bubble">It's £1,240 from Office Depot, allocated to the Admin project budget.</div>
+                  <div class="meta">James Patel · 9:01 AM</div></div></div>
+                <div class="msg me"><div class="stack">
+                  <div class="bubble">On it 👍 Reviewing the approval now.</div>
+                  <div class="meta">You · 9:02 AM · Seen</div></div></div>
+                <div class="msg them"><div class="av sm g4">SL</div><div class="stack">
+                  <div class="bubble">Thanks both! 🙌</div>
+                  <div class="meta">Sarah Lee · 9:03 AM</div></div></div>
+              </div>
+              <div class="chatbar">
+                <i data-lucide="plus" style="width:24px;height:24px;color:var(--teal)"></i>
+                <div class="field">Message Finance Team…</div>
+                <div class="snd"><i data-lucide="arrow-up"></i></div>
+              </div>
+            </section>
+
+            <!-- ============ APPROVALS ============ -->
+            <section class="screen" data-screen="approvals">
+              <div class="scroll">
+                <div class="ltitle" style="padding-top:60px"><div class="sub">AWAITING YOU · 3</div><h1>Approvals</h1></div>
+                <div class="seg"><b class="on">For you</b><b>Awaiting</b><b>Past</b></div>
+                <div class="pad">
+                  <div class="card" data-go="approvalDetail">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                      <span class="chip amber">Finance · Expense</span><span class="chip gray">Sequential</span>
+                    </div>
+                    <h2 style="font-size:16.5px;margin:11px 0 3px">Q3 Office Supplies</h2>
+                    <p class="muted" style="font-size:13px">Submitted by James Patel · 2 hrs ago</p>
+                    <div class="steps">
+                      <div class="node done"><i data-lucide="check" style="width:14px;height:14px"></i></div>
+                      <div class="ln done"></div><div class="node cur">2</div>
+                      <div class="ln"></div><div class="node">3</div>
+                    </div>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+                      <span class="muted" style="font-size:12px;font-weight:600">Step 2 of 3 · You</span>
+                      <span style="font-size:18px;font-weight:800">$1,240</span>
+                    </div>
+                  </div>
+                  <div class="card" data-go="approvalDetail">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                      <span class="chip blue">Policy</span><span class="chip gray">Parallel</span></div>
+                    <h2 style="font-size:16.5px;margin:11px 0 3px">Safeguarding Policy v3.0</h2>
+                    <p class="muted" style="font-size:13px">Trustee sign-off · 3 of 7 approved</p>
+                    <div class="bar" style="margin-top:12px"><i style="width:43%"></i></div>
+                  </div>
+                  <div class="card" data-go="approvalDetail">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                      <span class="chip violet">Grant</span><span class="chip gray">Sequential</span></div>
+                    <h2 style="font-size:16.5px;margin:11px 0 3px">Funding Agreement · NLCF</h2>
+                    <p class="muted" style="font-size:13px">Submitted by Maria Gomez · yesterday</p>
+                  </div>
+                  <div class="card" data-go="approvalDetail">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                      <span class="chip violet">Governance · COI</span><span class="chip gray">Parallel</span></div>
+                    <h2 style="font-size:16.5px;margin:11px 0 3px">Conflict of Interest · J. Patel</h2>
+                    <p class="muted" style="font-size:13px">Supplier relationship · awaiting board review</p>
+                  </div>
+                  <div class="card" data-go="approvalDetail">
+                    <div style="display:flex;justify-content:space-between;align-items:center">
+                      <span class="chip amber">Risk treatment</span><span class="chip gray">Sequential</span></div>
+                    <h2 style="font-size:16.5px;margin:11px 0 3px">Risk escalation · Funding shortfall</h2>
+                    <p class="muted" style="font-size:13px">Escalated to Extreme · sign-off needed</p>
+                  </div>
+                </div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+            <!-- ============ APPROVAL DETAIL ============ -->
+            <section class="screen" data-screen="approvalDetail">
+              <div class="nav"><button class="back" data-go="approvals"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Request</div><button class="icobtn"><i data-lucide="share"></i></button></div>
+              <div class="scroll" style="padding-bottom:150px">
+                <div class="pad">
+                  <div class="card" style="text-align:center;background:var(--grad-brand);color:#fff;border:none">
+                    <div style="width:54px;height:54px;border-radius:16px;background:rgba(255,255,255,.18);display:grid;place-items:center;margin:0 auto 12px"><i data-lucide="receipt" style="width:26px;height:26px"></i></div>
+                    <div style="font-size:13px;opacity:.85;font-weight:600">EXPENSE · FINANCE</div>
+                    <h1 style="font-size:22px;font-weight:800;margin:4px 0">Q3 Office Supplies</h1>
+                    <div style="font-size:34px;font-weight:800;letter-spacing:-1px">$1,240.00</div>
+                  </div>
+                </div>
+                <div class="field-l pad" style="padding-top:6px">Details</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="tx"><span>Submitted by</span><b>James Patel</b></div><div class="av sm g2">JP</div></div>
+                  <div class="row"><div class="tx"><span>Supplier</span><b>Office Depot Ltd</b></div><span class="chip green">Vetted</span></div>
+                  <div class="row"><div class="tx"><span>Project</span><b>Admin &amp; Operations</b></div></div>
+                  <div class="row"><div class="tx"><span>Invoice</span><b>INV-20264-OD.pdf</b></div><i data-lucide="paperclip" class="chev"></i></div>
+                </div></div>
+                <div class="field-l pad">Approval chain</div>
+                <div class="pad"><div class="card">
+                  <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line)">
+                    <div class="node done" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center"><i data-lucide="check" style="width:14px;height:14px"></i></div>
+                    <div class="tx" style="flex:1"><b style="font-size:14px">Maria Gomez · Manager</b><div class="muted" style="font-size:12px">Approved · 1 hr ago</div></div></div>
+                  <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)">
+                    <div class="node cur" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center"><i data-lucide="user" style="width:14px;height:14px"></i></div>
+                    <div class="tx" style="flex:1"><b style="font-size:14px">You · Treasurer</b><div style="font-size:12px;color:var(--teal);font-weight:700">Awaiting your decision</div></div></div>
+                  <div style="display:flex;align-items:center;gap:12px;padding-top:12px">
+                    <div class="node" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center">3</div>
+                    <div class="tx" style="flex:1"><b style="font-size:14px;color:var(--muted)">David Chen · Chair</b><div class="muted" style="font-size:12px">Pending</div></div></div>
+                </div></div>
+                <div class="field-l pad">Workflow actions</div>
+                <div class="pad" style="display:flex;gap:9px">
+                  <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-toast="Escalated to the Chair"><i data-lucide="chevrons-up"></i> Escalate</button>
+                  <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-toast="Conflict of interest flagged" data-go="coi"><i data-lucide="scale"></i> Flag COI</button>
+                  <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-toast="Linked risk raised on the register" data-go="risk"><i data-lucide="triangle-alert"></i> Raise risk</button>
+                </div>
+                <div class="pad" style="margin-top:10px"><button class="btn ghost" style="font-size:13px" data-toast="Delegated to another approver"><i data-lucide="user-round-cog"></i> Delegate to someone else</button></div>
+              </div>
+              <div style="position:absolute;left:0;right:0;bottom:0;padding:14px 18px 30px;background:var(--glass);backdrop-filter:blur(16px);border-top:1px solid var(--line);display:flex;gap:12px">
+                <button class="btn ghost" style="flex:1" data-toast="Request rejected" data-go="approvals"><i data-lucide="x"></i>Reject</button>
+                <button class="btn teal" style="flex:1.6" data-toast="Approved ✓" data-go="approvals"><i data-lucide="check"></i>Approve</button>
+              </div>
+            </section>
+
+            <!-- ============ POLICIES ============ -->
+            <section class="screen" data-screen="policies">
+              <div class="nav"><button class="back" data-go="more"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Policies</div><button class="icobtn"><i data-lucide="search"></i></button></div>
+              <div class="scroll">
+                <div class="pad">
+                  <div class="card" style="border:1.5px solid rgba(245,158,11,.45)">
+                    <div style="display:flex;gap:14px;align-items:flex-start">
+                      <div class="docprev" style="width:74px;height:92px;flex:none"><i data-lucide="file-text" style="width:30px;height:30px"></i></div>
+                      <div style="flex:1">
+                        <span class="chip blue">Safeguarding</span>
+                        <h2 style="font-size:16px;margin:9px 0 4px">Safeguarding Policy</h2>
+                        <div class="muted" style="font-size:12.5px">v3.0 · Active · review due in 2 days</div>
+                        <div class="chip amber" style="margin-top:8px"><i data-lucide="pen-line" style="width:13px;height:13px"></i> Acknowledgement required</div>
+                      </div>
+                    </div>
+                    <button class="btn teal" style="margin-top:14px" data-toast="Policy acknowledged ✓"><i data-lucide="check-check"></i> Read &amp; acknowledge</button>
+                  </div>
+                </div>
+                <div class="field-l pad">All policies</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="lock"></i></div>
+                    <div class="tx"><b>Privacy &amp; Data Protection</b><span>v2.1 · Active</span></div><span class="chip green">Ack’d</span></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="landmark"></i></div>
+                    <div class="tx"><b>Financial Controls</b><span>v1.4 · Active</span></div><span class="chip green">Ack’d</span></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="megaphone"></i></div>
+                    <div class="tx"><b>Whistleblowing</b><span>v1.0 · Under review</span></div><span class="chip amber">Review</span></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="heart-pulse"></i></div>
+                    <div class="tx"><b>Health &amp; Safety</b><span>v2.0 · Active</span></div><span class="chip green">Ack’d</span></div>
+                </div></div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+            <!-- ============ RISK REGISTER ============ -->
+            <section class="screen" data-screen="risk">
+              <div class="nav"><button class="back" data-go="more"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Risk Register</div><button class="icobtn"><i data-lucide="sliders-horizontal"></i></button></div>
+              <div class="scroll">
+                <div class="stats pad" style="margin-top:6px">
+                  <div class="stat b1"><i data-lucide="triangle-alert"></i><div class="lbl">Total risks</div><div class="num">18</div></div>
+                  <div class="stat b4"><i data-lucide="flame"></i><div class="lbl">High / Extreme</div><div class="num">4</div></div>
+                </div>
+                <div class="field-l pad">Heat map · likelihood × consequence</div>
+                <div class="pad"><div class="card"><div class="heat">
+                  <b style="background:#fbbf24">1</b><b style="background:#f59e0b">2</b><b style="background:#f97316">3</b><b style="background:#ef4444">4</b><b style="background:#dc2626">2</b>
+                  <b style="background:#a3e635;color:#365314">·</b><b style="background:#fbbf24">2</b><b style="background:#f59e0b">3</b><b style="background:#f97316">1</b><b style="background:#ef4444">1</b>
+                  <b style="background:#86efac;color:#14532d">1</b><b style="background:#a3e635;color:#365314">·</b><b style="background:#fbbf24">1</b><b style="background:#f59e0b">·</b><b style="background:#f97316">·</b>
+                  <b style="background:#4ade80;color:#14532d">·</b><b style="background:#86efac;color:#14532d">·</b><b style="background:#a3e635;color:#365314">·</b><b style="background:#fbbf24">·</b><b style="background:#f59e0b">·</b>
+                  <b style="background:#22c55e;color:#fff">·</b><b style="background:#4ade80;color:#14532d">·</b><b style="background:#86efac;color:#14532d">·</b><b style="background:#a3e635;color:#365314">·</b><b style="background:#fbbf24">·</b>
+                </div></div></div>
+                <div class="field-l pad">Register</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="tx"><b>Funding shortfall FY26</b><span>Finance · Owner: A. Morgan</span></div><span class="chip red">Extreme · 20</span></div>
+                  <div class="row"><div class="tx"><b>Data breach / cyber</b><span>IT · Owner: D. Chen</span></div><span class="chip amber">High · 12</span></div>
+                  <div class="row"><div class="tx"><b>Volunteer safety</b><span>Ops · Owner: S. Lee</span></div><span class="chip amber">High · 10</span></div>
+                  <div class="row"><div class="tx"><b>Reputational damage</b><span>Comms · Owner: M. Gomez</span></div><span class="chip teal">Moderate · 6</span></div>
+                </div></div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+            <!-- ============ COI REGISTER ============ -->
+            <section class="screen" data-screen="coi">
+              <div class="nav"><button class="back" data-go="more"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Conflicts of Interest</div><button class="icobtn"><i data-lucide="search"></i></button></div>
+              <div class="scroll">
+                <div class="seg"><b class="on">All</b><b>Pending</b><b>Approved</b></div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="av g2">JP</div>
+                    <div class="tx"><b>James Patel</b><span>Supplier relationship · Office Depot</span></div><span class="chip amber">Pending</span></div>
+                  <div class="row"><div class="av g4">SL</div>
+                    <div class="tx"><b>Sarah Lee</b><span>Family member employed</span></div><span class="chip green">Approved</span></div>
+                  <div class="row"><div class="av g3">DC</div>
+                    <div class="tx"><b>David Chen</b><span>Director of partner charity</span></div><span class="chip green">Approved</span></div>
+                  <div class="row"><div class="av g1">MG</div>
+                    <div class="tx"><b>Maria Gomez</b><span>Personal donation > $5k</span></div><span class="chip gray">Archived</span></div>
+                </div></div>
+                <div class="pad" style="margin-top:14px">
+                  <button class="btn" data-toast="Declaration submitted for approval"><i data-lucide="file-plus-2"></i> Declare a conflict of interest</button>
+                </div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+            <!-- ============ COMPLAINTS ============ -->
+            <section class="screen" data-screen="complaints">
+              <div class="nav"><button class="back" data-go="more"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Complaints</div><button class="icobtn"><i data-lucide="sliders-horizontal"></i></button></div>
+              <div class="scroll">
+                <div class="pad"><div class="card" style="display:flex;align-items:center;gap:18px">
+                  <div style="width:96px;height:96px;border-radius:50%;flex:none;
+                    background:conic-gradient(var(--red) 0 18%,var(--amber) 18% 40%,var(--blue2) 40% 64%,var(--green) 64% 100%);
+                    display:grid;place-items:center">
+                    <div style="width:66px;height:66px;border-radius:50%;background:var(--card);display:grid;place-items:center;text-align:center">
+                      <div><div style="font-size:22px;font-weight:800;line-height:1">31</div><div style="font-size:9px;color:var(--muted);font-weight:700">TOTAL</div></div></div>
+                  </div>
+                  <div style="flex:1;display:flex;flex-direction:column;gap:7px;font-size:12.5px;font-weight:600">
+                    <span style="display:flex;align-items:center;gap:7px"><span class="dot" style="background:var(--red)"></span>New · 6</span>
+                    <span style="display:flex;align-items:center;gap:7px"><span class="dot" style="background:var(--amber)"></span>In progress · 7</span>
+                    <span style="display:flex;align-items:center;gap:7px"><span class="dot" style="background:var(--blue2)"></span>Assigned · 8</span>
+                    <span style="display:flex;align-items:center;gap:7px"><span class="dot" style="background:var(--green)"></span>Resolved · 10</span>
+                  </div>
+                </div></div>
+                <div class="field-l pad">Recent</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="message-square-warning"></i></div>
+                    <div class="tx"><b>#1051 · Facility access</b><span>New · 1 hr ago</span></div><span class="chip red">New</span></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="user-round"></i></div>
+                    <div class="tx"><b>#1042 · Service quality</b><span>Assigned to S. Lee</span></div><span class="chip amber">In progress</span></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="check-circle-2"></i></div>
+                    <div class="tx"><b>#1039 · Staff conduct</b><span>Resolved · 2 days</span></div><span class="chip green">Resolved</span></div>
+                </div></div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+            <!-- ============ EXPENSES (SUBMIT) ============ -->
+            <section class="screen" data-screen="expenses">
+              <div class="nav"><button class="back" data-go="home"><i data-lucide="chevron-left"></i></button>
+                <div class="title center">New Expense</div><button class="icobtn"><i data-lucide="x"></i></button></div>
+              <div class="scroll" style="padding-bottom:120px">
+                <div class="pad">
+                  <div class="field-l" style="margin-top:6px">Amount</div>
+                  <div class="input" style="font-size:30px;font-weight:800;justify-content:center;padding:18px">$1,240.00</div>
+                  <div class="field-l">Description</div>
+                  <div class="input">Q3 office supplies &amp; stationery</div>
+                  <div class="field-l">Category</div>
+                  <div class="input"><span>Office &amp; Admin</span><i data-lucide="chevron-down"></i></div>
+                  <div class="field-l">Supplier <span style="color:var(--teal)">· vetted only</span></div>
+                  <div class="input"><span>Office Depot Ltd</span><i data-lucide="chevron-down"></i></div>
+                  <div class="field-l">Allocate to project</div>
+                  <div class="input"><span>Admin &amp; Operations · $8,400 left</span><i data-lucide="chevron-down"></i></div>
+                  <div class="field-l">Invoice</div>
+                  <div class="upload" data-toast="Choose a photo or file"><i data-lucide="cloud-upload"></i><div style="font-weight:700;color:var(--ink)">Upload or take a photo</div><div style="font-size:12px">PDF, JPG or PNG</div></div>
+                  <div class="input" style="margin-top:16px"><span style="font-weight:600;color:var(--ink)">This is an asset purchase</span><div class="tg off"></div></div>
+                </div>
+              </div>
+              <div style="position:absolute;left:0;right:0;bottom:0;padding:14px 18px 30px;background:var(--glass);backdrop-filter:blur(16px);border-top:1px solid var(--line)">
+                <button class="btn" data-toast="Submitted for approval ✓" data-go="home"><i data-lucide="send-horizontal"></i> Submit for approval</button>
+              </div>
+            </section>
+
+            <!-- ============ BILLING ============ -->
+            <section class="screen" data-screen="billing">
+              <div class="scroll">
+                <div class="ghead">
+                  <div style="display:flex;justify-content:space-between;align-items:center">
+                    <button class="icobtn" data-go="more" style="background:rgba(255,255,255,.16);color:#fff"><i data-lucide="chevron-left"></i></button>
+                    <span style="font-weight:700;font-size:16px">Billing</span>
+                    <span style="width:38px"></span>
+                  </div>
+                  <div style="margin-top:18px">
+                    <div style="opacity:.85;font-size:13px;font-weight:600">CURRENT PLAN</div>
+                    <h1 style="font-size:28px;font-weight:800;letter-spacing:-.5px;margin-top:3px">Growth Plan</h1>
+                    <div style="opacity:.85;font-size:13px;margin-top:4px">$149 / month · renews 1 July 2026</div>
+                    <span class="chip" style="background:rgba(255,255,255,.2);color:#fff;margin-top:12px"><i data-lucide="tag" style="width:13px;height:13px"></i> 15% partner discount active</span>
+                  </div>
+                </div>
+                <div class="field-l pad" style="padding-top:14px">Usage this period</div>
+                <div class="pad"><div class="card">
+                  <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin-bottom:6px"><span>Team members</span><span class="muted">8 / 10</span></div>
+                  <div class="bar"><i style="width:80%"></i></div>
+                  <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin:16px 0 6px"><span>Workflows / month</span><span class="muted">142 / 500</span></div>
+                  <div class="bar"><i style="width:28%"></i></div>
+                  <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;margin:16px 0 6px"><span>Storage</span><span style="color:var(--amber)">44 / 50 GB</span></div>
+                  <div class="bar amber"><i style="width:88%"></i></div>
+                </div></div>
+                <div class="field-l pad">Plans</div>
+                <div class="pad"><div class="card" style="border:1.5px solid rgba(42,157,143,.4)">
+                  <div style="display:flex;justify-content:space-between;align-items:center">
+                    <div><b style="font-size:15px">Scale Plan</b><div class="muted" style="font-size:12.5px">Unlimited workflows · 25 seats</div></div>
+                    <div style="text-align:right"><div style="font-size:18px;font-weight:800">$299</div><div class="muted" style="font-size:11px">/ month</div></div>
+                  </div>
+                  <button class="btn teal" style="margin-top:13px" data-toast="Opening secure checkout…"><i data-lucide="arrow-up-circle"></i> Upgrade plan</button>
+                </div></div>
+                <div class="field-l pad">Recent activity</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="tx"><b>Invoice paid</b><span>1 June 2026</span></div><span class="amt" style="font-size:14px">$126.65</span></div>
+                  <div class="row"><div class="tx"><b>Plan upgraded → Growth</b><span>1 May 2026</span></div><i data-lucide="receipt-text" class="chev"></i></div>
+                </div></div>
+                <div class="pad" style="margin-top:14px"><button class="btn ghost" data-toast="Opening Stripe billing portal…"><i data-lucide="external-link"></i> Manage payment in Stripe</button></div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+            <!-- ============ HELP CENTER ============ -->
+            <section class="screen" data-screen="help">
+              <div class="nav"><button class="back" data-go="more"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Help Center</div><button class="icobtn"><i data-lucide="search"></i></button></div>
+              <div class="scroll">
+                <div class="pad"><div class="card" style="background:var(--grad-teal);color:#fff;border:none;text-align:center">
+                  <i data-lucide="messages-square" style="width:30px;height:30px;margin-bottom:8px"></i>
+                  <h2 style="font-size:17px;color:#fff">How can we help?</h2>
+                  <p style="font-size:13px;opacity:.9;margin-top:4px">Raise a ticket and our team will respond fast.</p>
+                  <button class="btn btn-w" style="margin-top:14px;color:var(--teal)" data-toast="Support ticket created"><i data-lucide="plus"></i> New support ticket</button>
+                </div></div>
+                <div class="field-l pad">Your tickets</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="bug"></i></div>
+                    <div class="tx"><b>Can’t export risk register</b><span>#STX-2041 · 2 replies</span></div><span class="chip amber">Open</span></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="user-plus"></i></div>
+                    <div class="tx"><b>Add a new trustee seat</b><span>#STX-2038</span></div><span class="chip green">Resolved</span></div>
+                </div></div>
+                <div class="field-l pad">Browse topics</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="tx"><b>Getting started</b></div><i data-lucide="chevron-right" class="chev"></i></div>
+                  <div class="row"><div class="tx"><b>Approvals &amp; workflows</b></div><i data-lucide="chevron-right" class="chev"></i></div>
+                  <div class="row"><div class="tx"><b>Billing &amp; plans</b></div><i data-lucide="chevron-right" class="chev"></i></div>
+                </div></div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+            <!-- ============ NOTIFICATIONS ============ -->
+            <section class="screen" data-screen="notifications">
+              <div class="nav"><button class="back" data-go="home"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Notifications</div><button class="icobtn"><i data-lucide="check-check"></i></button></div>
+              <div class="scroll">
+                <div class="seg"><b class="on">All</b><b>Unread · 4</b></div>
+                <div class="timeline-day">Today</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row" data-go="approvalDetail" style="background:rgba(42,157,143,.05)"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="receipt"></i></div>
+                    <div class="tx"><b>Approval awaiting you</b><span>Q3 Office Supplies · $1,240</span></div><span class="dot" style="background:var(--teal)"></span></div>
+                  <div class="row" data-go="chatThread" style="background:rgba(42,157,143,.05)"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="at-sign"></i></div>
+                    <div class="tx"><b>James mentioned you</b><span>Finance Team · “@Angela can you…”</span></div><span class="dot" style="background:var(--teal)"></span></div>
+                  <div class="row" data-go="meetingDetail" style="background:rgba(42,157,143,.05)"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="calendar-clock"></i></div>
+                    <div class="tx"><b>Meeting in 1 hour</b><span>Quarterly Board Meeting · 2:00 PM</span></div><span class="dot" style="background:var(--teal)"></span></div>
+                </div></div>
+                <div class="timeline-day">Earlier</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row" data-go="approvals"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="check-circle-2"></i></div>
+                    <div class="tx"><b>Workflow approved</b><span>Venue hire expense · by D. Chen</span></div><i data-lucide="chevron-right" class="chev"></i></div>
+                  <div class="row" data-go="policies"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="file-text"></i></div>
+                    <div class="tx"><b>Policy acknowledgement due</b><span>Safeguarding Policy v3.0</span></div><i data-lucide="chevron-right" class="chev"></i></div>
+                </div></div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+            <!-- ============ SETTINGS ============ -->
+            <section class="screen" data-screen="settings">
+              <div class="nav"><button class="back" data-go="more"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Settings</div><span style="width:38px"></span></div>
+              <div class="scroll">
+                <div class="pad"><div class="card" style="display:flex;align-items:center;gap:14px">
+                  <div class="av g1" style="width:60px;height:60px;font-size:20px">AM</div>
+                  <div style="flex:1"><div style="font-size:18px;font-weight:800">Angela Morgan</div>
+                    <div class="muted" style="font-size:13px">Treasurer · Hope Foundation</div>
+                    <span class="chip teal" style="margin-top:6px">angela.morgan@hopefdn.org</span></div>
+                  <i data-lucide="chevron-right" class="chev"></i>
+                </div></div>
+                <div class="field-l pad">Security</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="shield-check"></i></div>
+                    <div class="tx"><b>Two-factor authentication</b><span>Authenticator app · enabled</span></div><div class="tg"></div></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="key-round"></i></div>
+                    <div class="tx"><b>Change password</b></div><i data-lucide="chevron-right" class="chev"></i></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="scan-face"></i></div>
+                    <div class="tx"><b>Face ID unlock</b></div><div class="tg"></div></div>
+                </div></div>
+                <div class="field-l pad">Preferences</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="bell"></i></div>
+                    <div class="tx"><b>Push notifications</b></div><div class="tg"></div></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="moon"></i></div>
+                    <div class="tx"><b>Appearance</b><span>System</span></div><i data-lucide="chevron-right" class="chev"></i></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="shield"></i></div>
+                    <div class="tx"><b>My permissions</b><span>Treasurer access</span></div><i data-lucide="chevron-right" class="chev"></i></div>
+                </div></div>
+                <div class="pad" style="margin-top:14px"><button class="btn ghost" style="color:var(--red)" data-toast="Signed out" data-go="springboard"><i data-lucide="log-out"></i> Sign out</button></div>
+                <div class="tac muted" style="font-size:11px;margin-top:12px">Stewardex Mobile · v1.0.0 (Phase 1)</div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+            <!-- ============ MORE MENU ============ -->
+            <section class="screen" data-screen="more">
+              <div class="scroll">
+                <div class="ltitle" style="padding-top:60px"><div class="sub">HOPE FOUNDATION</div><h1>More</h1></div>
+                <div class="menu-grid">
+                  <div class="mtile" data-go="policies"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="file-text"></i></div><b>Policies</b><span>1 to acknowledge</span></div>
+                  <div class="mtile" data-go="risk"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="triangle-alert"></i></div><b>Risk Register</b><span>18 risks</span></div>
+                  <div class="mtile" data-go="coi"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="scale"></i></div><b>Conflicts</b><span>1 pending</span></div>
+                  <div class="mtile" data-go="complaints"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="message-square-warning"></i></div><b>Complaints</b><span>6 new</span></div>
+                  <div class="mtile" data-go="meetings"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="calendar-clock"></i></div><b>Meetings</b><span>1 today</span></div>
+                  <div class="mtile" data-go="expenses"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="receipt"></i></div><b>Expenses</b><span>Submit a claim</span></div>
+                  <div class="mtile" data-go="billing"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="credit-card"></i></div><b>Billing</b><span>Growth Plan</span></div>
+                  <div class="mtile" data-go="help"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="life-buoy"></i></div><b>Help Center</b><span>1 open ticket</span></div>
+                  <div class="mtile" data-go="notifications"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="bell"></i></div><b>Notifications</b><span>4 unread</span></div>
+                  <div class="mtile" data-go="settings"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="settings"></i></div><b>Settings</b><span>Profile &amp; security</span></div>
+                </div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
+          </div><!-- /screens -->
+
+          <!-- persistent tab bar -->
+          <nav class="tabbar" id="tabbar" style="display:none">
+            <button data-tab="home" data-go="home" class="on"><i data-lucide="layout-grid"></i>Home</button>
+            <button data-tab="calendar" data-go="calendar"><i data-lucide="calendar"></i>Calendar</button>
+            <button data-tab="chat" data-go="chat"><i data-lucide="message-circle"></i>Chat</button>
+            <button data-tab="approvals" data-go="approvals"><i data-lucide="badge-check"></i>Approvals</button>
+            <button data-tab="more" data-go="more"><i data-lucide="grip"></i>More</button>
+            <div class="home-ind"></div>
+          </nav>
+
+          <!-- pull-down affordance + banner stack + notification centre -->
+          <div class="pull-tab" title="Pull down for Notification Centre"></div>
+          <div class="banner-stack" id="bannerStack"></div>
+          <div class="noti-center" id="notiCenter">
+            <div class="nc-clock"><div class="t">9:41</div><div class="d">Monday, 15 June</div></div>
+            <div class="nc-list" id="ncList"></div>
+            <div class="nc-hint">Tap a notification to open it · swipe to dismiss</div>
+            <div class="nc-grab" data-close-center></div>
+          </div>
+
+        </div><!-- /screen-vp -->
+      </div><!-- /device -->
+    </div><!-- /device-wrap -->
+    </div><!-- /phonecol -->
+  </div><!-- /deck -->
+
+  <div class="foot">Designed for <b>Stewardex</b> · Phase 1 mobile prototype · iOS &amp; Android<br>
+    <span style="font-size:11px">Visual prototype only — no live data. Tap the rail or tab bar to navigate.</span></div>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
