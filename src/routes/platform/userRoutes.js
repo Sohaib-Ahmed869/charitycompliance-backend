@@ -26,6 +26,10 @@ router.post(
   userController.inviteAuditor
 );
 
+// External auditor management (#18)
+router.get('/auditors', userController.listAuditors);
+router.post('/auditors/:inviteId/revoke', userController.revokeAuditor);
+
 router.get('/', userController.listTeamMembers);
 
 export default router;

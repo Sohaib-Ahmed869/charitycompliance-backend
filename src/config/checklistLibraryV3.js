@@ -235,6 +235,8 @@ export const ITEM_WISE_CHECKLISTS = [
     category: 'Finance',
     module: 'Finance',
     submodule: 'Financial Controls',
+    // Distinguish from I04 (bank cards) which shares Financial Controls.
+    useCase: 'financial_controls',
     description: 'Dual-verify, variance, deposit trace, sign-off',
     entityTargets: ['financial_controls'],
     items: [
@@ -251,8 +253,10 @@ export const ITEM_WISE_CHECKLISTS = [
     category: 'Finance',
     module: 'Finance',
     submodule: 'Financial Controls',
+    // Shown against every bank/expense card (#14).
+    useCase: 'bank_card',
     description: 'Cardholder, spend policy, receipt, monthly review',
-    entityTargets: ['financial_controls'],
+    entityTargets: ['bank_card'],
     items: [
       { title: 'The cardholder and limit have been validated.', sortOrder: 10 },
       { title: 'The eligible spend policy check has passed.', sortOrder: 20 },
@@ -331,18 +335,38 @@ export const ITEM_WISE_CHECKLISTS = [
   },
   {
     v3Id: 'I09',
-    name: 'Financial Record Keeping',
+    name: 'Financial Record-Keeping',
     checklistType: 'item_wise',
     category: 'Finance',
     module: 'Finance',
     submodule: 'Records',
-    description: 'Source docs, retention standards, access, retrieval test',
-    entityTargets: ['financial_report'],
+    // Source: spreadsheet "Sheet29". Surfaced on the Expenses register (#12).
+    useCase: 'expense_register',
+    description: 'Records, statements, payroll, tax, budgeting, audit, retention and policies',
+    entityTargets: ['expense_register'],
     items: [
-      { title: 'Source documents have been indexed.', sortOrder: 10 },
-      { title: 'Retention and naming standards have been met.', sortOrder: 20 },
-      { title: 'Restricted access has been enforced.', sortOrder: 30 },
-      { title: 'The retrieval test has been passed.', sortOrder: 40 }
+      { title: 'All bank statements for all accounts are collected and filed monthly.', category: 'General Financial Records', sortOrder: 10 },
+      { title: 'All cash receipts are recorded promptly.', category: 'General Financial Records', sortOrder: 20 },
+      { title: 'All cash disbursements are recorded and supported by appropriate documentation.', category: 'General Financial Records', sortOrder: 30 },
+      { title: 'Petty cash transactions are recorded, reconciled and replenished with authorisation.', category: 'General Financial Records', sortOrder: 40 },
+      { title: 'All donations are recorded with donor details and receipts issued.', category: 'General Financial Records', sortOrder: 50 },
+      { title: 'Grant agreements and related documentation are maintained.', category: 'General Financial Records', sortOrder: 60 },
+      { title: 'The income statement is prepared monthly with income/expenses categorised.', category: 'Financial Statements', sortOrder: 70 },
+      { title: 'The balance sheet is prepared monthly with assets and liabilities recorded.', category: 'Financial Statements', sortOrder: 80 },
+      { title: 'The cash flow statement is prepared monthly with inflows/outflows tracked.', category: 'Financial Statements', sortOrder: 90 },
+      { title: 'Payroll records are maintained with deductions and entitlements recorded accurately.', category: 'Payroll', sortOrder: 100 },
+      { title: 'Superannuation is calculated, paid timely and recorded.', category: 'Payroll', sortOrder: 110 },
+      { title: 'GST is recorded on applicable transactions and BAS lodged timely.', category: 'Taxation', sortOrder: 120 },
+      { title: 'FBT records are maintained and returns lodged timely (if applicable).', category: 'Taxation', sortOrder: 130 },
+      { title: 'The annual budget is board-approved and compared with actuals monthly.', category: 'Budgeting', sortOrder: 140 },
+      { title: 'Financial forecasts are prepared and variances analysed.', category: 'Budgeting', sortOrder: 150 },
+      { title: 'Internal audits are conducted periodically and findings addressed.', category: 'Audit & Compliance', sortOrder: 160 },
+      { title: 'Financial statements are audited annually and recommendations implemented.', category: 'Audit & Compliance', sortOrder: 170 },
+      { title: 'The ACNC Annual Information Statement is prepared and lodged; financial standards met.', category: 'Audit & Compliance', sortOrder: 180 },
+      { title: 'Financial records are retained for at least 7 years and stored securely.', category: 'Documentation', sortOrder: 190 },
+      { title: 'All transactions are supported by documentation and filed systematically.', category: 'Documentation', sortOrder: 200 },
+      { title: 'Financial management policies are documented and reviewed annually.', category: 'Policies & Procedures', sortOrder: 210 },
+      { title: 'Record-keeping procedures are documented, followed, and staff trained.', category: 'Policies & Procedures', sortOrder: 220 }
     ]
   },
   {
@@ -502,8 +526,12 @@ export const ITEM_WISE_CHECKLISTS = [
     category: 'HR & Volunteers',
     module: 'Volunteers',
     submodule: 'Volunteer Register',
+    // useCase disambiguates the three volunteer checklists that share the same
+    // module/submodule (onboarding vs register vs offboarding). Without it the
+    // selector cannot tell I19/I21/I50 apart. Shown when a volunteer is ADDED.
+    useCase: 'volunteer_onboarding',
     description: 'Role description, screening, induction, declarations',
-    entityTargets: ['volunteer_person'],
+    entityTargets: ['volunteer_onboarding'],
     items: [
       { title: 'The role description has been approved.', sortOrder: 10 },
       { title: 'The application and screening have been completed.', sortOrder: 20 },
@@ -534,13 +562,36 @@ export const ITEM_WISE_CHECKLISTS = [
     category: 'HR & Volunteers',
     module: 'Volunteers',
     submodule: 'Volunteer Register',
+    // Shown on the volunteer's register entry (ongoing maintenance).
+    useCase: 'volunteer_register',
     description: 'Active/inactive status, contact details, role, exit records',
-    entityTargets: ['volunteer_person'],
+    entityTargets: ['volunteer_person', 'volunteer_register'],
     items: [
       { title: 'The active or inactive status is current.', sortOrder: 10 },
       { title: 'Contact and emergency details are current.', sortOrder: 20 },
       { title: 'The role assignment is current.', sortOrder: 30 },
       { title: 'Exit records are complete.', sortOrder: 40 }
+    ]
+  },
+  {
+    v3Id: 'I50',
+    name: 'Volunteer Offboarding & Exit',
+    checklistType: 'item_wise',
+    category: 'HR & Volunteers',
+    module: 'Volunteers',
+    submodule: 'Volunteer Register',
+    // Shown when a volunteer is made INACTIVE / offboarded.
+    // Source: spreadsheet Sheet1 "Exit Procedures" + Sheet2 "Exit Process".
+    useCase: 'volunteer_offboarding',
+    description: 'Exit interview, feedback, recognition, property return, records and access',
+    entityTargets: ['volunteer_offboarding'],
+    items: [
+      { title: 'Conduct an exit interview or survey to gather feedback.', sortOrder: 10 },
+      { title: 'Collect feedback from the departing volunteer.', sortOrder: 20 },
+      { title: 'Formally thank the departing volunteer.', sortOrder: 30 },
+      { title: 'Ensure the return of any organisation property.', sortOrder: 40 },
+      { title: 'Update volunteer records to reflect their departure.', sortOrder: 50 },
+      { title: 'Revoke the volunteer’s system access and action links.', sortOrder: 60 }
     ]
   },
   {
@@ -600,8 +651,11 @@ export const ITEM_WISE_CHECKLISTS = [
     category: 'HR & Volunteers',
     module: 'People & HR',
     submodule: 'Employees',
+    // useCase 'coi' lets the COI flow select this specifically out of the four
+    // Employees checklists (#22).
+    useCase: 'coi',
     description: 'COI declaration, conflict assessment, mitigation, re-declaration',
-    entityTargets: ['hr_employee'],
+    entityTargets: ['coi'],
     items: [
       { title: 'The COI declaration has been submitted.', sortOrder: 10 },
       { title: 'The conflict assessment has been documented.', sortOrder: 20 },
@@ -652,8 +706,11 @@ export const ITEM_WISE_CHECKLISTS = [
     category: 'Marketing',
     module: 'Marketing',
     submodule: 'Social Media',
+    // Account access/credentials checklist (#14, Sheet88) — distinct from the
+    // campaign-creation checklist (I27) and content-approval (I29).
+    useCase: 'social_media_access',
     description: 'Account owner, access list, MFA, credential rotation',
-    entityTargets: ['social_media_campaign'],
+    entityTargets: ['social_media_account'],
     items: [
       { title: 'The account owner and backup owner have been assigned.', sortOrder: 10 },
       { title: 'The access list and permissions have been reviewed.', sortOrder: 20 },
@@ -940,15 +997,25 @@ export const ITEM_WISE_CHECKLISTS = [
     category: 'Governance',
     module: 'Charity Administration',
     submodule: 'Responsible People',
-    description: 'Suitability checks, disqualification screening, declarations, renewal',
+    // Source: spreadsheet "Sheet6" — Suitability of Responsible Persons (#6).
+    description: 'Suitability checks: legal, governance, skills, commitment, reputation',
     entityTargets: ['responsible_person'],
     items: [
-      { title: 'The person is not disqualified from managing a corporation under the Corporations Act 2001.', sortOrder: 10 },
-      { title: 'The National Police Check and Working with Children Check are current.', sortOrder: 20 },
-      { title: 'The ACNC disqualification check has been performed.', sortOrder: 30 },
-      { title: 'Conflicts of interest have been disclosed.', sortOrder: 40 },
-      { title: 'The commitment to act in the best interests of the charity has been confirmed.', sortOrder: 50 },
-      { title: 'The suitability renewal reminder is active.', sortOrder: 60 }
+      { title: 'The individual is over 18 years of age.', category: 'Legal Requirements', sortOrder: 10 },
+      { title: 'The individual is not disqualified from managing a corporation under the Corporations Act 2001 (Cth).', category: 'Legal Requirements', sortOrder: 20 },
+      { title: 'The individual is not disqualified by the ACNC Commissioner.', category: 'Legal Requirements', sortOrder: 30 },
+      { title: 'A National Police Check has been provided.', category: 'Legal Requirements', sortOrder: 40 },
+      { title: 'A Working with Children Check has been provided (if applicable).', category: 'Legal Requirements', sortOrder: 50 },
+      { title: "The individual understands the charity's mission and values.", category: 'Governance & Ethics', sortOrder: 60 },
+      { title: 'All potential conflicts of interest have been disclosed.', category: 'Governance & Ethics', sortOrder: 70 },
+      { title: 'The individual demonstrates a commitment to ethical conduct.', category: 'Governance & Ethics', sortOrder: 80 },
+      { title: 'The individual is willing to act in the best interests of the charity.', category: 'Governance & Ethics', sortOrder: 90 },
+      { title: 'The individual possesses relevant skills and experience (finance, legal, fundraising, governance).', category: 'Skills & Experience', sortOrder: 100 },
+      { title: 'The individual has served on other boards or in leadership roles (if applicable).', category: 'Skills & Experience', sortOrder: 110 },
+      { title: 'The individual can commit the necessary time and effort to their duties.', category: 'Commitment & Availability', sortOrder: 120 },
+      { title: 'The individual has attended board meetings regularly (if applicable).', category: 'Commitment & Availability', sortOrder: 130 },
+      { title: 'The individual has a good professional and personal reputation.', category: 'Reputation & Conduct', sortOrder: 140 },
+      { title: 'Any disciplinary actions or legal proceedings have been checked and considered.', category: 'Reputation & Conduct', sortOrder: 150 }
     ]
   },
   {
@@ -1020,12 +1087,197 @@ export const ITEM_WISE_CHECKLISTS = [
       { title: 'Pricing, contract terms and approval thresholds have been reviewed.', sortOrder: 60 },
       { title: 'The vetting decision and supporting evidence have been recorded.', sortOrder: 70 }
     ]
+  },
+  {
+    // Source: spreadsheet "Sheet34" — Approval to Sweep Funds. Shown when a
+    // sweep-funds request is raised (#15).
+    v3Id: 'I51',
+    name: 'Approval to Sweep Funds',
+    checklistType: 'item_wise',
+    category: 'Finance',
+    module: 'Finance',
+    submodule: 'Sweep Funds',
+    description: 'Authorisation, compliance, risk, controls, execution and sign-off for sweeping funds',
+    entityTargets: ['sweep_funds'],
+    items: [
+      { title: 'Confirm the request has been authorised by the appropriate personnel.', sortOrder: 10 },
+      { title: "Verify the transfer complies with the charity's financial policies and procedures.", sortOrder: 20 },
+      { title: 'Confirm no conflict of interest exists for the personnel involved.', sortOrder: 30 },
+      { title: 'Identify potential risks associated with the fund sweep.', sortOrder: 40 },
+      { title: 'Outline measures to mitigate the identified risks.', sortOrder: 50 },
+      { title: 'Ensure two authorised personnel have signed off (dual signatures).', sortOrder: 60 },
+      { title: 'Verify the amount is within the approved transaction limits.', sortOrder: 70 },
+      { title: 'Confirm the transaction will be recorded in the financial system for auditing.', sortOrder: 80 },
+      { title: 'Execute the fund transfer as per the approved details.', sortOrder: 90 },
+      { title: 'Confirm the funds have been received in the destination account.', sortOrder: 100 },
+      { title: 'Ensure all related documents are filed and stored securely.', sortOrder: 110 },
+      { title: 'Confirm review and approval by the finance committee.', sortOrder: 120 },
+      { title: 'Obtain final approval by the Board or designated authority.', sortOrder: 130 }
+    ]
+  },
+  {
+    // Source: spreadsheet "Sheet43" — Marketing Compliance Resources Register.
+    // The marketing module's overall register checklist (#17). Per-campaign
+    // creation still uses I27.
+    v3Id: 'I52',
+    name: 'Marketing Compliance Register',
+    checklistType: 'item_wise',
+    category: 'Marketing',
+    module: 'Marketing',
+    submodule: 'Register',
+    useCase: 'marketing_register',
+    description: 'Overall marketing compliance register — ACNC/ACCC/ACL, privacy, fundraising, advertising, IP, records',
+    entityTargets: ['marketing_register'],
+    items: [
+      { title: 'All marketing materials comply with ACNC guidelines.', category: 'General Compliance', sortOrder: 10 },
+      { title: "Marketing activities align with the charity's mission, values and ethical standards.", category: 'General Compliance', sortOrder: 20 },
+      { title: 'Marketing complies with ACCC advertising guidelines.', category: 'General Compliance', sortOrder: 30 },
+      { title: 'Campaigns adhere to the Australian Consumer Law (ACL).', category: 'General Compliance', sortOrder: 40 },
+      { title: 'All content is reviewed and approved before publication.', category: 'Content Approval', sortOrder: 50 },
+      { title: 'Legal has reviewed all terms and conditions in marketing materials.', category: 'Content Approval', sortOrder: 60 },
+      { title: 'Programs and services are represented accurately and truthfully.', category: 'Content Approval', sortOrder: 70 },
+      { title: 'Personal information handling complies with the Privacy Act 1988 and the APPs.', category: 'Data Privacy', sortOrder: 80 },
+      { title: 'Explicit consent is obtained before using personal data for marketing.', category: 'Data Privacy', sortOrder: 90 },
+      { title: 'Personal data collected through marketing is stored securely.', category: 'Data Privacy', sortOrder: 100 },
+      { title: 'Fundraising appeals comply with state/territory fundraising laws.', category: 'Fundraising', sortOrder: 110 },
+      { title: 'Donation use is explained transparently in all materials.', category: 'Fundraising', sortOrder: 120 },
+      { title: 'Receipts and acknowledgments are issued per ATO requirements.', category: 'Fundraising', sortOrder: 130 },
+      { title: 'Advertising complies with the AANA Code of Ethics.', category: 'Advertising Standards', sortOrder: 140 },
+      { title: 'Advertising does not mislead, deceive or exploit the audience.', category: 'Advertising Standards', sortOrder: 150 },
+      { title: 'No false or misleading claims or endorsements are used.', category: 'Advertising Standards', sortOrder: 160 },
+      { title: 'Email campaigns comply with the Spam Act 2003.', category: 'Digital Marketing', sortOrder: 170 },
+      { title: 'Social media posts comply with platform guidelines and advertising standards.', category: 'Digital Marketing', sortOrder: 180 },
+      { title: 'The website privacy policy is up-to-date and accessible.', category: 'Digital Marketing', sortOrder: 190 },
+      { title: 'Marketing materials respect copyright and trademarks.', category: 'Intellectual Property', sortOrder: 200 },
+      { title: 'Licenses are obtained for any third-party content (images, music).', category: 'Intellectual Property', sortOrder: 210 },
+      { title: 'Staff and volunteers receive regular marketing-compliance training.', category: 'Training', sortOrder: 220 },
+      { title: 'All marketing personnel are aware of and adhere to this checklist.', category: 'Training', sortOrder: 230 },
+      { title: 'Marketing approvals and compliance checks are documented.', category: 'Record Keeping', sortOrder: 240 },
+      { title: 'Consent records for data use and testimonials are kept.', category: 'Record Keeping', sortOrder: 250 },
+      { title: 'Logs of campaigns (dates, content, audiences) are maintained.', category: 'Record Keeping', sortOrder: 260 },
+      { title: 'Regular internal audits of marketing activities are conducted.', category: 'Review & Audit', sortOrder: 270 },
+      { title: 'Marketing policies and procedures are reviewed annually.', category: 'Review & Audit', sortOrder: 280 }
+    ]
+  },
+  {
+    // Source: spreadsheet "Sheet41" — Authorization for Bank & Platform Access
+    // (account opening, signatories, online banking, accounting software, etc.) (#14).
+    v3Id: 'I53',
+    name: 'Bank & Platform Access Authorization',
+    checklistType: 'item_wise',
+    category: 'Finance',
+    module: 'Finance',
+    submodule: 'Financial Controls',
+    useCase: 'bank_platform_access',
+    description: 'Authorisation for bank accounts, online banking, cards, payment, accounting and other platform access',
+    entityTargets: ['bank_platform_access'],
+    items: [
+      { title: 'Account-opening documents are complete (application, certified signatory IDs, board resolution, constitution/trust deed, proof of address, minutes).', category: 'Account Opening', sortOrder: 10 },
+      { title: 'Signatory authorisations are complete (IDs, specimen signatures, board-signed mandate, bank verification, documents filed).', category: 'Signatories', sortOrder: 20 },
+      { title: 'Online banking access is set up (application, user roles/permissions, two-factor authentication, staff training, bank confirmation).', category: 'Online Banking', sortOrder: 30 },
+      { title: 'Credit card authorisation is complete (board-approved policy, signed cardholder agreements, IDs, spending limits, card issued).', category: 'Credit Cards', sortOrder: 40 },
+      { title: 'Payment platform access is set up (account + charity verification, bank linkage, 2FA, user roles, transaction limits and alerts).', category: 'Payment Platforms', sortOrder: 50 },
+      { title: 'Accounting software access is set up (subscription, chart of accounts, user roles/training, backups, encryption, access audits).', category: 'Accounting Software', sortOrder: 60 },
+      { title: 'Donor management platform access is set up (account/customisation, user roles/training, privacy policy, consent, data protection).', category: 'Donor Platform', sortOrder: 70 },
+      { title: 'Email/communication platform access is set up (account/domain, user roles/training, 2FA, access-log review, backups).', category: 'Email & Comms', sortOrder: 80 },
+      { title: 'Authorisation has been approved and signed, and is scheduled for annual review.', category: 'Approval', sortOrder: 90 }
+    ]
+  },
+  {
+    // Source: spreadsheet "Sheet81" — Succession Plan for Key Persons. Used for
+    // business-transfer / key-person continuity (#20).
+    v3Id: 'I54',
+    name: 'Succession Plan for Key Persons',
+    checklistType: 'item_wise',
+    category: 'BCP',
+    module: 'BCP',
+    submodule: 'Succession',
+    useCase: 'business_transfer',
+    description: 'Key-role identification, systems, permits, legal, emergency contacts, transition and review',
+    entityTargets: ['authority_transfer'],
+    items: [
+      { title: 'Key roles and individuals essential to the organisation have been identified.', category: 'General', sortOrder: 10 },
+      { title: 'A clear, documented succession plan has been developed and communicated, and is reviewed annually.', category: 'General', sortOrder: 20 },
+      { title: 'Key systems are documented and accessible; critical credentials are securely stored.', category: 'Systems', sortOrder: 30 },
+      { title: 'Key personnel are trained on essential systems with reference materials available.', category: 'Systems', sortOrder: 40 },
+      { title: 'A robust backup plan exists; backups are tested and stored securely (off-site where possible).', category: 'Systems', sortOrder: 50 },
+      { title: 'Permits and licenses are identified, with expiry/renewal dates and assigned responsibility (plus a backup).', category: 'Permits & Licenses', sortOrder: 60 },
+      { title: 'Critical legal documents are identified, current, and securely stored, with key legal contacts listed.', category: 'Legal', sortOrder: 70 },
+      { title: 'A comprehensive emergency contact list (with backups) has been distributed, and emergency procedures are documented and drilled.', category: 'Emergency', sortOrder: 80 },
+      { title: 'Interim leaders are identified and a detailed handover process is documented for departing key personnel.', category: 'Transition', sortOrder: 90 },
+      { title: 'The succession plan and checklist are reviewed and updated regularly.', category: 'Review', sortOrder: 100 }
+    ]
+  },
+  {
+    // Source: spreadsheet "Sheet91" — Disaster Recovery & Business Continuity
+    // Plan policy checklist (#21).
+    v3Id: 'I55',
+    name: 'Disaster Recovery & Business Continuity Plan',
+    checklistType: 'item_wise',
+    category: 'BCP',
+    module: 'BCP',
+    submodule: 'Business Continuity',
+    useCase: 'bcp_plan',
+    description: 'DRBCP documentation, responsibilities, risk, recovery, continuity, testing, reporting and review',
+    entityTargets: ['bcp_plan'],
+    items: [
+      { title: 'The policy is current (effective/review dates), approved by the designated authority, and distributed to stakeholders.', category: 'Policy Documentation', sortOrder: 10 },
+      { title: 'Responsibilities are assigned across Board, management, employees/volunteers and IT/operations.', category: 'Responsibilities', sortOrder: 20 },
+      { title: 'Risks are assessed regularly, mitigation measures are implemented, and critical operations are prioritised.', category: 'Risk Assessment', sortOrder: 30 },
+      { title: 'Data backup and IT system recovery procedures are in place, tested, and alternative work locations identified.', category: 'Disaster Recovery', sortOrder: 40 },
+      { title: 'A communication plan, essential-personnel plan and service-continuity procedures exist, coordinated with suppliers/partners.', category: 'Business Continuity', sortOrder: 50 },
+      { title: 'Regular drills and training are conducted, and the DRBCP is reviewed annually or on significant change.', category: 'Testing & Training', sortOrder: 60 },
+      { title: 'Incident reporting procedures exist; incidents are documented and post-incident reviews conducted.', category: 'Incident Reporting', sortOrder: 70 },
+      { title: 'The DRBCP aligns with related policies and complies with applicable Australian laws and standards.', category: 'Compliance', sortOrder: 80 }
+    ]
+  },
+  {
+    // #18 — External auditor onboarding (shown when inviting an auditor).
+    v3Id: 'I56',
+    name: 'External Auditor Onboarding',
+    checklistType: 'item_wise',
+    category: 'Audit',
+    module: 'Audit',
+    submodule: 'Auditors',
+    useCase: 'auditor_onboarding',
+    description: 'Identity, engagement scope, confidentiality, read-only access and evidence access',
+    entityTargets: ['auditor_invite'],
+    items: [
+      { title: "The auditor's identity and credentials have been verified.", sortOrder: 10 },
+      { title: 'The engagement scope and audit period have been agreed.', sortOrder: 20 },
+      { title: 'A confidentiality / non-disclosure agreement has been signed.', sortOrder: 30 },
+      { title: 'Read-only access has been granted and confirmed.', sortOrder: 40 },
+      { title: 'Required records and evidence have been made available to the auditor.', sortOrder: 50 }
+    ]
+  },
+  {
+    // #18 — External auditor offboarding (shown when revoking an auditor).
+    v3Id: 'I57',
+    name: 'External Auditor Offboarding',
+    checklistType: 'item_wise',
+    category: 'Audit',
+    module: 'Audit',
+    submodule: 'Auditors',
+    useCase: 'auditor_offboarding',
+    description: 'Final report, return of papers, access revocation and confidentiality',
+    entityTargets: ['auditor_offboarding'],
+    items: [
+      { title: 'The final audit report / findings have been received.', sortOrder: 10 },
+      { title: 'Working papers and evidence have been returned or retained per policy.', sortOrder: 20 },
+      { title: "The auditor's read-only access has been revoked.", sortOrder: 30 },
+      { title: 'Ongoing confidentiality obligations have been reaffirmed.', sortOrder: 40 }
+    ]
   }
 ];
 
 // ─── Combined + stats ────────────────────────────────────────────────────────
 
 export const CHECKLIST_LIBRARY_V3 = [...GLOBAL_CHECKLISTS, ...ITEM_WISE_CHECKLISTS];
+
+// Bump this whenever the library content changes. Tenants auto-re-bootstrap
+// (lazily, on first checklist request) when their stored version differs, so
+// "Load default checklists" never has to be clicked manually again.
+export const V3_LIBRARY_VERSION = '2026-06-17.5';
 
 export const V3_LIBRARY_STATS = {
   version: '3.1',

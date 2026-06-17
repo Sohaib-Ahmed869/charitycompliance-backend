@@ -4,6 +4,7 @@
  */
 
 import crypto from 'crypto';
+import mongoose from 'mongoose';
 import { getTenantConnection } from '../db/connectionManager.js';
 import { UserRepository } from '../repositories/userRepository.js';
 import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
@@ -206,4 +207,97 @@ export const inviteAuditor = asyncHandler(async (req, res) => {
       ? 'Auditor invitation sent.'
       : 'Auditor invite recorded but the email could not be sent. Resend from the auditor list.'
   });
+});
+
+/**
+ * List external auditors (invited + accepted), with live access status.
+ */
+export const listAuditors = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+  const invites = await tenantDb.collection('auditor_invites').find({}).sort({ invitedAt: -1 }).toArray();
+  const userRepo = new UserRepository(tenantDb);
+
+  const out = [];
+  for (const inv of invites) {
+    let userStatus = null;
+    const userId = inv.user_id || null;
+    if (userId) {
+      try { const u = await userRepo.findById(userId); userStatus = u?.status || null; } catch { /* ignore */ }
+    }
+    // Display status: an accepted auditor whose user account is no longer
+    // active has effectively been revoked.
+    let status = inv.invitation_status || inv.status || 'pending';
+    if (status === 'accepted' && userStatus && userStatus !== 'active') status = 'revoked';
+    out.push({
+      _id: inv._id,
+      email: inv.email,
+      firstName: inv.firstName || '',
+      lastName: inv.lastName || '',
+      status,
+      user_id: userId,
+      user_status: userStatus,
+      invitedAt: inv.invitedAt,
+      invitation_expires_at: inv.invitation_expires_at || null,
+      accepted_at: inv.invitation_accepted_at || null,
+      revoked_at: inv.revoked_at || null
+    });
+  }
+  res.json({ success: true, data: out });
+});
+
+/**
+ * Offboard / revoke an external auditor: deactivate their user account (if the
+ * invite was accepted) and mark the invite revoked. Logged to access_change_logs.
+ */
+export const revokeAuditor = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const actorId = req.user?.userId;
+  const { inviteId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+
+  let _id;
+  try { _id = new mongoose.Types.ObjectId(inviteId); } catch { throw new AppError('Invalid auditor id', 400, 'INVALID_ID'); }
+  const invite = await tenantDb.collection('auditor_invites').findOne({ _id });
+  if (!invite) throw new AppError('Auditor invite not found', 404, 'NOT_FOUND');
+
+  // Deactivate the auditor's user account if they accepted.
+  const userRepo = new UserRepository(tenantDb);
+  let user = null;
+  if (invite.user_id) {
+    try { user = await userRepo.findById(invite.user_id); } catch { /* ignore */ }
+  }
+  if (!user && invite.email) {
+    try { user = await userRepo.findByEmail(invite.email); } catch { /* ignore */ }
+  }
+  if (user && user.is_auditor) {
+    await userRepo.update(user._id, {
+      status: 'inactive', locked: true, locked_until: null, mfa_enabled: false, mfa_secret: null
+    });
+  }
+
+  await tenantDb.collection('auditor_invites').updateOne(
+    { _id },
+    { $set: { status: 'revoked', invitation_status: 'revoked', invitation_token: null, revoked_at: new Date(), revoked_by: actorId || null } }
+  );
+
+  // Access-change audit (same collection the audit trail reads).
+  try {
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    await tenantDb.collection('access_change_logs').insertOne({
+      org_id: org?._id || null,
+      user_id: user?._id || null,
+      changed_by: actorId || null,
+      action: 'auditor_offboarded',
+      module: 'offboarding',
+      details: { email: invite.email, access_revoked: !!user, reason: 'External auditor offboarded' },
+      created_at: new Date()
+    });
+  } catch (e) {
+    logError('Auditor revoke audit log failed', { orgId, error: e?.message });
+  }
+
+  logInfo('Auditor revoked', { orgId, inviteId, userDeactivated: !!(user && user.is_auditor) });
+  res.json({ success: true, message: 'Auditor access revoked.' });
 });

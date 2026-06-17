@@ -29,7 +29,19 @@ const NORMALIZED_SUITABILITY_TYPES = new Set([
   'bankruptcy_check',
   'disqualification_status',
   'conflict_of_interest',
-  'fit_and_proper_check'
+  'fit_and_proper_check',
+  // Added from spreadsheet "Sheet6" — Suitability of Responsible Persons (#6).
+  'age_eligibility',
+  'working_with_children_check',
+  'mission_values_understanding',
+  'ethical_conduct',
+  'best_interests_commitment',
+  'skills_experience',
+  'board_experience',
+  'time_commitment',
+  'meeting_attendance',
+  'good_reputation',
+  'disciplinary_legal_check'
 ]);
 
 const computeSuitabilityStatus = (suitability = {}) => {

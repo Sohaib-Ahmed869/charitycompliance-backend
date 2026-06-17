@@ -278,6 +278,7 @@ import adminMarketplacePoliciesRoutes from './routes/admin/marketplacePoliciesRo
 import adminPlanRequestRoutes from './routes/admin/planRequestRoutes.js';
 import { requireIpAllowlist } from './middleware/requireIpAllowlist.js';
 import billingRoutes from './routes/platform/billingRoutes.js';
+import weeklyReportRoutes from './routes/platform/weeklyReportRoutes.js';
 import { auditLogMutationMiddleware } from './middleware/auditLogger.js';
 
 // Audit logging — single choke point for the whole tenant API. Registers a
@@ -361,6 +362,7 @@ app.use('/api/v1/admin', adminApprovalsRoutes);
 app.use('/api/v1/admin', adminMarketplacePoliciesRoutes);
 app.use('/api/v1/admin/plan-requests', adminPlanRequestRoutes);
 app.use('/api/v1/platform/billing', billingRoutes);
+if (isModuleEnabled('weekly-reports')) app.use('/api/v1/platform/weekly-reports', weeklyReportRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

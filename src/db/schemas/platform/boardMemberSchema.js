@@ -209,7 +209,9 @@ const boardMemberSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'resigned', 'removed'],
+    // 'inactive' = volunteer offboarded/made inactive (kept on the register,
+    // not removed) — see the Volunteers page offboard action (#3).
+    enum: ['active', 'resigned', 'removed', 'inactive'],
     default: 'active'
   },
   offboarded_at: {

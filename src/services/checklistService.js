@@ -9,7 +9,12 @@ import { UserRepository } from '../repositories/userRepository.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
 import { COMPLIANCE_CHECKLIST_CATALOG } from '../config/complianceChecklistCatalog.js';
-import { CHECKLIST_LIBRARY_V3 } from '../config/checklistLibraryV3.js';
+import { CHECKLIST_LIBRARY_V3, V3_LIBRARY_VERSION } from '../config/checklistLibraryV3.js';
+
+// Per-tenant in-memory guards so the lazy auto-bootstrap runs at most once per
+// process per tenant, and never concurrently (which could create duplicates).
+const _bootstrappedVersionByOrg = new Map();
+const _inflightBootstrapByOrg = new Map();
 import { MONTHLY_COMPLIANCE_CATALOG } from '../config/monthlyComplianceCatalog.js';
 import { MONTHLY_COMPLIANCE_RULES, evaluateMonthlyRule, monthWindow } from './monthlyComplianceRules.js';
 import mongoose from 'mongoose';
@@ -279,7 +284,9 @@ const ENTITY_TEMPLATE_TARGETS = {
   policy: { module: 'Policies' },
   risk: { module: 'Risk', submodule: 'Risk Management' },
   donor: { module: 'Grants & Donors', submodule: 'Donor Register' },
-  project: { module: 'Grants & Donors', submodule: 'Programs' },
+  // Project delivery → I13 (Project Monitoring), not the Programs templates
+  // (I14/I35) which were tying and surfacing Community Sponsorship (#10).
+  project: { module: 'Grants & Donors', submodule: 'Project Monitoring' },
   project_register: { module: 'Grants & Donors', submodule: 'Project Register' },
   project_monitoring: { module: 'Grants & Donors', submodule: 'Project Monitoring' },
   partner_vetting: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
@@ -287,17 +294,35 @@ const ENTITY_TEMPLATE_TARGETS = {
   funding_partner: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
   supplier: { module: 'Operations', submodule: 'Suppliers' },
   funding_agreement: { module: 'Grants & Donors', submodule: 'Funding Agreements' },
-  refund: { module: 'Grants & Donors', submodule: 'Refunds' },
-  donor_refund: { module: 'Grants & Donors', submodule: 'Refunds' },
+  // Refunds use the Finance/Refunds checklist (I05). Previously targeted
+  // Grants & Donors/Refunds, which no template matches, so refunds showed no
+  // (or the wrong) checklist.
+  refund: { module: 'Finance', submodule: 'Refunds' },
+  donor_refund: { module: 'Finance', submodule: 'Refunds' },
+  project_refund: { module: 'Finance', submodule: 'Refunds' },
   registration_license: { module: 'Charity Administration', submodule: 'Registrations & Licenses' },
   governing_document: { module: 'Charity Administration', submodule: 'Governing Doc' },
   licence_document: { module: 'Charity Administration', submodule: 'Registrations & Licenses' },
   permit_document: { module: 'Charity Administration', submodule: 'Registrations & Licenses' },
   approval_thresholds: { module: 'Charity Administration', submodule: 'Approval Thresholds' },
   yearly_statements: { module: 'Charity Administration', submodule: 'Yearly Statements' },
-  financial_controls: { module: 'Finances', submodule: 'Financial Controls' },
+  // #12 — Financial Controls is the Expenses area in this app; repoint it to
+  // the Expenses checklist (I01) so the expense register drives it.
+  financial_controls: { module: 'Finances', submodule: 'Expenses' },
+  // Expense register-level Financial Record-Keeping checklist (I09, Sheet29) —
+  // opened from a button on the Expenses register (#12).
+  expense_register: { module: 'Finance', submodule: 'Records', useCase: 'expense_register' },
+  // Bank/expense cards → I04; bank & platform access authorisations → I53 (#14).
+  bank_card: { module: 'Finance', submodule: 'Financial Controls', useCase: 'bank_card' },
+  bank_platform_access: { module: 'Finance', submodule: 'Financial Controls', useCase: 'bank_platform_access' },
   responsible_person: { module: 'Charity Administration', submodule: 'Responsible People' },
-  volunteer_person: { module: 'Volunteers', submodule: 'Volunteer Register' },
+  // Volunteers carry three lifecycle checklists that share the same
+  // module/submodule, disambiguated by useCase: onboarding (add) → I19,
+  // register (ongoing) → I21, offboarding (inactivate) → I50.
+  volunteer_person: { module: 'Volunteers', submodule: 'Volunteer Register', useCase: 'volunteer_register' },
+  volunteer_register: { module: 'Volunteers', submodule: 'Volunteer Register', useCase: 'volunteer_register' },
+  volunteer_onboarding: { module: 'Volunteers', submodule: 'Volunteer Register', useCase: 'volunteer_onboarding' },
+  volunteer_offboarding: { module: 'Volunteers', submodule: 'Volunteer Register', useCase: 'volunteer_offboarding' },
   hr_employee: { module: 'People & HR', submodule: 'Employees' },
   hr_training: { module: 'People & HR', submodule: 'Trainings' },
   disciplinary_record: { module: 'People & HR', submodule: 'Disciplinary Records' },
@@ -313,10 +338,23 @@ const ENTITY_TEMPLATE_TARGETS = {
   donation: { module: 'Grants & Donors', submodule: 'Donor Register' },
   donation_milestone: { module: 'Grants & Donors', submodule: 'Project Monitoring' },
   grant: { module: 'Grants & Donors', submodule: 'Funding Agreements' },
-  authority_transfer: { module: 'BCP' },
+  // Business transfer / key-person continuity → Succession Plan (I54, Sheet81).
+  authority_transfer: { module: 'BCP', submodule: 'Succession', useCase: 'business_transfer' },
+  // Disaster Recovery & BCP plan → I55 (Sheet91).
+  bcp_plan: { module: 'BCP', submodule: 'Business Continuity', useCase: 'bcp_plan' },
   emergency: { module: 'Finance', submodule: 'Emergency' },
   social_media_campaign: { module: 'Marketing', submodule: 'Campaigns' },
   social_media_campaigns: { module: 'Marketing', submodule: 'Campaigns' },
+  // Marketing overall register checklist (I52, from Sheet43). Per-campaign
+  // creation uses I27 (Marketing/Campaigns) instead.
+  marketing_register: { module: 'Marketing', submodule: 'Register', useCase: 'marketing_register' },
+  // Social media account access/credentials → I28 (Marketing/Social Media).
+  social_media_account: { module: 'Marketing', submodule: 'Social Media', useCase: 'social_media_access' },
+  // COI declarations → I25 (People & HR/Employees, useCase 'coi').
+  coi: { module: 'People & HR', submodule: 'Employees', useCase: 'coi' },
+  // External auditor onboarding/offboarding (#18) → I56 / I57.
+  auditor_invite: { module: 'Audit', submodule: 'Auditors', useCase: 'auditor_onboarding' },
+  auditor_offboarding: { module: 'Audit', submodule: 'Auditors', useCase: 'auditor_offboarding' },
   // Inquiry register records → dedicated Governance / Inquiries checklist
   // (I48 in checklistLibraryV3.js). Bootstrap the v3 library so it exists.
   inquiry_record: { module: 'Governance', submodule: 'Inquiries' }
@@ -888,6 +926,47 @@ export class ChecklistService {
   }
 
   /**
+   * Lazily auto-bootstrap the V3 library for this tenant when the stored
+   * version differs from the current code version. Runs at most once per
+   * process per tenant, never concurrently. Best-effort — never throws into
+   * the caller (a bootstrap failure must not break a checklist request).
+   *
+   * This removes the need to ever click "Load default checklists" manually:
+   * a backend restart + the next checklist request applies all library edits.
+   */
+  async ensureV3Bootstrapped() {
+    const orgId = this.orgId;
+    if (_bootstrappedVersionByOrg.get(orgId) === V3_LIBRARY_VERSION) return;
+    if (_inflightBootstrapByOrg.has(orgId)) return _inflightBootstrapByOrg.get(orgId);
+
+    const run = (async () => {
+      try {
+        const tenantDb = await this.getTenantDb();
+        const metaCol = tenantDb.collection('checklist_meta');
+        const meta = await metaCol.findOne({ key: 'v3_library_version' });
+        if (meta?.value === V3_LIBRARY_VERSION) {
+          _bootstrappedVersionByOrg.set(orgId, V3_LIBRARY_VERSION);
+          return;
+        }
+        await this.bootstrapV3Library();
+        await metaCol.updateOne(
+          { key: 'v3_library_version' },
+          { $set: { key: 'v3_library_version', value: V3_LIBRARY_VERSION, updated_at: new Date() } },
+          { upsert: true }
+        );
+        _bootstrappedVersionByOrg.set(orgId, V3_LIBRARY_VERSION);
+        logInfo('Auto-bootstrapped v3 checklist library', { orgId, version: V3_LIBRARY_VERSION });
+      } catch (err) {
+        logError('Auto-bootstrap of v3 library failed', { orgId, error: err?.message });
+      } finally {
+        _inflightBootstrapByOrg.delete(orgId);
+      }
+    })();
+    _inflightBootstrapByOrg.set(orgId, run);
+    return run;
+  }
+
+  /**
    * Bootstrap v3 Optimised Checklist Library (50 checklists from xlsx).
    *
    * Idempotent: uses metadata.v3_checklist_id (G01–G10, I01–I40) as the
@@ -920,7 +999,7 @@ export class ChecklistService {
       const templateItems = (cl.items || []).map((it) => ({
         title: it.title,
         description: `${cl.category} compliance check — ${cl.name}.`,
-        category: cl.category,
+        category: it.category || cl.category,
         type: 'manual',
         requiredEvidence: 'optional',
         assigneeRole: 'Compliance Officer',
@@ -933,6 +1012,7 @@ export class ChecklistService {
       const metadata = {
         module: cl.module,
         ...(cl.submodule ? { submodule: cl.submodule } : {}),
+        ...(cl.useCase ? { useCase: cl.useCase } : {}),
         v3_checklist_id: v3Id,
         v3Type: cl.checklistType,
         v3Category: cl.category,
@@ -992,6 +1072,7 @@ export class ChecklistService {
   }
 
   async ensureWorkflowChecklistForApproval({ entityType, entityId, approvalRequestId, createdBy }) {
+    await this.ensureV3Bootstrapped();
     const rawEntityType = String(entityType || '').trim().toLowerCase();
     let normalizedEntityType = canonicalizeEntityType(rawEntityType);
     let normalizedEntityId = String(entityId || '').trim();
@@ -1258,6 +1339,7 @@ export class ChecklistService {
   }
 
   async listTemplates({ type, module } = {}) {
+    await this.ensureV3Bootstrapped();
     const tenantDb = await this.getTenantDb();
     const repo = new ChecklistTemplateRepository(tenantDb);
     if (!module) return await repo.list(this.orgId, { type });
