@@ -363,6 +363,30 @@ export const updateDocument = asyncHandler(async (req, res) => {
     }
   }
 
+  // Preserve a superseded expiry date. When the expiry actually changes
+  // and the document already had one, push the previous value onto
+  // `expiry_history` so the calendar can keep showing it struck-off
+  // instead of dropping the old expiry event entirely.
+  if (
+    Object.prototype.hasOwnProperty.call(update, 'expiry_date') &&
+    existing.expiry_date &&
+    new Date(update.expiry_date).getTime() !== new Date(existing.expiry_date).getTime()
+  ) {
+    const history = Array.isArray(existing.expiry_history)
+      ? existing.expiry_history.map((h) => ({
+          expiry_date: h.expiry_date,
+          superseded_at: h.superseded_at,
+          superseded_by: h.superseded_by
+        }))
+      : [];
+    history.push({
+      expiry_date: existing.expiry_date,
+      superseded_at: new Date(),
+      superseded_by: req.user?.userId || null
+    });
+    update.expiry_history = history;
+  }
+
   // Optional file replacement. When the caller posted multipart/form-data
   // with a new `file`, swap it on S3 + update the snapshot fields.
   // The old S3 object is left in place if the new upload succeeds AND

@@ -239,6 +239,7 @@ const ENTITY_MODULE_MAP = {
   partner: 'Grants & Donors',
   funding_partner: 'Grants & Donors',
   partner_vetting: 'Grants & Donors',
+  supplier: 'Operations',
   project_register: 'Grants & Donors',
   project_monitoring: 'Grants & Donors',
   refund: 'Grants & Donors',
@@ -284,6 +285,7 @@ const ENTITY_TEMPLATE_TARGETS = {
   partner_vetting: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
   partner: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
   funding_partner: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
+  supplier: { module: 'Operations', submodule: 'Suppliers' },
   funding_agreement: { module: 'Grants & Donors', submodule: 'Funding Agreements' },
   refund: { module: 'Grants & Donors', submodule: 'Refunds' },
   donor_refund: { module: 'Grants & Donors', submodule: 'Refunds' },
@@ -548,6 +550,53 @@ export class ChecklistService {
       }))
     });
     logInfo('Created default inquiry workflow checklist template', { orgId: this.orgId, templateId: created._id });
+    return created;
+  }
+
+  /**
+   * Lazily ensure the dedicated supplier-vetting checklist template (V3 I49)
+   * exists for this tenant. Mirrors the inquiry case: supplier vetting workflows
+   * resolve a checklist on every approval view, but the v3 library is only
+   * bootstrapped on demand — so a tenant provisioned before I49 shipped would
+   * otherwise have no supplier template and fall back to an unrelated checklist
+   * (e.g. the inquiry-register checklist). Sourced from the V3 definition so item
+   * text has a single source of truth.
+   */
+  async ensureDefaultSupplierWorkflowTemplate() {
+    const def = CHECKLIST_LIBRARY_V3.find((c) => c.v3Id === 'I49');
+    if (!def) return null;
+    const tenantDb = await this.getTenantDb();
+    const templateRepo = new ChecklistTemplateRepository(tenantDb);
+    const existing = (await templateRepo.list(this.orgId, {}))
+      .find((t) => t?.metadata?.v3_checklist_id === 'I49');
+    if (existing) return existing;
+
+    const created = await templateRepo.create({
+      org_id: this.orgId,
+      name: `[${def.v3Id}] ${def.name}`,
+      type: 'module',
+      description: def.description,
+      metadata: {
+        module: def.module,
+        submodule: def.submodule,
+        v3_checklist_id: def.v3Id,
+        v3Type: def.checklistType,
+        v3Category: def.category,
+        v3Version: '3.0',
+        entityTargets: def.entityTargets || [],
+        source: 'checklist_library_v3'
+      },
+      items: (def.items || []).map((it) => ({
+        title: it.title,
+        description: `${def.category} compliance check — ${def.name}.`,
+        category: def.category,
+        type: 'manual',
+        requiredEvidence: 'optional',
+        assigneeRole: 'Compliance Officer',
+        sortOrder: it.sortOrder
+      }))
+    });
+    logInfo('Created default supplier workflow checklist template', { orgId: this.orgId, templateId: created._id });
     return created;
   }
 
@@ -1005,12 +1054,31 @@ export class ChecklistService {
     if (normalizedEntityType === 'inquiry_record') {
       await this.ensureDefaultInquiryWorkflowTemplate();
     }
+    // Supplier vetting uses a dedicated checklist (V3 I49). Ensure it exists so
+    // supplier records get their own checklist; any stale instance that was
+    // previously bound to an unrelated template (e.g. the inquiry-register
+    // checklist) self-heals via the existing-instance branch once this resolves.
+    if (normalizedEntityType === 'supplier') {
+      await this.ensureDefaultSupplierWorkflowTemplate();
+    }
 
     const allModuleTemplates = await templateRepo.list(this.orgId, { type: 'module' });
     const target = ENTITY_TEMPLATE_TARGETS[normalizedEntityType] || {
       module: ENTITY_MODULE_MAP[normalizedEntityType]
     };
-    const selectedTemplate = findBestTemplateForTarget(allModuleTemplates, target);
+    let selectedTemplate = findBestTemplateForTarget(allModuleTemplates, target);
+
+    // Module-only fallback for expense/purchase. If the tenant's finance checklist
+    // exists but lacks the exact 'Expenses' submodule (e.g. it was seeded via the
+    // module-catalog bootstrap, which sets no submodule, or was renamed), the
+    // strict submodule filter above returns null and the detail page shows "No
+    // compliance checklist found" even though the checklist is visible in the
+    // catalog. The submit path (ensureExpenseWorkflowChecklist) already applies
+    // this fallback; mirror it here so both paths resolve to the same instance.
+    if (!selectedTemplate && (normalizedEntityType === 'expense' || normalizedEntityType === 'purchase')) {
+      selectedTemplate = findBestTemplateForTarget(allModuleTemplates, { module: 'Finances' })
+        || findBestTemplateForTarget(allModuleTemplates, { module: 'Finance' });
+    }
 
     let existing = await instanceRepo.findByContext(this.orgId, {
       type: 'module',
@@ -1192,10 +1260,16 @@ export class ChecklistService {
   async listTemplates({ type, module } = {}) {
     const tenantDb = await this.getTenantDb();
     const repo = new ChecklistTemplateRepository(tenantDb);
-    const primary = await repo.list(this.orgId, { type, module });
-    if (!module || primary.length > 0) return primary;
+    if (!module) return await repo.list(this.orgId, { type });
 
-    // Fallback for minor module-name variants, e.g. "Policies & Procedure" vs "Policies & Procedures".
+    // Always match on the NORMALIZED module name so singular/plural and
+    // punctuation variants ('Finance' vs 'Finances', 'Complaint' vs
+    // 'Complaints', 'Policies & Procedure' vs 'Policies & Procedures') all
+    // resolve to the same module. The previous exact-match-first short-circuit
+    // returned ONLY the exact variant when it matched anything: a 'Finances'
+    // query that hit the lone plural-labelled donation-box template would never
+    // surface the singular 'Finance' expense templates, so the expense page
+    // showed a cash/donation-box checklist instead of the invoice one.
     const normalizedRequested = normalizeModuleName(module);
     const allForType = await repo.list(this.orgId, { type });
     return allForType.filter((t) => normalizeModuleName(t?.metadata?.module) === normalizedRequested);

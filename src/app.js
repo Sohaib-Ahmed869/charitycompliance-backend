@@ -278,6 +278,16 @@ import adminMarketplacePoliciesRoutes from './routes/admin/marketplacePoliciesRo
 import adminPlanRequestRoutes from './routes/admin/planRequestRoutes.js';
 import { requireIpAllowlist } from './middleware/requireIpAllowlist.js';
 import billingRoutes from './routes/platform/billingRoutes.js';
+import { auditLogMutationMiddleware } from './middleware/auditLogger.js';
+
+// Audit logging — single choke point for the whole tenant API. Registers a
+// response-finish hook on every /platform request and writes an append-only
+// audit_logs row for successful POST/PUT/PATCH/DELETE actions across every
+// module. Must be mounted BEFORE the platform routes so the hook is attached
+// before the handler runs (req.user/req.tenantDb are populated by the
+// per-route auth+tenant middleware and read inside the hook after finish).
+app.use('/api/v1/platform', auditLogMutationMiddleware);
+
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);

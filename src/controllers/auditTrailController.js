@@ -1374,6 +1374,45 @@ export async function buildAuditTrailEventsArray(tenantDb, org, tenantOrgKey = n
   } catch (_) {
     // Ignore audit enrichment failures
   }
+
+  // ── Real append-only audit log ────────────────────────────────────────────
+  // Logins/logouts (incl. failed attempts) + every create/update/delete across
+  // all modules, written by the global audit middleware + auth service. Merged
+  // here so they appear alongside the derived events.
+  try {
+    const auditLogSchema = (await import('../db/schemas/platform/auditLogSchema.js')).default;
+    const AuditLog = tenantDb.models.AuditLog || tenantDb.model('AuditLog', auditLogSchema);
+    const userById = new Map((users || []).map((u) => [u._id?.toString(), u]));
+    const logs = await AuditLog.find({}).sort({ created_at: -1 }).limit(10000).lean();
+    logs.forEach((log) => {
+      const actorUser = log.actor_user_id ? userById.get(log.actor_user_id.toString()) : null;
+      const actorName = log.actor_name || (actorUser ? toName(actorUser) : null) || log.actor_email || 'System';
+      events.push(normalizeEvent({
+        id: `audit-${log._id}`,
+        timestamp: log.created_at,
+        actor: {
+          id: log.actor_user_id?.toString() || null,
+          name: actorName,
+          role: log.actor_role || (actorUser ? toRole(actorUser) : null)
+        },
+        action: log.action,
+        module: log.module || 'general',
+        request_type: log.entity_type || log.module || 'audit',
+        request_id: log.entity_id || log._id?.toString(),
+        details: {
+          ...(log.details || {}),
+          method: log.method || null,
+          path: log.path || null,
+          outcome: log.outcome || 'success',
+          status_code: log.status_code ?? null
+        },
+        source: 'audit_log'
+      }));
+    });
+  } catch (_) {
+    // Ignore audit-log merge failures
+  }
+
   return events;
 }
 

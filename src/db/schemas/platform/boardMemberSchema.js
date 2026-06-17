@@ -148,7 +148,14 @@ const boardMemberSchema = new mongoose.Schema({
       issuing_authority: { type: String, trim: true },
       country:      { type: String, trim: true, default: 'Australia' },
       document_id:  { type: mongoose.Schema.Types.ObjectId, ref: 'Document' },
-      uploaded_at:  { type: Date }
+      uploaded_at:  { type: Date },
+      // Prior expiry dates, kept so the calendar shows the old date
+      // struck-off (superseded) rather than dropping it when the licence
+      // is renewed to a later date.
+      expiry_history: [{
+        expiry_date:   { type: Date },
+        superseded_at: { type: Date, default: Date.now }
+      }]
     },
     passport: {
       number:       { type: String, trim: true, encrypted: true, searchable: true },
@@ -156,7 +163,12 @@ const boardMemberSchema = new mongoose.Schema({
       expiry_date:  { type: Date, index: true },
       country_of_issue: { type: String, trim: true },
       document_id:  { type: mongoose.Schema.Types.ObjectId, ref: 'Document' },
-      uploaded_at:  { type: Date }
+      uploaded_at:  { type: Date },
+      // See licence.expiry_history above — same purpose for passports.
+      expiry_history: [{
+        expiry_date:   { type: Date },
+        superseded_at: { type: Date, default: Date.now }
+      }]
     }
   },
   // System user account link (if they have platform access)

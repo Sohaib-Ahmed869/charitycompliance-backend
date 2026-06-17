@@ -17,6 +17,26 @@ import { logError, logInfo, logWarn } from '../utils/logger.js';
 import { decrypt, isEncrypted } from '../utils/encryption.js';
 import emailService from './emailService.js';
 import { buildAuditorPermissions } from '../utils/auditorAccess.js';
+import { recordAuditLog } from './auditLogService.js';
+
+/** Best-effort login/logout audit entry. Never throws. */
+async function recordAuthEvent(tenantDb, { orgId, userId, email, action, outcome, reason }) {
+  if (!tenantDb) return;
+  await recordAuditLog(tenantDb, {
+    org_id: orgId || null,
+    actor_user_id: userId || null,
+    actor_email: email || null,
+    actor_role: null,
+    action,
+    module: 'auth',
+    method: 'POST',
+    path: 'auth',
+    entity_type: 'session',
+    entity_id: userId ? String(userId) : null,
+    outcome: outcome || 'success',
+    details: reason ? { reason } : {}
+  });
+}
 
 const SALT_ROUNDS = 12;
 const MAX_FAILED_ATTEMPTS = 5;
@@ -424,16 +444,19 @@ export class AuthService {
           const lockUntil = new Date(Date.now() + LOCK_DURATION_MS);
           await userRepo.lockUser(user._id, lockUntil);
           logWarn('Account locked due to failed attempts', { userId: user._id, orgId });
+          await recordAuthEvent(tenantDb, { orgId, userId: user._id, email, action: 'Login failed (account locked)', outcome: 'failure', reason: 'Too many failed attempts' });
           throw new AppError('Account locked due to too many failed attempts', 423, 'ACCOUNT_LOCKED');
         }
 
         logWarn('Login failed - invalid password', { userId: user._id, orgId });
+        await recordAuthEvent(tenantDb, { orgId, userId: user._id, email, action: 'Login failed', outcome: 'failure', reason: 'Invalid password' });
         throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
       }
 
       // Block login for any non-active account state.
       if (user.status && user.status !== 'active') {
         logWarn('Login blocked - user account not active', { userId: user._id, orgId, status: user.status });
+        await recordAuthEvent(tenantDb, { orgId, userId: user._id, email, action: 'Login blocked (inactive account)', outcome: 'failure', reason: `Status: ${user.status}` });
         throw new AppError(
           'Your account is inactive. Please contact your administrator.',
           403,
@@ -475,6 +498,10 @@ export class AuthService {
       // Update last login
       const userRepo = new UserRepository(tenantDb);
       await userRepo.updateLastLogin(user._id);
+
+      // Audit: successful credential authentication (logged once per sign-in;
+      // for MFA users this marks credential acceptance ahead of the OTP step).
+      await recordAuthEvent(tenantDb, { orgId, userId: user._id, email, action: 'User logged in', outcome: 'success' });
 
       // Normalize orgId to lowercase for consistency (needed for both MFA and non-MFA paths)
       const normalizedOrgId = orgId.toLowerCase().trim();

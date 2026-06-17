@@ -97,6 +97,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
   let boardMemberEvents = [];
   let fundingEvents = [];
   let documentEvents = [];
+  let supersededDocumentEvents = [];
   let governingReviewEvents = [];
   let legalReviewEvents = [];
   let meetingEvents = [];
@@ -204,6 +205,32 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
     }
 
     try {
+      // Superseded expiry dates — when a licence/registration expiry was
+      // changed, the previous date stays on the calendar struck-off
+      // (superseded: true) rather than disappearing.
+      const supersededExpiries = await calendarRepo.findSupersededDocumentExpiries(orgObjectId, dateOptions);
+      supersededDocumentEvents = supersededExpiries.map((d) => ({
+        ...formatCalendarEvent(
+          {
+            _id: d._id,
+            title: `${d.title || d.document_type} - Expires (superseded)`,
+            date: d.expiry_date,
+            description: d.current_expiry
+              ? `Previous expiry — replaced by ${new Date(d.current_expiry).toLocaleDateString('en-AU')}`
+              : 'Previous expiry date — superseded'
+          },
+          'governance_structure',
+          String(d._id)
+        ),
+        superseded: true,
+        source_id: d.source_doc_id
+      }));
+      logInfo('Superseded document expiry events retrieved', { orgId, count: supersededDocumentEvents.length });
+    } catch (error) {
+      logError('Error retrieving superseded document expiry events', { orgId, error: error.message, stack: error.stack });
+    }
+
+    try {
       // Governing document review events
       const governingReviews = await calendarRepo.findUpcomingGoverningDocumentReviews(orgObjectId, dateOptions);
       governingReviewEvents = governingReviews.map((d) => formatCalendarEvent(
@@ -305,12 +332,18 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
       is_active: true,
       $or: [
         { 'identification.licence.expiry_date': { $exists: true, $ne: null, $lte: horizon } },
-        { 'identification.passport.expiry_date': { $exists: true, $ne: null, $lte: horizon } }
+        { 'identification.passport.expiry_date': { $exists: true, $ne: null, $lte: horizon } },
+        // Also include people who have superseded (historical) expiry dates,
+        // even if their current expiry is beyond the horizon, so the old
+        // struck-off entries still surface.
+        { 'identification.licence.expiry_history.0': { $exists: true } },
+        { 'identification.passport.expiry_history.0': { $exists: true } }
       ]
     })
       .select(
         'given_names family_name position ' +
-        'identification.licence.expiry_date identification.passport.expiry_date'
+        'identification.licence.expiry_date identification.licence.expiry_history ' +
+        'identification.passport.expiry_date identification.passport.expiry_history'
       )
       .lean();
 
@@ -355,6 +388,31 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
           route: personRoute
         });
       }
+
+      // Superseded ID-document expiry dates — keep the old date on the
+      // calendar struck-off (superseded: true) rather than dropping it
+      // when the licence/passport is renewed to a new date.
+      const pushHistory = (history, label, key) => {
+        (history || []).forEach((h, idx) => {
+          if (!h?.expiry_date) return;
+          idEvents.push({
+            ...formatCalendarEvent(
+              {
+                _id: `${p._id}-${key}-hist-${idx}`,
+                title: `${name} — ${label} expires (superseded)`,
+                date: h.expiry_date,
+                description: 'Previous ID expiry — superseded by a new date'
+              },
+              'compliance',
+              `${p._id}-${key}-hist-${idx}`
+            ),
+            route: personRoute,
+            superseded: true
+          });
+        });
+      };
+      pushHistory(p?.identification?.licence?.expiry_history, "Driver's licence", 'licence');
+      pushHistory(p?.identification?.passport?.expiry_history, 'Passport', 'passport');
     }
     logInfo('ID expiry events retrieved', { orgId, count: idEvents.length });
     physicalRecordEvents = physicalRecordEvents.concat(idEvents);
@@ -452,6 +510,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
     ...boardMemberEvents,
     ...fundingEvents,
     ...documentEvents,
+    ...supersededDocumentEvents,
     ...governingReviewEvents,
     ...legalReviewEvents,
     ...physicalRecordEvents,

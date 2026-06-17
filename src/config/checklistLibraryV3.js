@@ -142,7 +142,7 @@ export const GLOBAL_CHECKLISTS = [
     name: 'Complaints, Whistleblowing & Non-Conformance',
     checklistType: 'global',
     category: 'Complaints',
-    module: 'Complaints',
+    module: 'Complaint',
     description: 'Register, severity, investigation, lessons learned',
     entityTargets: [],
     items: [
@@ -159,7 +159,7 @@ export const GLOBAL_CHECKLISTS = [
     name: 'Training & Competency Governance',
     checklistType: 'global',
     category: 'HR',
-    module: 'HR',
+    module: 'People & HR',
     description: 'Training matrix, completion tracking, overdue escalation',
     entityTargets: [],
     items: [
@@ -781,7 +781,7 @@ export const ITEM_WISE_CHECKLISTS = [
     name: 'Donation Box Operations & Reporting',
     checklistType: 'item_wise',
     category: 'Donors',
-    module: 'Finances',
+    module: 'Finance',
     submodule: 'Donation Boxes',
     description: 'Register, collection controls, variances, weekly stats',
     entityTargets: ['donation_box'],
@@ -1001,6 +1001,25 @@ export const ITEM_WISE_CHECKLISTS = [
       { title: 'Each required approver has recorded their decision.', sortOrder: 50 },
       { title: 'The outcome, status, and audit trail have been captured.', sortOrder: 60 }
     ]
+  },
+  {
+    v3Id: 'I49',
+    name: 'Supplier Vetting & Due Diligence',
+    checklistType: 'item_wise',
+    category: 'Operations',
+    module: 'Operations',
+    submodule: 'Suppliers',
+    description: 'Supplier onboarding vetting — identity, screening, compliance, contract terms and approval',
+    entityTargets: ['supplier'],
+    items: [
+      { title: 'Supplier details and contact information are complete and verified.', sortOrder: 10 },
+      { title: 'The supplier’s legal registration / ABN has been validated.', sortOrder: 20 },
+      { title: 'Conflict of interest and related-party checks have been completed.', sortOrder: 30 },
+      { title: 'Sanctions and compliance screening have been completed.', sortOrder: 40 },
+      { title: 'Required certifications, insurances and licenses have been verified.', sortOrder: 50 },
+      { title: 'Pricing, contract terms and approval thresholds have been reviewed.', sortOrder: 60 },
+      { title: 'The vetting decision and supporting evidence have been recorded.', sortOrder: 70 }
+    ]
   }
 ];
 
@@ -1011,9 +1030,9 @@ export const CHECKLIST_LIBRARY_V3 = [...GLOBAL_CHECKLISTS, ...ITEM_WISE_CHECKLIS
 export const V3_LIBRARY_STATS = {
   version: '3.1',
   sourceFile: 'checklists_v3_clean.xlsx + checklists_v2.xlsx enrichment',
-  total: 58,
+  total: 59,
   global: 10,
-  itemWise: 48,
+  itemWise: 49,
   categories: {
     Governance: 3,
     Compliance: 1,
@@ -1024,7 +1043,7 @@ export const V3_LIBRARY_STATS = {
     Complaints: 1,
     HR: 1,
     BCP: 1,
-    Operations: 8,
+    Operations: 9,
     'HR & Volunteers': 8,
     Marketing: 6,
     Donors: 4,

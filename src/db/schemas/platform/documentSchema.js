@@ -129,6 +129,15 @@ const documentSchema = new mongoose.Schema({
   expiry_date: {
     type: Date
   },
+  // History of superseded expiry dates. When `expiry_date` is changed
+  // (e.g. a licence/registration is renewed to a later date), the prior
+  // value is appended here instead of being lost. The calendar reads this
+  // to keep the old expiry visible but struck-off, rather than removing it.
+  expiry_history: [{
+    expiry_date: { type: Date },
+    superseded_at: { type: Date, default: Date.now },
+    superseded_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  }],
   // Related entities
   related_board_member_id: {
     type: mongoose.Schema.Types.ObjectId,

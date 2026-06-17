@@ -30,6 +30,13 @@ router.patch(
 );
 router.post('/profile/picture', uploadSingle, handleUploadError, profileController.uploadProfilePicture);
 
+// Logout — JWT is stateless so there is nothing to invalidate server-side;
+// this endpoint exists so the client can signal an explicit sign-out, which
+// the global audit middleware records as a "User logged out" event.
+router.post('/logout', (req, res) => {
+  res.json({ success: true, message: 'Logged out' });
+});
+
 router.post('/mfa/totp/setup', totpController.setupTotp);
 router.post('/mfa/totp/enable', totpController.enableTotp);
 router.post('/mfa/totp/verify', totpController.verifyTotpForScope);

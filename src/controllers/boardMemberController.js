@@ -524,6 +524,38 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
+  // Preserve a superseded ID-document expiry. When a licence/passport
+  // expiry date is changed (e.g. renewed to a later date), retain the
+  // prior value in `identification.<doc>.expiry_history` so the calendar
+  // can keep showing the old expiry struck-off instead of dropping it.
+  // Only runs when the caller sends an `identification` object — and
+  // because the repo `$set`s `identification` wholesale, we also carry
+  // forward any existing history so it isn't wiped on unrelated edits.
+  if (req.body && req.body.identification && typeof req.body.identification === 'object') {
+    const existingBm = await boardMemberRepo.findById(boardMemberId);
+    if (existingBm) {
+      for (const docType of ['licence', 'passport']) {
+        const incoming = req.body.identification[docType];
+        if (!incoming || typeof incoming !== 'object') continue;
+        const prevHistory = Array.isArray(existingBm?.identification?.[docType]?.expiry_history)
+          ? existingBm.identification[docType].expiry_history.map((h) => ({
+              expiry_date: h.expiry_date,
+              superseded_at: h.superseded_at
+            }))
+          : [];
+        if (Object.prototype.hasOwnProperty.call(incoming, 'expiry_date')) {
+          const oldDate = existingBm?.identification?.[docType]?.expiry_date;
+          const newDate = incoming.expiry_date ? new Date(incoming.expiry_date) : null;
+          const changed = oldDate && (!newDate || new Date(oldDate).getTime() !== newDate.getTime());
+          if (changed) {
+            prevHistory.push({ expiry_date: oldDate, superseded_at: new Date() });
+          }
+        }
+        incoming.expiry_history = prevHistory;
+      }
+    }
+  }
+
   const boardMember = await boardMemberRepo.update(boardMemberId, req.body);
   if (!boardMember) {
     throw new AppError('Board member not found', 404, 'NOT_FOUND');
