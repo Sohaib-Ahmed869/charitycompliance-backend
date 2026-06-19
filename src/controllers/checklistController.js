@@ -252,3 +252,10 @@ export const listMonthlyComplianceCriteria = asyncHandler(async (req, res) => {
   res.json({ success: true, data: listMonthlyCriteriaOptions() });
 });
 
+export const closeMonthlyComplianceInstance = asyncHandler(async (req, res) => {
+  const service = new ChecklistService(req.orgId);
+  const { instanceId } = req.params;
+  const closed = await service.closeMonthlyComplianceInstance(instanceId, req.user.userId);
+  res.json({ success: true, data: closed });
+});
+

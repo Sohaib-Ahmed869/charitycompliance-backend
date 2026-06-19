@@ -18,6 +18,20 @@ const evidenceSchema = new mongoose.Schema(
   { _id: true }
 );
 
+// A single timestamped note authored by a user. Multiple notes are kept so a
+// second (or third) person can add their own note to the same checklist item
+// without overwriting earlier ones — an append-only thread. `author_name` is a
+// denormalized fallback for display if the User ref can't be populated later.
+const noteEntrySchema = new mongoose.Schema(
+  {
+    text: { type: String, trim: true, required: true },
+    author: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    author_name: { type: String, trim: true },
+    created_at: { type: Date, default: Date.now }
+  },
+  { _id: true }
+);
+
 const instanceItemSchema = new mongoose.Schema(
   {
     template_item_id: { type: mongoose.Schema.Types.ObjectId, required: true },
@@ -33,7 +47,10 @@ const instanceItemSchema = new mongoose.Schema(
     checked: { type: Boolean, default: false },
     checked_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     checked_at: { type: Date },
+    // Legacy single-note field, kept for backward compatibility and the CSV
+    // export. New notes are appended to `note_entries` (multi-note tracking).
     notes: { type: String, trim: true },
+    note_entries: { type: [noteEntrySchema], default: [] },
 
     evidence: { type: [evidenceSchema], default: [] },
 

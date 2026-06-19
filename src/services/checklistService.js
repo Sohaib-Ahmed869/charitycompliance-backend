@@ -244,7 +244,9 @@ const ENTITY_MODULE_MAP = {
   partner: 'Grants & Donors',
   funding_partner: 'Grants & Donors',
   partner_vetting: 'Grants & Donors',
-  supplier: 'Operations',
+  // Suppliers use the SAME checklist as delivery partners (Partner Vetting), so
+  // the supplier register shows the same due-diligence checklist.
+  supplier: 'Grants & Donors',
   project_register: 'Grants & Donors',
   project_monitoring: 'Grants & Donors',
   refund: 'Grants & Donors',
@@ -292,7 +294,9 @@ const ENTITY_TEMPLATE_TARGETS = {
   partner_vetting: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
   partner: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
   funding_partner: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
-  supplier: { module: 'Operations', submodule: 'Suppliers' },
+  // Suppliers use the SAME checklist as Partner Vetting (delivery partners) — the
+  // resolver picks the same Partner Vetting template for both.
+  supplier: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
   funding_agreement: { module: 'Grants & Donors', submodule: 'Funding Agreements' },
   // Refunds use the Finance/Refunds checklist (I05). Previously targeted
   // Grants & Donors/Refunds, which no template matches, so refunds showed no
@@ -1135,13 +1139,9 @@ export class ChecklistService {
     if (normalizedEntityType === 'inquiry_record') {
       await this.ensureDefaultInquiryWorkflowTemplate();
     }
-    // Supplier vetting uses a dedicated checklist (V3 I49). Ensure it exists so
-    // supplier records get their own checklist; any stale instance that was
-    // previously bound to an unrelated template (e.g. the inquiry-register
-    // checklist) self-heals via the existing-instance branch once this resolves.
-    if (normalizedEntityType === 'supplier') {
-      await this.ensureDefaultSupplierWorkflowTemplate();
-    }
+    // Suppliers reuse the Partner Vetting checklist (V3 I15–I17, seeded by the V3
+    // bootstrap above). `supplier` targets Grants & Donors / Partner Vetting, so
+    // the resolver picks the same template delivery-partner vetting uses.
 
     const allModuleTemplates = await templateRepo.list(this.orgId, { type: 'module' });
     const target = ENTITY_TEMPLATE_TARGETS[normalizedEntityType] || {
@@ -1551,7 +1551,7 @@ export class ChecklistService {
     return out;
   }
 
-  async patchItem({ instanceId, itemId }, { checked, notes, addEvidence, state }, userId) {
+  async patchItem({ instanceId, itemId }, { checked, notes, addNote, addEvidence, state }, userId) {
     const tenantDb = await this.getTenantDb();
     const repo = new ChecklistInstanceRepository(tenantDb);
     const inst = await repo.findById(instanceId);
@@ -1580,7 +1580,25 @@ export class ChecklistService {
       }))];
     }
 
-    if (typeof notes === 'string') item.notes = notes;
+    // Multi-note tracking — a note can arrive two ways, both APPEND (never
+    // overwrite) so a second person can add their own note to the same item:
+    //   1. `addNote: { text }` — the explicit multi-note payload.
+    //   2. `notes: '<text>'` — the legacy single-note field, which the shared
+    //      ChecklistEngine's note thread sends via the toggle handler on pages
+    //      that don't wire `addNote` directly. Treated as an appended entry too.
+    // Allowed on auto items (only checked/state are blocked above); blocked
+    // entirely once closed (the CHECKLIST_CLOSED guard at the top).
+    const notesToAppend = [];
+    if (typeof notes === 'string' && notes.trim()) notesToAppend.push(notes.trim());
+    if (addNote && typeof addNote === 'object' && String(addNote.text || '').trim()) {
+      notesToAppend.push(String(addNote.text).trim());
+    }
+    if (notesToAppend.length) {
+      item.note_entries = [
+        ...(item.note_entries || []),
+        ...notesToAppend.map((text) => ({ text, author: userId, created_at: new Date() }))
+      ];
+    }
 
     if (typeof checked === 'boolean') {
       // evidence enforcement for manual items
@@ -2020,6 +2038,27 @@ export class ChecklistService {
     await inst.save();
     const refreshed = await repo.findById(instanceId);
     return this._summarizeMonthlyInstance(await this._evaluateMonthlyComplianceInstance(refreshed, tenantDb));
+  }
+
+  /**
+   * Month-end closure for a monthly compliance register. Locks the month as a
+   * point-in-time record: once closed, `patchItem` and
+   * `addMonthlyComplianceManualItem` reject all edits (CHECKLIST_CLOSED), so
+   * ticks, notes and items can no longer change. Unlike the finance period
+   * close, this does NOT require 100% completion — a month is signed off with
+   * whatever was (and wasn't) achieved.
+   */
+  async closeMonthlyComplianceInstance(instanceId, userId) {
+    const tenantDb = await this.getTenantDb();
+    const repo = new ChecklistInstanceRepository(tenantDb);
+    const inst = await repo.findById(instanceId);
+    if (!inst) throw new AppError('Checklist instance not found', 404, 'INSTANCE_NOT_FOUND');
+    if (inst.type !== 'monthly_compliance') throw new AppError('Not a monthly compliance register', 400, 'WRONG_TYPE');
+    if (inst.status === 'closed') throw new AppError('Register is already closed', 400, 'ALREADY_CLOSED');
+    await repo.close(instanceId, userId);
+    const refreshed = await repo.findById(instanceId);
+    logInfo('Closed monthly compliance register', { orgId: this.orgId, instanceId, period: inst.period });
+    return this._summarizeMonthlyInstance(refreshed);
   }
 
   /** Evaluate the auto/criteria items on a monthly register for its period. */

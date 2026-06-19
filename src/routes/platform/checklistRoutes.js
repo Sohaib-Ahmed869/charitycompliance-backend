@@ -80,6 +80,8 @@ router.patch(
     param('itemId').isMongoId().withMessage('Invalid item ID'),
     body('checked').optional().isBoolean().withMessage('checked must be boolean'),
     body('notes').optional().isString().withMessage('notes must be string'),
+    body('addNote').optional().isObject().withMessage('addNote must be an object'),
+    body('addNote.text').optional().isString().withMessage('addNote.text must be a string'),
     body('state').optional().isIn(['pending', 'satisfied', 'failed', 'skipped']).withMessage('Invalid state'),
     body('addEvidence').optional()
   ],
@@ -105,6 +107,12 @@ router.post(
   ],
   validate,
   checklistController.createMonthlyComplianceInstance
+);
+router.post(
+  '/monthly-compliance/:instanceId/close',
+  [param('instanceId').isMongoId().withMessage('Invalid instance ID')],
+  validate,
+  checklistController.closeMonthlyComplianceInstance
 );
 router.post(
   '/monthly-compliance/:instanceId/items',
