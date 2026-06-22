@@ -14,6 +14,7 @@ import { validationResult } from 'express-validator';
 import { AppError } from '../middleware/errorHandler.js';
 import { uploadToS3, deleteFromS3, getFileUrl } from '../services/s3Service.js';
 import { logError, logInfo } from '../utils/logger.js';
+import { NotificationRepository } from '../repositories/notificationRepository.js';
 import { buildBasPeriodMetadata } from '../services/basPeriodDocumentHelper.js';
 
 const safeParseMetadata = (raw) => {
@@ -260,6 +261,34 @@ export const createDocument = asyncHandler(async (req, res) => {
           : (req.body.status || 'submitted'),
     metadata: fiscalMetadata || basMetadata || safeParseMetadata(req.body.metadata)
   });
+
+  // Yearly statements: notify the assigned board reviewer in-app so they know
+  // they need to review & sign (the upload UI promises this happens). Wrapped in
+  // try/catch so a notification failure never rolls back the upload.
+  if (req.body.category === 'financial_statement') {
+    const reviewerUserId = document.metadata?.reviewer_user_id;
+    // Always notify the assigned reviewer (even if they uploaded it themselves —
+    // uploading is not reviewing/signing, and the demo assigns self).
+    if (reviewerUserId) {
+      try {
+        const notificationRepo = new NotificationRepository(tenantDb);
+        await notificationRepo.create({
+          user_id: reviewerUserId,
+          type: 'yearly_statement_review_assigned',
+          title: 'Yearly statement to review',
+          message: `You have been assigned to review and sign ${document.title || 'a yearly statement'}.`,
+          link: '/charity-administration/yearly-statements',
+          related_entity_id: document._id,
+          related_entity_type: 'document',
+          created_at: new Date()
+        });
+      } catch (err) {
+        logError('Failed to create yearly statement reviewer notification', {
+          orgId, documentId: String(document._id), error: err?.message
+        });
+      }
+    }
+  }
 
   // Fiscal reports and BAS lodgements auto-start an approval workflow on upload.
   // We catch failures so the upload itself isn't rolled back, but we surface the

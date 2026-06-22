@@ -232,6 +232,7 @@ import governanceStructureRoutes from './routes/platform/governanceStructureRout
 import trainingRoutes from './routes/platform/trainingRoutes.js';
 import riskRoutes from './routes/platform/riskRoutes.js';
 import inquiryRoutes from './routes/platform/inquiryRoutes.js';
+import relatedPartyTransactionRoutes from './routes/platform/relatedPartyTransactionRoutes.js';
 import policyRoutes from './routes/platform/policyRoutes.js';
 import marketplaceRoutes from './routes/platform/marketplaceRoutes.js';
 import meRoutes from './routes/platform/meRoutes.js';
@@ -311,6 +312,7 @@ if (isModuleEnabled('risks')) app.use('/api/v1/platform/risks', riskRoutes);
 // not covered by the hard-coded modules. Always mounted (no DISABLED
 // flag) so new tenants get the feature out of the box.
 app.use('/api/v1/platform/inquiries', inquiryRoutes);
+app.use('/api/v1/platform/related-party-transactions', relatedPartyTransactionRoutes);
 if (isModuleEnabled('policies')) app.use('/api/v1/platform/policies', policyRoutes);
 if (isModuleEnabled('policies')) app.use('/api/v1/platform/marketplace', marketplaceRoutes);
 app.use('/api/v1/platform/me', meRoutes);

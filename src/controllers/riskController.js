@@ -276,6 +276,31 @@ export const exportRiskRegisterPdf = asyncHandler(async (req, res) => {
   res.send(buffer);
 });
 
+/** Audit-pack ZIP of the risk register: per-risk JSON + attachments + summary CSV. */
+export const exportRiskRegisterZip = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const filters = {
+    status: req.query.status,
+    category: req.query.category,
+    search: req.query.search
+  };
+
+  const riskService = new RiskService(orgId);
+  const risks = await riskService.getRisks(filters);
+
+  const tenantDb = await getTenantConnection(orgId);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  const logoUrl = org?.logo_url || process.env.LOGO || '';
+
+  const { streamRisksZip } = await import('../services/riskZipExportService.js');
+  const dateStr = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="risk-register-${dateStr}.zip"`);
+  res.setHeader('Cache-Control', 'no-store');
+  await streamRisksZip(risks, res, { orgId, org, logoUrl });
+});
+
 /** Add a treatment to a risk - triggers approval workflow */
 export const addTreatment = asyncHandler(async (req, res) => {
   const orgId = req.orgId;

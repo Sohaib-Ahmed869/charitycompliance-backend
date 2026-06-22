@@ -55,6 +55,17 @@ router.get(
 );
 
 router.get(
+  '/export/zip',
+  [
+    query('status').optional().isIn(['draft', 'pending', 'under_treatment', 'approved', 'resolved', 'rejected', 'closed']),
+    query('category').optional().trim(),
+    query('search').optional().trim()
+  ],
+  validate,
+  riskController.exportRiskRegisterZip
+);
+
+router.get(
   '/:riskId',
   [param('riskId').isMongoId().withMessage('Invalid risk ID')],
   validate,

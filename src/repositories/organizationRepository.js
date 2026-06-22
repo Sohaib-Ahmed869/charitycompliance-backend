@@ -23,11 +23,24 @@ export class OrganizationRepository {
   }
 
   async update(updateData) {
-    return this.Organization.findOneAndUpdate(
-      {},
-      { $set: updateData },
-      { new: true, upsert: true, runValidators: true }
-    );
+    // Load → assign → save (NOT findOneAndUpdate). Two reasons:
+    //   1. Encryption: fields marked { encrypted: true } (email, address, …) are
+    //      encrypted only by the pre('save') hook. findOneAndUpdate bypasses it,
+    //      so it would write PII as plaintext and skip the blind-index hashes.
+    //   2. Required validators: the org always exists post-signup, so saving the
+    //      hydrated doc (which already has `name`) avoids the upsert+runValidators
+    //      footgun that rejected partial saves with "Path `name` is required".
+    // The hydrated doc has encrypted fields decrypted in memory (post-init), so
+    // pre('save') re-encrypts everything correctly on the way back out.
+    const doc = await this.Organization.findOne({});
+    if (!doc) return null;
+    for (const [key, value] of Object.entries(updateData)) {
+      doc.set(key, value);
+    }
+    // Mixed paths don't always register deep changes — force them.
+    if ('settings' in updateData) doc.markModified('settings');
+    if ('metadata' in updateData) doc.markModified('metadata');
+    return await doc.save();
   }
 
   async updateSettings(settings) {

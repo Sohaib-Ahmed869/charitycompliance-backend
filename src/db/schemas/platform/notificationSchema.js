@@ -59,7 +59,9 @@ const notificationSchema = new mongoose.Schema({
       /** Fiscal report due dates (monthly / financial year) */
       'fiscal_report_reminder',
       /** Fiscal report or BAS document needs re-upload after decline (includes reason in message) */
-      'document_resubmission_required'
+      'document_resubmission_required',
+      /** Yearly statement assigned to a board member to review & sign */
+      'yearly_statement_review_assigned'
     ],
     required: true,
     index: true

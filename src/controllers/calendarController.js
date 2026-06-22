@@ -599,23 +599,30 @@ export const updateCustomEvent = asyncHandler(async (req, res) => {
     throw new AppError('Cannot edit system-generated events', 403, 'FORBIDDEN');
   }
 
-  // Creator can always edit. Admins and org owners can edit/complete
-  // any custom event in their tenant — the calendar surfaces every
-  // user's custom events to admins for triage, so blocking the edit
-  // would leave them looking at a read-only list with no recourse.
+  // Creator can always edit. Admins and org owners can edit/complete any
+  // custom event in their tenant. An ASSIGNEE (an attendee who isn't the
+  // creator) can close/complete the task assigned to them and add a note —
+  // previously they could only view it, which left them stuck.
   const isAdmin = Array.isArray(req.user?.roles) && req.user.roles.includes('admin');
   const isOwner = req.user?.is_org_owner === true;
   const isCreator = existingEvent.user_id.toString() === userId;
-  if (!isCreator && !isAdmin && !isOwner) {
+  const isAttendee = Array.isArray(existingEvent.attendees)
+    && existingEvent.attendees.map((a) => String(a)).includes(String(userId));
+  if (!isCreator && !isAdmin && !isOwner && !isAttendee) {
     throw new AppError('You do not have permission to edit this event', 403, 'FORBIDDEN');
   }
+  // Only the creator/admin/owner may rewrite the task's core fields; an
+  // assignee may only mark it complete or add a description/note.
+  const canFullyEdit = isCreator || isAdmin || isOwner;
 
   const updateData = { updated_by: userId };
-  if (title !== undefined) updateData.title = title;
-  if (date !== undefined) updateData.date = date;
-  if (type !== undefined) updateData.type = type;
+  if (canFullyEdit) {
+    if (title !== undefined) updateData.title = title;
+    if (date !== undefined) updateData.date = date;
+    if (type !== undefined) updateData.type = type;
+    if (color !== undefined) updateData.color = color;
+  }
   if (description !== undefined) updateData.description = description;
-  if (color !== undefined) updateData.color = color;
   if (typeof completed === 'boolean') updateData.completed = completed;
 
   const updatedEvent = await calendarRepo.update(id, updateData);

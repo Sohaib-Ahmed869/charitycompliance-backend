@@ -1337,14 +1337,19 @@ export const viewDirectorsHandbook = asyncHandler(async (req, res) => {
   const org = await orgRepo.findOne();
   if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
 
+  // Admins/owners can view (they manage & upload it); board members can view.
+  const roles = Array.isArray(req.user?.roles) ? req.user.roles : [];
+  const perms = Array.isArray(req.user?.permissions) ? req.user.permissions : [];
+  const isAdmin = roles.includes('admin') || perms.includes('*:*');
+
   const boardMemberRecords = await boardMemberRepo.findAllActiveByUserId(req.user?.userId, org._id);
   const boardRoleRegex = /(board|director|trustee|committee)/i;
-  const canViewHandbook = Array.isArray(boardMemberRecords) && boardMemberRecords.some((bm) => {
+  const isBoardMember = Array.isArray(boardMemberRecords) && boardMemberRecords.some((bm) => {
     if (bm?.is_board_member) return true;
     const title = `${bm?.custom_position_title || ''} ${bm?.position || ''}`.trim();
     return boardRoleRegex.test(title);
   });
-  if (!canViewHandbook) {
+  if (!isAdmin && !isBoardMember) {
     throw new AppError('Only board members can view directors handbook', 403, 'FORBIDDEN');
   }
 
