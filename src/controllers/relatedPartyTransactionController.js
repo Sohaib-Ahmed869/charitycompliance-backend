@@ -220,6 +220,23 @@ export const deleteRpt = asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'Related party transaction archived' });
 });
 
+// Live risk preview — scores a would-be transaction WITHOUT persisting it, so the
+// create/attach form can show the risk score as the user fills it in. Same engine
+// as create/update (value scored against the org's approval thresholds).
+export const previewRptRisk = asyncHandler(async (req, res) => {
+  const orgDocId = await getOrgDocId(req.tenantDb);
+  const relationship_type = RELATIONSHIP_TYPES.includes(req.body.relationship_type) ? req.body.relationship_type : 'other';
+  const transaction_value = req.body.transaction_value === '' || req.body.transaction_value == null
+    ? null
+    : Number(req.body.transaction_value);
+  const risk = await assessRisk(req.tenantDb, orgDocId, {
+    relationshipType: relationship_type,
+    transactionValue: transaction_value,
+    competitiveQuotesObtained: !!req.body.competitive_quotes_obtained
+  });
+  res.json({ success: true, data: risk });
+});
+
 // Lookup an RPT for a given COI (used by the COI detail page to show linkage).
 export const getRptByCoi = asyncHandler(async (req, res) => {
   const repo = new RelatedPartyTransactionRepository(req.tenantDb);

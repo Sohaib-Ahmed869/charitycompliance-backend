@@ -44,6 +44,17 @@ router.post(
   rpt.createRpt
 );
 
+// Live risk preview (no persistence) — powers the score read-out in the form.
+router.post(
+  '/assess',
+  [
+    body('relationship_type').optional().isString(),
+    body('transaction_value').optional({ nullable: true })
+  ],
+  validate,
+  rpt.previewRptRisk
+);
+
 router.get('/:rptId', [param('rptId').isMongoId()], validate, rpt.getRpt);
 router.put('/:rptId', [param('rptId').isMongoId()], validate, rpt.updateRpt);
 router.delete('/:rptId', [param('rptId').isMongoId()], validate, rpt.deleteRpt);
