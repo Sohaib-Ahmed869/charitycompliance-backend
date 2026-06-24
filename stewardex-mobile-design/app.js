@@ -11,12 +11,14 @@
 
   const LIGHT_STATUS = new Set(['login', 'otp', 'home', 'billing', 'springboard', 'splash']);
   const HIDE_TABBAR  = new Set(['login', 'otp', 'springboard', 'splash', 'chatThread',
-                                'approvalDetail', 'expenses', 'notifications', 'settings', 'meetingDetail']);
+                                'approvalDetail', 'expenses', 'notifications', 'settings', 'meetingDetail',
+                                'riskDetail', 'complaintDetail', 'coiDetail']);
   const TAB_FOR = {
     home: 'home', calendar: 'calendar', meetings: 'more', meetingDetail: 'more',
     chat: 'chat', chatThread: 'chat',
     approvals: 'approvals', approvalDetail: 'approvals',
-    policies: 'more', risk: 'more', coi: 'more', complaints: 'more',
+    policies: 'more', risk: 'more', riskDetail: 'more', coi: 'more', coiDetail: 'more',
+    complaints: 'more', complaintDetail: 'more', training: 'more',
     expenses: 'more', billing: 'more', help: 'more',
     notifications: 'home', settings: 'more', more: 'more',
     login: null, otp: null, springboard: null, splash: null,
@@ -159,17 +161,25 @@
     if (d) { lbl.textContent = d.label; list.innerHTML = d.items.map(calRow).join(''); }
     else {
       lbl.textContent = 'June ' + day;
-      list.innerHTML = `<div class="row" data-open-sheet="newEvent"><div class="ic" style="background:var(--fill);color:var(--muted)"><i data-lucide="plus"></i></div>
+      list.innerHTML = `<div class="row" data-open-sheet="sheetNewEvent"><div class="ic" style="background:var(--fill);color:var(--muted)"><i data-lucide="plus"></i></div>
         <div class="tx"><b>No events</b><span>Tap to add an event</span></div></div>`;
     }
     if (window.lucide) lucide.createIcons();
   }
 
-  // ---------- bottom sheet ----------
-  const scrim = document.querySelector('[data-screen="calendar"] .scrim');
-  const sheet = document.getElementById('sheetNewEvent');
-  function openSheet()  { if (scrim) scrim.classList.add('open'); if (sheet) sheet.classList.add('open'); }
-  function closeSheet() { if (scrim) scrim.classList.remove('open'); if (sheet) sheet.classList.remove('open'); }
+  // ---------- bottom sheet (generic — any screen can host one or more) ----------
+  // data-open-sheet carries the sheet element's id; the scrim is its sibling in the same screen.
+  function openSheet(id) {
+    const sheet = id ? document.getElementById(id) : document.querySelector('.screen.is-active .sheet');
+    if (!sheet) return;
+    const screen = sheet.closest('.screen');
+    const scrim  = screen && screen.querySelector('.scrim');
+    if (scrim) scrim.classList.add('open');
+    sheet.classList.add('open');
+  }
+  function closeSheet() {
+    document.querySelectorAll('.scrim.open, .sheet.open').forEach(e => e.classList.remove('open'));
+  }
 
   // ---------- fallback labels so nothing feels dead ----------
   const ICON_LABEL = {
@@ -228,11 +238,26 @@
       return;
     }
 
+    // role toggle (admin = full workflow control · member = read + own action)
+    const rl = el.closest('[data-role-set]');
+    if (rl) {
+      const r = rl.dataset.roleSet;
+      device.setAttribute('data-role', r);
+      document.querySelectorAll('[data-role-set]').forEach(b => b.classList.toggle('on', b === rl));
+      toast(r === 'admin' ? 'Admin view · full workflow control' : 'Member view · read access + your action');
+      return;
+    }
+
     // bottom sheet (new event)
     const openS = el.closest('[data-open-sheet]');
-    if (openS) { openSheet(); return; }
+    if (openS) { openSheet(openS.dataset.openSheet); return; }
     const closeS = el.closest('[data-close-sheet]');
-    if (closeS) { if (closeS.dataset.toast) toast(closeS.dataset.toast); closeSheet(); return; }
+    if (closeS) {
+      if (closeS.dataset.toast) toast(closeS.dataset.toast);
+      closeSheet();
+      if (closeS.dataset.go) setTimeout(() => show(closeS.dataset.go), closeS.dataset.toast ? 620 : 0);
+      return;
+    }
     if (el.closest('.scrim')) { closeSheet(); return; }
 
     // calendar date selection
@@ -309,6 +334,7 @@
   });
 
   // boot
+  device.setAttribute('data-role', 'admin');
   if (window.lucide) lucide.createIcons();
   renderCalDay('15');
   show('springboard');

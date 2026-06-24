@@ -281,8 +281,12 @@ const ENTITY_MODULE_MAP = {
 };
 
 const ENTITY_TEMPLATE_TARGETS = {
-  expense: { module: 'Finances', submodule: 'Expenses' },
-  purchase: { module: 'Finances', submodule: 'Expenses' },
+  // Expense creation resolves I01 (Invoice Intake & Validation). I02 (Payment
+  // Approval & Release) shares the same Finance/Expenses module+submodule, so
+  // pin the V3 id to break the tie deterministically — otherwise DB order
+  // decides and I02 can surface in I01's place.
+  expense: { module: 'Finances', submodule: 'Expenses', v3Id: 'I01' },
+  purchase: { module: 'Finances', submodule: 'Expenses', v3Id: 'I01' },
   policy: { module: 'Policies' },
   risk: { module: 'Risk', submodule: 'Risk Management' },
   donor: { module: 'Grants & Donors', submodule: 'Donor Register' },
@@ -368,12 +372,17 @@ function findBestTemplateForTarget(moduleTemplates = [], target = {}) {
   const requestedModule = normalizeModuleName(target?.module || '');
   const requestedSubmodule = normalizeModuleName(target?.submodule || '');
   const requestedUseCase = String(target?.useCase || '').trim().toLowerCase();
+  // Optional explicit V3 checklist id (e.g. 'I01'). Used to disambiguate when
+  // two templates share the same module+submodule (e.g. I01 Invoice Intake and
+  // I02 Payment Approval both live in Finance/Expenses) — without it the tie is
+  // broken by DB order and the wrong checklist can surface.
+  const requestedV3Id = String(target?.v3Id || '').trim().toLowerCase();
 
   // SAFEGUARD: with no usable target at all (an unmapped entity type — e.g. an
   // inquiry_record that isn't in ENTITY_MODULE_MAP / ENTITY_TEMPLATE_TARGETS),
   // never guess. Returning null means the workflow gets NO checklist rather
   // than an arbitrary, unrelated one (the caller handles null gracefully).
-  if (!requestedModule && !requestedSubmodule && !requestedUseCase) return null;
+  if (!requestedModule && !requestedSubmodule && !requestedUseCase && !requestedV3Id) return null;
 
   let best = null;
   let bestScore = 0;
@@ -381,6 +390,7 @@ function findBestTemplateForTarget(moduleTemplates = [], target = {}) {
     const moduleName = normalizeModuleName(tpl?.metadata?.module);
     const submoduleName = normalizeModuleName(tpl?.metadata?.submodule);
     const useCase = String(tpl?.metadata?.useCase || '').trim().toLowerCase();
+    const v3Id = String(tpl?.metadata?.v3_checklist_id || '').trim().toLowerCase();
 
     // Prevent cross-submodule bleed (e.g. Programs checklist showing on Funding Agreements).
     // If caller asks for a specific module/submodule, enforce exact match.
@@ -391,6 +401,9 @@ function findBestTemplateForTarget(moduleTemplates = [], target = {}) {
     // otherwise an under-specified target would clear the bar on activeness
     // alone and return a confidently-wrong template.
     let matchScore = 0;
+    // An exact V3 id match is the strongest signal — it outranks module/
+    // submodule/useCase so the intended checklist always wins its tie.
+    if (requestedV3Id && v3Id === requestedV3Id) matchScore += 10;
     if (requestedUseCase && useCase === requestedUseCase) matchScore += 6;
     if (requestedModule && moduleName === requestedModule) matchScore += 4;
     if (requestedSubmodule && submoduleName === requestedSubmodule) matchScore += 3;
@@ -411,9 +424,12 @@ function doesTemplateMatchTarget(template, target = {}) {
   const requestedModule = normalizeModuleName(target?.module || '');
   const requestedSubmodule = normalizeModuleName(target?.submodule || '');
   const requestedUseCase = String(target?.useCase || '').trim().toLowerCase();
+  const requestedV3Id = String(target?.v3Id || '').trim().toLowerCase();
   const templateModule = normalizeModuleName(template?.metadata?.module);
   const templateSubmodule = normalizeModuleName(template?.metadata?.submodule);
   const templateUseCase = String(template?.metadata?.useCase || '').trim().toLowerCase();
+  const templateV3Id = String(template?.metadata?.v3_checklist_id || '').trim().toLowerCase();
+  if (requestedV3Id && templateV3Id !== requestedV3Id) return false;
   if (requestedUseCase && templateUseCase !== requestedUseCase) return false;
   if (requestedModule && templateModule !== requestedModule) return false;
   if (requestedSubmodule && templateSubmodule !== requestedSubmodule) return false;
@@ -1270,8 +1286,27 @@ export class ChecklistService {
       if (!existingMatchesTarget) {
         // For expense/purchase workflows, template metadata can drift over time.
         // In that case we must not hide the checklist if an instance already exists.
-        if (!selectedTemplate) {
-          if (normalizedEntityType === 'expense' || normalizedEntityType === 'purchase') {
+        // An expense/purchase instance whose current template isn't I01 is the
+        // legacy mis-resolution this rebind exists to correct. But if work has
+        // already been done on it (checked items, notes, evidence, or it's been
+        // closed), swapping to I01 would silently discard that completed
+        // compliance record — I02's item titles don't line up with I01's, so
+        // nothing carries over. Only auto-correct untouched instances; leave
+        // worked-on ones on their original checklist.
+        const isExpenseLike = normalizedEntityType === 'expense' || normalizedEntityType === 'purchase';
+        const existingHasProgress =
+          existing.status === 'closed' ||
+          (existing.items || []).some(
+            (i) =>
+              i?.checked ||
+              i?.state === 'satisfied' ||
+              (typeof i?.notes === 'string' && i.notes.trim().length > 0) ||
+              (Array.isArray(i?.evidence) && i.evidence.length > 0)
+          );
+        if (isExpenseLike && existingHasProgress) {
+          // Keep the worked-on instance as-is (still attach approval below).
+        } else if (!selectedTemplate) {
+          if (isExpenseLike) {
             // Keep existing instance as-is (still attach approval_request_id below).
           } else {
             return null;

@@ -133,6 +133,21 @@ body{
 .themebar .tbtn.on{background:#fff;color:#0b2545;box-shadow:0 4px 14px rgba(0,0,0,.25)}
 .themebar .tbtn.on i{color:#2a9d8f}
 
+/* admin / member role switcher */
+.ctrlbar{display:inline-flex;gap:10px;flex-wrap:wrap;justify-content:center}
+.rolebar .tbtn.on{background:#2a9d8f;color:#fff}
+.rolebar .tbtn.on i{color:#fff}
+
+/* role-gated content inside the registers — admin sees full workflow,
+   member sees read access + only their permitted action */
+.member-only{display:none}
+[data-role="member"] .admin-only{display:none!important}
+[data-role="member"] .member-only{display:block}
+.role-note{display:flex;align-items:flex-start;gap:10px;margin:0 18px 4px;padding:13px 14px;
+  border-radius:14px;background:var(--fill);border:1px solid var(--line);
+  font-size:12.5px;font-weight:600;color:var(--muted)}
+.role-note i{width:17px;height:17px;flex:none;color:var(--amber);margin-top:1px}
+
 /* screen navigator rail — pinned to the far left */
 .rail{position:fixed;left:22px;top:50%;transform:translateY(-50%);
   width:226px;max-height:90vh;overflow-y:auto;z-index:6;

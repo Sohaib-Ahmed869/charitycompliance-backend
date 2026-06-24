@@ -44,8 +44,12 @@
       <button data-go="approvalDetail"><i data-lucide="file-check-2"></i> Approval detail</button>
       <button data-go="policies"><i data-lucide="file-text"></i> Policies</button>
       <button data-go="risk"><i data-lucide="triangle-alert"></i> Risk register</button>
+      <button data-go="riskDetail"><i data-lucide="route"></i> Risk · triage &amp; route</button>
       <button data-go="coi"><i data-lucide="scale"></i> COI register</button>
+      <button data-go="coiDetail"><i data-lucide="gavel"></i> COI · review &amp; decide</button>
       <button data-go="complaints"><i data-lucide="message-square-warning"></i> Complaints</button>
+      <button data-go="complaintDetail"><i data-lucide="clipboard-check"></i> Complaint · resolve</button>
+      <button data-go="training"><i data-lucide="graduation-cap"></i> Training</button>
       <button data-go="expenses"><i data-lucide="receipt"></i> Submit expense</button>
       <button data-go="billing"><i data-lucide="credit-card"></i> Billing</button>
       <button data-go="help"><i data-lucide="life-buoy"></i> Help center</button>
@@ -72,9 +76,15 @@
 
     <!-- iPhone -->
     <div class="phonecol">
-      <div class="themebar">
-        <button class="tbtn on" data-theme-set="light"><i data-lucide="sun"></i> Light</button>
-        <button class="tbtn" data-theme-set="dark"><i data-lucide="moon"></i> Dark</button>
+      <div class="ctrlbar">
+        <div class="themebar">
+          <button class="tbtn on" data-theme-set="light"><i data-lucide="sun"></i> Light</button>
+          <button class="tbtn" data-theme-set="dark"><i data-lucide="moon"></i> Dark</button>
+        </div>
+        <div class="themebar rolebar">
+          <button class="tbtn on" data-role-set="admin"><i data-lucide="shield"></i> Admin</button>
+          <button class="tbtn" data-role-set="member"><i data-lucide="user"></i> Member</button>
+        </div>
       </div>
       <div class="device-wrap">
       <div class="device-glow"></div>
@@ -288,7 +298,7 @@
                 </div>
                 <div class="spacer"></div>
               </div>
-              <div class="fab" data-open-sheet="newEvent"><i data-lucide="plus"></i></div>
+              <div class="fab" data-open-sheet="sheetNewEvent"><i data-lucide="plus"></i></div>
 
               <!-- new event sheet -->
               <div class="scrim" data-close-sheet></div>
@@ -603,14 +613,100 @@
                   <b style="background:#4ade80;color:#14532d">·</b><b style="background:#86efac;color:#14532d">·</b><b style="background:#a3e635;color:#365314">·</b><b style="background:#fbbf24">·</b><b style="background:#f59e0b">·</b>
                   <b style="background:#22c55e;color:#fff">·</b><b style="background:#4ade80;color:#14532d">·</b><b style="background:#86efac;color:#14532d">·</b><b style="background:#a3e635;color:#365314">·</b><b style="background:#fbbf24">·</b>
                 </div></div></div>
+                <div class="field-l pad">Awaiting triage · routing needed</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row" data-go="riskDetail"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="route"></i></div>
+                    <div class="tx"><b>Funding shortfall FY26</b><span>New · raised by J. Patel · needs owner</span></div><span class="chip red">Triage</span></div>
+                </div></div>
                 <div class="field-l pad">Register</div>
                 <div class="pad"><div class="grouped">
-                  <div class="row"><div class="tx"><b>Funding shortfall FY26</b><span>Finance · Owner: A. Morgan</span></div><span class="chip red">Extreme · 20</span></div>
-                  <div class="row"><div class="tx"><b>Data breach / cyber</b><span>IT · Owner: D. Chen</span></div><span class="chip amber">High · 12</span></div>
-                  <div class="row"><div class="tx"><b>Volunteer safety</b><span>Ops · Owner: S. Lee</span></div><span class="chip amber">High · 10</span></div>
-                  <div class="row"><div class="tx"><b>Reputational damage</b><span>Comms · Owner: M. Gomez</span></div><span class="chip teal">Moderate · 6</span></div>
+                  <div class="row" data-go="riskDetail"><div class="tx"><b>Funding shortfall FY26</b><span>Finance · Owner: A. Morgan</span></div><span class="chip red">Extreme · 20</span></div>
+                  <div class="row" data-go="riskDetail"><div class="tx"><b>Data breach / cyber</b><span>IT · Owner: D. Chen</span></div><span class="chip amber">High · 12</span></div>
+                  <div class="row" data-go="riskDetail"><div class="tx"><b>Volunteer safety</b><span>Ops · Owner: S. Lee</span></div><span class="chip amber">High · 10</span></div>
+                  <div class="row" data-go="riskDetail"><div class="tx"><b>Reputational damage</b><span>Comms · Owner: M. Gomez</span></div><span class="chip teal">Moderate · 6</span></div>
                 </div></div>
                 <div class="spacer"></div>
+              </div>
+              <div class="fab" data-open-sheet="sheetNewRisk"><i data-lucide="plus"></i></div>
+
+              <!-- raise a new risk sheet -->
+              <div class="scrim" data-close-sheet></div>
+              <div class="sheet" id="sheetNewRisk">
+                <div class="grab"></div>
+                <h3>Raise a risk</h3>
+                <div class="field-l">Title</div><div class="input">Funding shortfall FY26</div>
+                <div class="field-l">Category</div><div class="input"><span>Finance</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Likelihood</div><div class="input"><span>4 · Likely</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Consequence</div><div class="input"><span>5 · Severe</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Description</div><div class="input" style="min-height:54px;align-items:flex-start;padding-top:12px">Projected NLCF grant gap of £42k for FY26.</div>
+                <button class="btn" style="margin-top:18px" data-toast="Risk raised · routed to admin for triage" data-close-sheet><i data-lucide="check"></i> Raise &amp; route to triage</button>
+              </div>
+            </section>
+
+            <!-- ============ RISK DETAIL · TRIAGE & ROUTING ============ -->
+            <section class="screen" data-screen="riskDetail">
+              <div class="nav"><button class="back" data-go="risk"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Risk</div><button class="icobtn" data-toast="Risk shared"><i data-lucide="share"></i></button></div>
+              <div class="scroll" style="padding-bottom:150px">
+                <div class="pad">
+                  <div class="card" style="background:var(--grad-amber);color:#fff;border:none">
+                    <span class="chip" style="background:rgba(255,255,255,.22);color:#fff">Finance · Risk</span>
+                    <h1 style="font-size:21px;font-weight:800;margin:11px 0 8px">Funding shortfall FY26</h1>
+                    <div style="display:flex;gap:16px;font-size:13px;font-weight:700;opacity:.95">
+                      <span>Inherent · 20</span><span>Residual · 16</span><span>Status · Awaiting triage</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="field-l pad">Details</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="tx"><span>Raised by</span><b>James Patel</b></div><div class="av sm g2">JP</div></div>
+                  <div class="row"><div class="tx"><span>Likelihood × Consequence</span><b>4 × 5</b></div><span class="chip red">Extreme</span></div>
+                  <div class="row"><div class="tx"><span>Current owner</span><b>Unassigned</b></div><span class="chip amber">Needs owner</span></div>
+                  <div class="row"><div class="tx"><span>Linked workflow</span><b>Risk escalation · #RW-209</b></div><i data-lucide="chevron-right" class="chev"></i></div>
+                </div></div>
+
+                <div class="field-l pad">Routing chain</div>
+                <div class="pad"><div class="card">
+                  <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line)">
+                    <div class="node done" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center"><i data-lucide="check" style="width:14px;height:14px"></i></div>
+                    <div class="tx" style="flex:1"><b style="font-size:14px">Raised · J. Patel</b><div class="muted" style="font-size:12px">Logged · 30 min ago</div></div></div>
+                  <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)">
+                    <div class="node cur" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center"><i data-lucide="user" style="width:14px;height:14px"></i></div>
+                    <div class="tx" style="flex:1"><b style="font-size:14px">You · Admin triage</b><div style="font-size:12px;color:var(--teal);font-weight:700">Set priority &amp; assign an owner</div></div></div>
+                  <div style="display:flex;align-items:center;gap:12px;padding-top:12px">
+                    <div class="node" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center">3</div>
+                    <div class="tx" style="flex:1"><b style="font-size:14px;color:var(--muted)">Head of department</b><div class="muted" style="font-size:12px">Pending routing</div></div></div>
+                </div></div>
+
+                <div class="admin-only">
+                  <div class="field-l pad">Triage &amp; routing</div>
+                  <div class="pad" style="display:flex;gap:9px">
+                    <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-open-sheet="sheetRouteRisk"><i data-lucide="flag-triangle-right"></i> Set priority</button>
+                    <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-open-sheet="sheetRouteRisk"><i data-lucide="user-round-plus"></i> Assign owner</button>
+                    <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-toast="Risk escalated to the Board"><i data-lucide="chevrons-up"></i> Escalate</button>
+                  </div>
+                  <div class="pad" style="margin-top:10px"><button class="btn ghost" style="font-size:13px" data-toast="Treatment note added"><i data-lucide="clipboard-plus"></i> Add a treatment / mitigation</button></div>
+                </div>
+                <div class="member-only" style="margin-top:14px">
+                  <div class="role-note"><i data-lucide="lock"></i><span><b>View only.</b> This risk is awaiting triage by an administrator. You have read access to the record — assigning an owner, setting priority and routing are done by an admin or on the web app.</span></div>
+                  <div class="pad" style="margin-top:8px"><button class="btn ghost" style="font-size:13px" data-toast="Comment added for the admin"><i data-lucide="message-square-plus"></i> Add a comment</button></div>
+                </div>
+              </div>
+              <div class="admin-only" style="position:absolute;left:0;right:0;bottom:0;padding:14px 18px 30px;background:var(--glass);backdrop-filter:blur(16px);border-top:1px solid var(--line);display:flex;gap:12px">
+                <button class="btn ghost" style="flex:1" data-toast="Risk closed · resolved" data-go="risk"><i data-lucide="check-circle-2"></i> Resolve</button>
+                <button class="btn teal" style="flex:1.6" data-open-sheet="sheetRouteRisk"><i data-lucide="route"></i> Route / hand off</button>
+              </div>
+
+              <!-- route / hand off sheet -->
+              <div class="scrim" data-close-sheet></div>
+              <div class="sheet" id="sheetRouteRisk">
+                <div class="grab"></div>
+                <h3>Route &amp; hand off risk</h3>
+                <div class="field-l">Priority</div><div class="input"><span>Extreme · 20</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Assign owner</div><div class="input"><span>David Chen · Head of Finance</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Department</div><div class="input"><span>Finance</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Note for the next handler</div><div class="input" style="min-height:48px;align-items:flex-start;padding-top:12px">Please confirm treatment plan before the board meeting.</div>
+                <button class="btn" style="margin-top:18px" data-toast="Risk routed to D. Chen · Head of Finance" data-close-sheet data-go="risk"><i data-lucide="send-horizontal"></i> Hand off to department head</button>
               </div>
             </section>
 
@@ -621,19 +717,80 @@
               <div class="scroll">
                 <div class="seg"><b class="on">All</b><b>Pending</b><b>Approved</b></div>
                 <div class="pad"><div class="grouped">
-                  <div class="row"><div class="av g2">JP</div>
+                  <div class="row" data-go="coiDetail"><div class="av g2">JP</div>
                     <div class="tx"><b>James Patel</b><span>Supplier relationship · Office Depot</span></div><span class="chip amber">Pending</span></div>
-                  <div class="row"><div class="av g4">SL</div>
+                  <div class="row" data-go="coiDetail"><div class="av g4">SL</div>
                     <div class="tx"><b>Sarah Lee</b><span>Family member employed</span></div><span class="chip green">Approved</span></div>
-                  <div class="row"><div class="av g3">DC</div>
+                  <div class="row" data-go="coiDetail"><div class="av g3">DC</div>
                     <div class="tx"><b>David Chen</b><span>Director of partner charity</span></div><span class="chip green">Approved</span></div>
-                  <div class="row"><div class="av g1">MG</div>
+                  <div class="row" data-go="coiDetail"><div class="av g1">MG</div>
                     <div class="tx"><b>Maria Gomez</b><span>Personal donation > $5k</span></div><span class="chip gray">Archived</span></div>
                 </div></div>
                 <div class="pad" style="margin-top:14px">
-                  <button class="btn" data-toast="Declaration submitted for approval"><i data-lucide="file-plus-2"></i> Declare a conflict of interest</button>
+                  <button class="btn" data-open-sheet="sheetNewCoi"><i data-lucide="file-plus-2"></i> Declare a conflict of interest</button>
                 </div>
                 <div class="spacer"></div>
+              </div>
+
+              <!-- declare COI sheet -->
+              <div class="scrim" data-close-sheet></div>
+              <div class="sheet" id="sheetNewCoi">
+                <div class="grab"></div>
+                <h3>Declare a conflict of interest</h3>
+                <div class="field-l">Type</div><div class="input"><span>Supplier relationship</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Related party</div><div class="input">Office Depot Ltd</div>
+                <div class="field-l">Description</div><div class="input" style="min-height:54px;align-items:flex-start;padding-top:12px">My spouse is a director of the supplier.</div>
+                <div class="input" style="margin-top:4px"><span style="font-weight:600;color:var(--ink)">I will recuse myself from related decisions</span><div class="tg"></div></div>
+                <button class="btn" style="margin-top:18px" data-toast="Declaration submitted for review" data-close-sheet><i data-lucide="check"></i> Submit declaration</button>
+              </div>
+            </section>
+
+            <!-- ============ COI DETAIL · REVIEW & DECIDE ============ -->
+            <section class="screen" data-screen="coiDetail">
+              <div class="nav"><button class="back" data-go="coi"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Conflict of interest</div><button class="icobtn" data-toast="Shared"><i data-lucide="share"></i></button></div>
+              <div class="scroll" style="padding-bottom:150px">
+                <div class="pad">
+                  <div class="card" style="background:var(--grad-violet);color:#fff;border:none">
+                    <span class="chip" style="background:rgba(255,255,255,.22);color:#fff">Governance · COI</span>
+                    <h1 style="font-size:21px;font-weight:800;margin:11px 0 4px">James Patel</h1>
+                    <div style="font-size:13.5px;font-weight:600;opacity:.95">Supplier relationship · Office Depot Ltd</div>
+                  </div>
+                </div>
+                <div class="field-l pad">Details</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="tx"><span>Declared by</span><b>James Patel · Finance Officer</b></div><div class="av sm g2">JP</div></div>
+                  <div class="row"><div class="tx"><span>Nature</span><b>Spouse is a supplier director</b></div></div>
+                  <div class="row"><div class="tx"><span>Recusal offered</span><b>Yes</b></div><span class="chip green">On record</span></div>
+                  <div class="row"><div class="tx"><span>Linked workflow</span><b>COI review · #CW-118</b></div><i data-lucide="chevron-right" class="chev"></i></div>
+                </div></div>
+
+                <div class="field-l pad">Review chain</div>
+                <div class="pad"><div class="card">
+                  <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line)">
+                    <div class="node done" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center"><i data-lucide="check" style="width:14px;height:14px"></i></div>
+                    <div class="tx" style="flex:1"><b style="font-size:14px">Declared · J. Patel</b><div class="muted" style="font-size:12px">Submitted · yesterday</div></div></div>
+                  <div style="display:flex;align-items:center;gap:12px;padding-top:12px">
+                    <div class="node cur" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center"><i data-lucide="user" style="width:14px;height:14px"></i></div>
+                    <div class="tx" style="flex:1"><b style="font-size:14px">You · Board review</b><div style="font-size:12px;color:var(--teal);font-weight:700">Awaiting your decision</div></div></div>
+                </div></div>
+
+                <div class="admin-only">
+                  <div class="field-l pad">Decision actions</div>
+                  <div class="pad" style="display:flex;gap:9px">
+                    <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-toast="Routed to the full board"><i data-lucide="users"></i> Route to board</button>
+                    <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-toast="Mitigation note added"><i data-lucide="shield-check"></i> Add mitigation</button>
+                    <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-toast="Comment added"><i data-lucide="message-square-plus"></i> Comment</button>
+                  </div>
+                </div>
+                <div class="member-only" style="margin-top:14px">
+                  <div class="role-note"><i data-lucide="lock"></i><span><b>View only.</b> You can see this declaration and where it sits in the review. The decision — approve, mitigate or reject — is made by a reviewer/board member or on the web app.</span></div>
+                  <div class="pad" style="margin-top:8px"><button class="btn ghost" style="font-size:13px" data-toast="Comment added for the reviewer"><i data-lucide="message-square-plus"></i> Add a comment</button></div>
+                </div>
+              </div>
+              <div class="admin-only" style="position:absolute;left:0;right:0;bottom:0;padding:14px 18px 30px;background:var(--glass);backdrop-filter:blur(16px);border-top:1px solid var(--line);display:flex;gap:12px">
+                <button class="btn ghost" style="flex:1" data-toast="Declaration rejected" data-go="coi"><i data-lucide="x"></i> Reject</button>
+                <button class="btn teal" style="flex:1.6" data-toast="Approved with mitigation ✓" data-go="coi"><i data-lucide="check"></i> Approve &amp; mitigate</button>
               </div>
             </section>
 
@@ -658,14 +815,92 @@
                 </div></div>
                 <div class="field-l pad">Recent</div>
                 <div class="pad"><div class="grouped">
-                  <div class="row"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="message-square-warning"></i></div>
+                  <div class="row" data-go="complaintDetail"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="message-square-warning"></i></div>
                     <div class="tx"><b>#1051 · Facility access</b><span>New · 1 hr ago</span></div><span class="chip red">New</span></div>
-                  <div class="row"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="user-round"></i></div>
+                  <div class="row" data-go="complaintDetail"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="user-round"></i></div>
                     <div class="tx"><b>#1042 · Service quality</b><span>Assigned to S. Lee</span></div><span class="chip amber">In progress</span></div>
-                  <div class="row"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="check-circle-2"></i></div>
+                  <div class="row" data-go="complaintDetail"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="check-circle-2"></i></div>
                     <div class="tx"><b>#1039 · Staff conduct</b><span>Resolved · 2 days</span></div><span class="chip green">Resolved</span></div>
                 </div></div>
                 <div class="spacer"></div>
+              </div>
+              <div class="fab" data-open-sheet="sheetNewComplaint"><i data-lucide="plus"></i></div>
+
+              <!-- log a complaint sheet -->
+              <div class="scrim" data-close-sheet></div>
+              <div class="sheet" id="sheetNewComplaint">
+                <div class="grab"></div>
+                <h3>Log a complaint</h3>
+                <div class="field-l">Subject</div><div class="input">Facility access</div>
+                <div class="field-l">Category</div><div class="input"><span>Service / facilities</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Source</div><div class="input"><span>Email</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Severity</div><div class="input"><span>Medium</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Details</div><div class="input" style="min-height:54px;align-items:flex-start;padding-top:12px">Wheelchair ramp at the side entrance was blocked.</div>
+                <button class="btn" style="margin-top:18px" data-toast="Complaint logged · #1052" data-close-sheet><i data-lucide="check"></i> Log &amp; route for triage</button>
+              </div>
+            </section>
+
+            <!-- ============ COMPLAINT DETAIL · ASSIGN & RESOLVE ============ -->
+            <section class="screen" data-screen="complaintDetail">
+              <div class="nav"><button class="back" data-go="complaints"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Complaint</div><button class="icobtn" data-toast="Shared"><i data-lucide="share"></i></button></div>
+              <div class="scroll" style="padding-bottom:150px">
+                <div class="pad">
+                  <div class="card" style="background:var(--grad-teal);color:#fff;border:none">
+                    <span class="chip" style="background:rgba(255,255,255,.22);color:#fff">Complaint · #1051</span>
+                    <h1 style="font-size:21px;font-weight:800;margin:11px 0 4px">Facility access</h1>
+                    <div style="font-size:13.5px;font-weight:600;opacity:.95">New · logged 1 hr ago · Medium severity</div>
+                  </div>
+                </div>
+                <div class="field-l pad">Details</div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="tx"><span>Source</span><b>Email · complainant anonymous</b></div></div>
+                  <div class="row"><div class="tx"><span>Category</span><b>Service / facilities</b></div></div>
+                  <div class="row"><div class="tx"><span>Current handler</span><b>Unassigned</b></div><span class="chip amber">Needs handler</span></div>
+                  <div class="row"><div class="tx"><span>Linked workflow</span><b>Complaint handling · #CP-051</b></div><i data-lucide="chevron-right" class="chev"></i></div>
+                </div></div>
+
+                <div class="field-l pad">Handling chain</div>
+                <div class="pad"><div class="card">
+                  <div style="display:flex;align-items:center;gap:12px;padding-bottom:12px;border-bottom:1px solid var(--line)">
+                    <div class="node done" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center"><i data-lucide="check" style="width:14px;height:14px"></i></div>
+                    <div class="tx" style="flex:1"><b style="font-size:14px">Logged · intake</b><div class="muted" style="font-size:12px">1 hr ago</div></div></div>
+                  <div style="display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)">
+                    <div class="node cur" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center"><i data-lucide="user" style="width:14px;height:14px"></i></div>
+                    <div class="tx" style="flex:1"><b style="font-size:14px">You · Triage</b><div style="font-size:12px;color:var(--teal);font-weight:700">Assign a handler or resolve</div></div></div>
+                  <div style="display:flex;align-items:center;gap:12px;padding-top:12px">
+                    <div class="node" style="width:30px;height:30px;border-radius:50%;display:grid;place-items:center">3</div>
+                    <div class="tx" style="flex:1"><b style="font-size:14px;color:var(--muted)">Handler · resolution</b><div class="muted" style="font-size:12px">Pending</div></div></div>
+                </div></div>
+
+                <div class="admin-only">
+                  <div class="field-l pad">Actions</div>
+                  <div class="pad" style="display:flex;gap:9px">
+                    <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-open-sheet="sheetAssignComplaint"><i data-lucide="user-round-plus"></i> Assign handler</button>
+                    <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-toast="Escalated to safeguarding lead"><i data-lucide="chevrons-up"></i> Escalate</button>
+                    <button class="btn ghost" style="flex:1;padding:12px 6px;font-size:12.5px;flex-direction:column;gap:6px" data-toast="Response note added"><i data-lucide="message-square-plus"></i> Add note</button>
+                  </div>
+                </div>
+                <div class="member-only" style="margin-top:14px">
+                  <div class="role-note"><i data-lucide="lock"></i><span><b>View only.</b> You can read this complaint and its status. Assigning a handler and resolving the complaint are done by an admin or the assigned handler — keeping the workflow from stalling is an admin action.</span></div>
+                  <div class="pad" style="margin-top:8px"><button class="btn ghost" style="font-size:13px" data-toast="Comment added for the handler"><i data-lucide="message-square-plus"></i> Add a comment</button></div>
+                </div>
+              </div>
+              <div class="admin-only" style="position:absolute;left:0;right:0;bottom:0;padding:14px 18px 30px;background:var(--glass);backdrop-filter:blur(16px);border-top:1px solid var(--line);display:flex;gap:12px">
+                <button class="btn ghost" style="flex:1" data-open-sheet="sheetAssignComplaint"><i data-lucide="user-round-cog"></i> Reassign</button>
+                <button class="btn teal" style="flex:1.6" data-toast="Complaint resolved &amp; closed ✓" data-go="complaints"><i data-lucide="check-circle-2"></i> Resolve complaint</button>
+              </div>
+
+              <!-- assign handler sheet -->
+              <div class="scrim" data-close-sheet></div>
+              <div class="sheet" id="sheetAssignComplaint">
+                <div class="grab"></div>
+                <h3>Assign &amp; route complaint</h3>
+                <div class="field-l">Handler</div><div class="input"><span>Sarah Lee · Operations</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Priority</div><div class="input"><span>Medium</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Target resolution</div><div class="input"><span>Within 5 working days</span><i data-lucide="chevron-down"></i></div>
+                <div class="field-l">Note for handler</div><div class="input" style="min-height:48px;align-items:flex-start;padding-top:12px">Please inspect the side entrance and respond to the complainant.</div>
+                <button class="btn" style="margin-top:18px" data-toast="Assigned to S. Lee · handler notified" data-close-sheet data-go="complaints"><i data-lucide="send-horizontal"></i> Assign handler</button>
               </div>
             </section>
 
@@ -828,6 +1063,48 @@
               </div>
             </section>
 
+            <!-- ============ TRAINING ============ -->
+            <section class="screen" data-screen="training">
+              <div class="nav"><button class="back" data-go="more"><i data-lucide="chevron-left"></i></button>
+                <div class="title">Training</div><button class="icobtn"><i data-lucide="search"></i></button></div>
+              <div class="scroll">
+                <div class="pad"><div class="card" style="background:var(--grad-brand);color:#fff;border:none">
+                  <div style="display:flex;justify-content:space-between;align-items:center">
+                    <div><div style="font-size:13px;opacity:.85;font-weight:600">YOUR PROGRESS</div>
+                      <h2 style="font-size:18px;color:#fff;margin-top:3px">2 of 4 complete</h2></div>
+                    <i data-lucide="graduation-cap" style="width:30px;height:30px"></i>
+                  </div>
+                  <div class="bar" style="margin-top:12px;background:rgba(255,255,255,.25)"><i style="width:50%;background:#fff"></i></div>
+                </div></div>
+
+                <div class="field-l pad">Assigned to you</div>
+                <div class="pad">
+                  <div class="card" style="border:1.5px solid rgba(245,158,11,.45)">
+                    <div style="display:flex;gap:14px;align-items:flex-start">
+                      <div class="docprev" style="width:74px;height:60px;flex:none"><i data-lucide="play-circle" style="width:28px;height:28px"></i></div>
+                      <div style="flex:1">
+                        <span class="chip blue">Safeguarding</span>
+                        <h2 style="font-size:15.5px;margin:8px 0 4px">Safeguarding Essentials</h2>
+                        <div class="muted" style="font-size:12.5px">Video · 12 min · due in 3 days</div>
+                      </div>
+                    </div>
+                    <button class="btn teal" style="margin-top:13px" data-toast="Training started · progress is recorded"><i data-lucide="play"></i> Start training</button>
+                  </div>
+                </div>
+                <div class="pad"><div class="grouped">
+                  <div class="row"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="shield"></i></div>
+                    <div class="tx"><b>Data Protection (GDPR)</b><span>Video · 9 min · 40% watched</span></div>
+                    <button class="chip teal" data-toast="Resuming · progress is recorded">Resume</button></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="check-circle-2"></i></div>
+                    <div class="tx"><b>Code of Conduct</b><span>Completed · 1 May 2026</span></div><span class="chip green">Done</span></div>
+                  <div class="row"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="check-circle-2"></i></div>
+                    <div class="tx"><b>Fire Safety</b><span>Completed · 12 Apr 2026</span></div><span class="chip green">Done</span></div>
+                </div></div>
+                <div class="tac muted" style="font-size:11px;margin-top:6px">Completion &amp; watch time are recorded to your training record</div>
+                <div class="spacer"></div>
+              </div>
+            </section>
+
             <!-- ============ MORE MENU ============ -->
             <section class="screen" data-screen="more">
               <div class="scroll">
@@ -838,6 +1115,7 @@
                   <div class="mtile" data-go="coi"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="scale"></i></div><b>Conflicts</b><span>1 pending</span></div>
                   <div class="mtile" data-go="complaints"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="message-square-warning"></i></div><b>Complaints</b><span>6 new</span></div>
                   <div class="mtile" data-go="meetings"><div class="ic" style="background:var(--grad-violet)"><i data-lucide="calendar-clock"></i></div><b>Meetings</b><span>1 today</span></div>
+                  <div class="mtile" data-go="training"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="graduation-cap"></i></div><b>Training</b><span>2 to complete</span></div>
                   <div class="mtile" data-go="expenses"><div class="ic" style="background:var(--grad-teal)"><i data-lucide="receipt"></i></div><b>Expenses</b><span>Submit a claim</span></div>
                   <div class="mtile" data-go="billing"><div class="ic" style="background:var(--grad-brand)"><i data-lucide="credit-card"></i></div><b>Billing</b><span>Growth Plan</span></div>
                   <div class="mtile" data-go="help"><div class="ic" style="background:var(--grad-amber)"><i data-lucide="life-buoy"></i></div><b>Help Center</b><span>1 open ticket</span></div>
