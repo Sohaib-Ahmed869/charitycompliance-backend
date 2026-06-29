@@ -13,6 +13,7 @@ const approvalRuleSchema = new mongoose.Schema({
     // IMPORTANT: keep this aligned with UI "tags" so workflows apply correctly.
     // We keep legacy values for backwards compatibility.
     enum: [
+      'related_party_transaction',
       'expense',
       'purchase',
       'grant',
@@ -129,6 +130,7 @@ const approvalMatrixSchema = new mongoose.Schema({
       'project_delivery_changes_approval',
       'refunds_approval',
       'members_approval',
+      'related_party_transaction',
       'other'
     ],
     description: 'Categorizes workflow by module/purpose for validation'
@@ -243,7 +245,8 @@ const getCategoryDisplayName = (category) => {
     project_delivery_approval: 'Project Delivery',
     project_delivery_changes_approval: 'Project Delivery Changes',
     refunds_approval: 'Refunds',
-    members_approval: 'Member Approvals'
+    members_approval: 'Member Approvals',
+    related_party_transaction: 'Related Party Transaction'
   };
   return categoryNames[category] || category;
 };
@@ -286,7 +289,7 @@ approvalMatrixSchema.pre('save', async function(next) {
   }
   
   // Single-workflow categories: no workflow_type allowed
-  const singleWorkflowCategories = ['coi', 'partner_vetting', 'supplier_vetting', 'policy_approval', 'hr_approval', 'risk_treatment', 'complaint_resolution', 'members_approval'];
+  const singleWorkflowCategories = ['coi', 'partner_vetting', 'supplier_vetting', 'policy_approval', 'hr_approval', 'risk_treatment', 'complaint_resolution', 'members_approval', 'related_party_transaction'];
   if (singleWorkflowCategories.includes(doc.workflow_category)) {
     if (doc.workflow_type) {
       return next(new Error(`${getCategoryDisplayName(doc.workflow_category)} workflows cannot have a workflow type`));

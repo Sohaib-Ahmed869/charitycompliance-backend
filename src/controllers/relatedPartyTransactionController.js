@@ -7,10 +7,14 @@
  */
 
 import { asyncHandler, AppError } from '../middleware/errorHandler.js';
-import { logInfo } from '../utils/logger.js';
+import { logInfo, logError } from '../utils/logger.js';
 import { RelatedPartyTransactionRepository } from '../repositories/relatedPartyTransactionRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { assessRisk } from '../services/relatedPartyTransactionService.js';
+import { detectRptFromText } from '../services/rptDetectionService.js';
+import { ApprovalWorkflowService } from '../services/approvalWorkflowService.js';
+import coiRequestSchema from '../db/schemas/platform/coiRequestSchema.js';
+import approvalRequestSchema from '../db/schemas/platform/approvalRequestSchema.js';
 import {
   RELATIONSHIP_TYPES,
   TRANSACTION_TYPES,
@@ -123,8 +127,162 @@ export const createRpt = asyncHandler(async (req, res) => {
   });
 
   logInfo('Related party transaction created', { rptId: created._id, source: source.type, orgId: req.orgId });
-  res.status(201).json({ success: true, data: created });
+
+  // An RPT MUST run through its own approval workflow (final approver = a board
+  // member, enforced at matrix creation). If no workflow is configured we HARD
+  // STOP: roll back the just-created RPT and surface the error so the frontend
+  // opens the workflow-setup guard. If it came from a COI, HALT that COI until
+  // the RPT is resolved.
+  let workflow = null;
+  try {
+    const wf = new ApprovalWorkflowService(req.orgId);
+    const apprReq = await wf.createRptApprovalRequest(created._id, req.user.userId);
+    workflow = { approval_request_id: apprReq?._id, status: 'pending' };
+
+    if (source.type === 'coi' && source.coi_request_id && apprReq?._id) {
+      const CoiRequest = req.tenantDb.models.CoiRequest || req.tenantDb.model('CoiRequest', coiRequestSchema);
+      const coi = await CoiRequest.findById(source.coi_request_id);
+      if (coi && ['pending'].includes(coi.status)) {
+        coi.status = 'paused_for_rpt';
+        coi.current_rpt_request_id = created._id;
+        await coi.save();
+        logInfo('COI halted pending RPT approval', { coiId: coi._id, rptId: created._id });
+      }
+    }
+  } catch (wfErr) {
+    // Roll back the orphan RPT — it can't exist without a workflow to govern it.
+    await repo.hardDelete(created._id).catch((delErr) =>
+      logError('Failed to roll back RPT after workflow error', { rptId: created._id, error: delErr?.message }));
+
+    if (['WORKFLOW_NOT_CONFIGURED', 'NO_MATCHING_RULE', 'NO_APPROVERS_FOUND'].includes(wfErr?.code)) {
+      logInfo('RPT creation blocked — no RPT workflow configured', { code: wfErr.code, orgId: req.orgId });
+      throw new AppError(
+        wfErr.message || 'An approval workflow must be configured for Related Party Transactions before one can be created.',
+        400,
+        wfErr.code,
+        wfErr.details
+      );
+    }
+    logError('RPT workflow trigger failed', { error: wfErr?.message, code: wfErr?.code });
+    throw new AppError(
+      'Could not start the approval workflow for this related party transaction. No record was created.',
+      500,
+      'RPT_WORKFLOW_FAILED'
+    );
+  }
+
+  const fresh = await repo.findById(created._id);
+  res.status(201).json({ success: true, data: fresh || created, workflow });
 });
+
+/**
+ * Called from the approval engine when an RPT's workflow is fully approved
+ * (its final board-member step signed off). Marks the RPT approved and resumes
+ * any COI that was halted for it. Best-effort; never throws to the engine.
+ */
+export async function finalizeRptFromApprovalRequest(tenantDb, rptId, userId) {
+  const repo = new RelatedPartyTransactionRepository(tenantDb);
+  const rpt = await repo.findByIdMutable(rptId);
+  if (!rpt) return;
+
+  await repo.update(rptId, {
+    status: 'approved',
+    board_approval: {
+      approved: true,
+      approval_date: new Date(),
+      reference: 'Approved via RPT workflow',
+      approved_by: userId,
+    },
+    updated_by: userId,
+  });
+
+  await resumeLinkedCoi(tenantDb, rpt);
+}
+
+// Resume a COI that was halted (paused_for_rpt) for this RPT, once the RPT is
+// resolved (approved). No-op if there's no linked COI or it isn't halted. Also
+// clears the "unresolved RPT" halt tag on the COI and its parent workflow.
+async function resumeLinkedCoi(tenantDb, rpt) {
+  const coiId = rpt.source?.coi_request_id;
+  if (!coiId) return;
+  try {
+    const CoiRequest = tenantDb.models.CoiRequest || tenantDb.model('CoiRequest', coiRequestSchema);
+    const coi = await CoiRequest.findById(coiId);
+    if (coi && coi.status === 'paused_for_rpt') {
+      coi.status = 'pending';
+      coi.current_rpt_request_id = null;
+      coi.rpt_unresolved = false;
+      await coi.save();
+      await tagParentWorkflowRptUnresolved(tenantDb, coi.parent_approval_request_id, false);
+      logInfo('COI resumed after RPT approval', { coiId, rptId: rpt._id });
+    }
+  } catch (err) {
+    logError('Failed to resume COI after RPT approval', { coiId, rptId: rpt._id, error: err?.message });
+  }
+}
+
+// Flag the COI (which stays paused_for_rpt) and its parent workflow as halted
+// because their related party transaction was left UNRESOLVED (declined). The
+// flag drives the "halted — unresolved RPT" status label across the app.
+async function haltLinkedCoiForUnresolvedRpt(tenantDb, rpt) {
+  const coiId = rpt.source?.coi_request_id;
+  if (!coiId) return;
+  try {
+    const CoiRequest = tenantDb.models.CoiRequest || tenantDb.model('CoiRequest', coiRequestSchema);
+    const coi = await CoiRequest.findById(coiId);
+    if (coi && coi.status === 'paused_for_rpt') {
+      coi.rpt_unresolved = true;
+      await coi.save();
+      await tagParentWorkflowRptUnresolved(tenantDb, coi.parent_approval_request_id, true);
+      logInfo('COI halted — linked RPT left unresolved', { coiId, rptId: rpt._id });
+    }
+  } catch (err) {
+    logError('Failed to tag COI as halted for unresolved RPT', { coiId, rptId: rpt._id, error: err?.message });
+  }
+}
+
+// Set/clear the rpt_unresolved tag on the workflow that originally triggered the
+// COI (paused_for_coi), so it surfaces the same "halted — unresolved RPT" state.
+async function tagParentWorkflowRptUnresolved(tenantDb, parentApprovalRequestId, unresolved) {
+  if (!parentApprovalRequestId) return;
+  try {
+    const ApprovalRequest = tenantDb.models.ApprovalRequest || tenantDb.model('ApprovalRequest', approvalRequestSchema);
+    const parent = await ApprovalRequest.findById(parentApprovalRequestId);
+    if (parent && parent.status === 'paused_for_coi') {
+      parent.rpt_unresolved = unresolved;
+      await parent.save();
+    }
+  } catch (err) {
+    logError('Failed to tag parent workflow for unresolved RPT', { parentApprovalRequestId, error: err?.message });
+  }
+}
+
+/**
+ * Called from the approval engine when an RPT's workflow is REJECTED (the board
+ * decided the transaction is not acceptable / unresolved). Marks the RPT
+ * rejected and KEEPS any linked COI halted (paused_for_rpt) — the COI cannot
+ * proceed while its related party transaction is unresolved. Best-effort.
+ */
+export async function finalizeRptRejectionFromApprovalRequest(tenantDb, rptId, userId) {
+  const repo = new RelatedPartyTransactionRepository(tenantDb);
+  const rpt = await repo.findByIdMutable(rptId);
+  if (!rpt) return;
+
+  await repo.update(rptId, {
+    status: 'rejected',
+    board_approval: {
+      approved: false,
+      approval_date: new Date(),
+      reference: 'Rejected via RPT workflow',
+      approved_by: userId,
+    },
+    updated_by: userId,
+  });
+
+  // Intentionally do NOT resume the COI — an unresolved RPT keeps it halted.
+  // Tag the COI and its parent workflow so they read as "halted — unresolved RPT".
+  await haltLinkedCoiForUnresolvedRpt(tenantDb, rpt);
+}
 
 export const updateRpt = asyncHandler(async (req, res) => {
   const repo = new RelatedPartyTransactionRepository(req.tenantDb);
@@ -176,6 +334,15 @@ export const recordBoardDecision = asyncHandler(async (req, res) => {
     updated_by: req.user.userId
   };
   const updated = await repo.update(req.params.rptId, patch);
+
+  // Keep the linked COI consistent with the manual decision: resume it when the
+  // RPT is approved (resolved); leave it halted when rejected (unresolved).
+  if (decision === 'approved') {
+    await resumeLinkedCoi(req.tenantDb, existing);
+  } else {
+    await haltLinkedCoiForUnresolvedRpt(req.tenantDb, existing);
+  }
+
   res.json({ success: true, data: updated });
 });
 
@@ -218,6 +385,18 @@ export const deleteRpt = asyncHandler(async (req, res) => {
   if (!existing) throw new AppError('Related party transaction not found', 404, 'RPT_NOT_FOUND');
   await repo.update(req.params.rptId, { is_active: false, updated_by: req.user.userId });
   res.json({ success: true, message: 'Related party transaction archived' });
+});
+
+// AI/keyword detection — does this COI declaration look like a Related Party
+// Transaction? Returns { isLikely, confidence, keywords, reason, relationshipType,
+// transactionType }. Advisory only; never persists.
+export const detectRpt = asyncHandler(async (req, res) => {
+  const result = await detectRptFromText({
+    reason: req.body.reason,
+    personName: req.body.personName,
+    personDetails: req.body.personDetails,
+  });
+  res.json({ success: true, data: result });
 });
 
 // Live risk preview — scores a would-be transaction WITHOUT persisting it, so the

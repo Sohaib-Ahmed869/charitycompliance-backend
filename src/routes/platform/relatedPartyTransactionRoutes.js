@@ -44,6 +44,18 @@ router.post(
   rpt.createRpt
 );
 
+// AI/keyword detection of RPT likelihood from a COI declaration.
+router.post(
+  '/detect',
+  [
+    body('reason').optional().isString(),
+    body('personName').optional().isString(),
+    body('personDetails').optional().isString(),
+  ],
+  validate,
+  rpt.detectRpt
+);
+
 // Live risk preview (no persistence) — powers the score read-out in the form.
 router.post(
   '/assess',

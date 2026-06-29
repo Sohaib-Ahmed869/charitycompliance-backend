@@ -62,6 +62,12 @@ export class RelatedPartyTransactionRepository {
     return await this.Rpt.findByIdAndUpdate(id, { $set: patch }, { new: true, runValidators: true });
   }
 
+  // Permanently remove a record. Used to roll back a just-created RPT when its
+  // mandatory approval workflow can't be started (so no orphan RPT is left).
+  async hardDelete(id) {
+    return await this.Rpt.findByIdAndDelete(id);
+  }
+
   async countByStatus(orgId) {
     const rows = await this.Rpt.aggregate([
       { $match: { org_id: orgId, is_active: true } },

@@ -17,6 +17,7 @@ import { PolicyRepository } from '../repositories/policyRepository.js';
 import { ProjectRegisterRepository } from '../repositories/projectRegisterRepository.js';
 import { BoardMemberRepository } from '../repositories/boardMemberRepository.js';
 import { UserRepository } from '../repositories/userRepository.js';
+import { RelatedPartyTransactionRepository } from '../repositories/relatedPartyTransactionRepository.js';
 import { OrganizationRepository } from '../repositories/organizationRepository.js';
 import { DonorRepository } from '../repositories/donorRepository.js';
 import { DocumentRepository } from '../repositories/documentRepository.js';
@@ -936,6 +937,73 @@ export class ApprovalWorkflowService {
    * Create approval request for a policy (action_type: policy)
    * Policies follow the normal approval matrix workflow only (no department head pre-approval).
    */
+  /**
+   * Create the approval workflow for a Related Party Transaction. Amount is the
+   * transaction value (used for tiered matrices). Sets the RPT to 'under_review'.
+   * The matrix is configured in Permissions & Workflows (category
+   * 'related_party_transaction'); its final step must be a board member
+   * (enforced at matrix-creation time). Throws WORKFLOW_NOT_CONFIGURED when no
+   * RPT matrix exists — callers treat that as "no workflow, manual board path".
+   */
+  async createRptApprovalRequest(rptId, submittedBy) {
+    const tenantDb = await this.getTenantDb();
+    this._ensureTenantModels(tenantDb);
+    const orgObjectId = await this._getOrgObjectId();
+    const rptRepo = new RelatedPartyTransactionRepository(tenantDb);
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const userPositionRepo = new UserPositionRepository(tenantDb);
+
+    const rpt = await rptRepo.findById(rptId);
+    if (!rpt) throw new AppError('Related party transaction not found', 404, 'RPT_NOT_FOUND');
+
+    const amount = Number(rpt.transaction_value) || 0;
+    const { matrix, rule } = await this.findMatchingRule('related_party_transaction', amount, orgObjectId);
+
+    const approvers = [];
+    for (const approverConfig of rule.requires_approval_from) {
+      let userIds = [];
+      if (approverConfig.user_id) userIds = [approverConfig.user_id];
+      else if (approverConfig.position_id) userIds = await userPositionRepo.findUsersByPositionId(approverConfig.position_id);
+      if (userIds.length > 0) {
+        userIds.forEach((userId) => approvers.push({ user_id: userId, position_id: approverConfig.position_id || null, department_id: approverConfig.department_id || null, level: approverConfig.approval_level }));
+      } else {
+        approvers.push({ user_id: null, position_id: approverConfig.position_id || null, department_id: approverConfig.department_id || null, level: approverConfig.approval_level });
+      }
+    }
+    approvers.sort((a, b) => a.level - b.level);
+
+    const approvalSteps = approvers.map((approver) => ({
+      level: approver.level,
+      approver_user_id: approver.user_id || undefined,
+      approver_position_id: approver.position_id,
+      approver_department_id: approver.department_id,
+      status: 'pending'
+    }));
+
+    const approvalRequest = await approvalRequestRepo.create({
+      org_id: orgObjectId,
+      request_type: 'related_party_transaction',
+      entity_id: rptId,
+      entity_type: 'related_party_transaction',
+      amount,
+      approval_matrix_id: matrix._id,
+      approval_type: rule.approval_type,
+      status: 'pending',
+      approval_steps: approvalSteps,
+      submitted_by: submittedBy
+    });
+
+    await rptRepo.update(rptId, {
+      approval_matrix_id: matrix._id,
+      approval_request_id: approvalRequest._id,
+      status: 'under_review',
+      updated_by: submittedBy
+    });
+
+    logInfo('RPT approval request created', { rptId, approvalRequestId: approvalRequest._id, approversCount: approvers.length });
+    return approvalRequest;
+  }
+
   async createPolicyApprovalRequest(policyId, submittedBy, changeControlNote = null) {
     const tenantDb = await this.getTenantDb();
     this._ensureTenantModels(tenantDb);
@@ -1428,6 +1496,15 @@ export class ApprovalWorkflowService {
       } else if (request.entity_type === 'policy') {
         const policyRepo = new PolicyRepository(tenantDb);
         await policyRepo.update(request.entity_id, { status: 'draft' });
+      } else if (request.entity_type === 'related_party_transaction') {
+        // RPT rejected → mark it rejected; the linked COI stays HALTED.
+        try {
+          const { finalizeRptRejectionFromApprovalRequest } = await import('../controllers/relatedPartyTransactionController.js');
+          await finalizeRptRejectionFromApprovalRequest(tenantDb, request.entity_id, userId);
+          logInfo('RPT rejected; linked COI remains halted', { approvalRequestId, entityId: request.entity_id });
+        } catch (rptErr) {
+          logError('Error finalising RPT after workflow rejection', { approvalRequestId, entityId: request.entity_id, error: rptErr.message });
+        }
       }
 
       // Send rejection notification email to submitter
@@ -1521,6 +1598,12 @@ export class ApprovalWorkflowService {
               rejection_reason: 'Rejected by one or more approvers',
               last_action_by: userId
             });
+          } catch (_) { /* finalizer log handles it */ }
+        } else if (request.entity_type === 'related_party_transaction') {
+          // RPT rejected in parallel approval → mark rejected; COI stays HALTED.
+          try {
+            const { finalizeRptRejectionFromApprovalRequest } = await import('../controllers/relatedPartyTransactionController.js');
+            await finalizeRptRejectionFromApprovalRequest(tenantDb, request.entity_id, userId);
           } catch (_) { /* finalizer log handles it */ }
         }
         return updatedRequest;
@@ -1787,6 +1870,16 @@ export class ApprovalWorkflowService {
             error: transferErr.message
           });
         }
+      } else if (request.entity_type === 'related_party_transaction') {
+        // RPT workflow approved → mark the RPT approved and RESUME the halted COI
+        // (if it was spawned from one). Delegated to the RPT controller's finalizer.
+        try {
+          const { finalizeRptFromApprovalRequest } = await import('../controllers/relatedPartyTransactionController.js');
+          await finalizeRptFromApprovalRequest(tenantDb, request.entity_id, userId);
+          logInfo('RPT finalised + linked COI resumed (approved)', { approvalRequestId, entityId: request.entity_id });
+        } catch (rptErr) {
+          logError('Error finalising RPT after workflow approval', { approvalRequestId, entityId: request.entity_id, error: rptErr.message });
+        }
       }
 
       logInfo('All approvals completed', { approvalRequestId, entityId: request.entity_id, entityType: request.entity_type });
@@ -1797,6 +1890,7 @@ export class ApprovalWorkflowService {
         risk: 'Risk Assessment',
         risk_treatment: 'Risk Treatment',
         coi: 'Conflict of Interest',
+        related_party_transaction: 'Related Party Transaction',
         purchase: 'Purchase',
         grant: 'Grant',
         funding_agreement: 'Funding Agreement',

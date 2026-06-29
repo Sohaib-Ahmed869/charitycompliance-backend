@@ -138,9 +138,25 @@ const coiRequestSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['pending', 'approved', 'rejected', 'cancelled'],
+    // paused_for_rpt: the COI is halted while a linked Related Party Transaction
+    // runs its own approval workflow; it resumes ('pending') when the RPT is approved.
+    enum: ['pending', 'approved', 'rejected', 'cancelled', 'paused_for_rpt'],
     default: 'pending',
     index: true
+  },
+  // Set when this COI spawned an RPT and is halted until that RPT is approved.
+  current_rpt_request_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'RelatedPartyTransaction',
+    default: null
+  },
+  // True once the linked RPT has been left UNRESOLVED (declined). The COI stays
+  // `paused_for_rpt`, but this flag distinguishes "halted — unresolved RPT" from
+  // "on hold — awaiting RPT approval" for status display. Cleared if the RPT is
+  // later resolved (approved).
+  rpt_unresolved: {
+    type: Boolean,
+    default: false
   },
   approval_steps: [coiStepSchema],
   submitted_by: {

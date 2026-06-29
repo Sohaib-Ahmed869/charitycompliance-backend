@@ -1191,6 +1191,30 @@ export const createApprovalMatrix = asyncHandler(async (req, res) => {
     }
   }
 
+  // Related Party Transaction workflows must end with a board-level approver.
+  if (workflow_category === 'related_party_transaction' && requiresApprovalFrom.length > 0) {
+    const lastStep = requiresApprovalFrom.reduce((a, b) => (a.approval_level > b.approval_level ? a : b));
+    if (lastStep.position_id) {
+      const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+      const bmRepo = new BoardMemberRepository(tenantDb);
+      const hasBoardForPosition = await bmRepo.BoardMember.exists({
+        org_id: org._id,
+        is_active: true,
+        is_board_member: true,
+        position_id: lastStep.position_id
+      });
+      if (!hasBoardForPosition) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'VALIDATION_ERROR',
+            message: 'Related Party Transaction workflows must end with a board-level position as the final approver.'
+          }
+        });
+      }
+    }
+  }
+
   const matrix = await approvalMatrixRepo.create(matrixData);
 
   res.status(201).json({
@@ -1307,6 +1331,30 @@ export const updateApprovalMatrix = asyncHandler(async (req, res) => {
             error: {
               code: 'VALIDATION_ERROR',
               message: 'Risk Treatment workflows must end with a board-level position as the final approver.'
+            }
+          });
+        }
+      }
+    }
+
+    // Related Party Transaction workflows must also end with a board-level approver.
+    if (categoryToCheck === 'related_party_transaction' && requiresApprovalFrom.length > 0) {
+      const lastStep = requiresApprovalFrom.reduce((a, b) => (a.approval_level > b.approval_level ? a : b));
+      if (lastStep.position_id) {
+        const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+        const bmRepo = new BoardMemberRepository(tenantDb);
+        const hasBoardForPosition = await bmRepo.BoardMember.exists({
+          org_id: org._id,
+          is_active: true,
+          is_board_member: true,
+          position_id: lastStep.position_id
+        });
+        if (!hasBoardForPosition) {
+          return res.status(400).json({
+            success: false,
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: 'Related Party Transaction workflows must end with a board-level position as the final approver.'
             }
           });
         }

@@ -202,6 +202,10 @@ export class CoiWorkflowService {
       throw new AppError('COI request not found', 404, 'COI_REQUEST_NOT_FOUND');
     }
 
+    if (request.status === 'paused_for_rpt') {
+      throw new AppError('This COI is on hold while its linked Related Party Transaction is approved.', 400, 'COI_PAUSED_FOR_RPT');
+    }
+
     if (request.status !== 'pending') {
       throw new AppError(`COI request is already ${request.status}`, 400, 'COI_REQUEST_NOT_PENDING');
     }

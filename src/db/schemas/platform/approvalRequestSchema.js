@@ -89,6 +89,7 @@ const approvalRequestSchema = new mongoose.Schema({
     // IMPORTANT: keep this aligned with ApprovalMatrix.rules.action_type (UI tags).
     // Keep legacy values for backwards compatibility.
     enum: [
+      'related_party_transaction',
       'expense',
       'purchase',
       'grant',
@@ -141,6 +142,7 @@ const approvalRequestSchema = new mongoose.Schema({
     type: String,
     required: true,
     enum: [
+      'related_party_transaction',
       'expense',
       'purchase',
       'policy',
@@ -258,6 +260,14 @@ const approvalRequestSchema = new mongoose.Schema({
   coi_request_ids: [{
     type: mongoose.Schema.Types.ObjectId
   }],
+  // True when a COI raised against this workflow spawned an RPT that was left
+  // UNRESOLVED (declined). The workflow stays `paused_for_coi`, but this flag
+  // surfaces it as "halted — unresolved RPT" instead of plain "on hold — COI".
+  // Cleared if the RPT is later resolved (approved).
+  rpt_unresolved: {
+    type: Boolean,
+    default: false
+  },
   // Risks attached to this approval during its lifetime. Mirror of
   // coi_request_ids — but unlike COI, attaching a risk does NOT change
   // approval.status. The approval keeps progressing while the risk runs

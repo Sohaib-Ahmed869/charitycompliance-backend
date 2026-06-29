@@ -130,6 +130,13 @@ const relatedPartyTransactionSchema = new mongoose.Schema(
 
     status: { type: String, enum: RPT_STATUSES, default: 'identified', index: true },
 
+    // ── Approval workflow ──────────────────────────────────────────────
+    // The RPT runs its own approval workflow (final approver = board member).
+    // Set when the workflow is triggered on creation; the COI it came from is
+    // halted until this workflow is approved.
+    approval_matrix_id: { type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalMatrix', default: null },
+    approval_request_id: { type: mongoose.Schema.Types.ObjectId, ref: 'ApprovalRequest', default: null },
+
     // ── Provenance ─────────────────────────────────────────────────────
     // How this record was created. 'coi' records carry the originating COI so
     // the audit trail runs declaration → assessment → approval → disclosure.
