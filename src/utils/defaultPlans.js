@@ -101,8 +101,8 @@ export const DEFAULT_PLANS = [
     support: { channel: 'email', responseSLAHours: 48, uptimeSLAPct: null },
     trial_days: 14,
     metadata: {
-      description: 'Small charities ($50K–$500K)',
-      targetCustomer: 'Small charities ($50K–$500K)',
+      description: 'Small charities ($50K–$1M)',
+      targetCustomer: 'Small charities ($50K–$1M)',
       sortOrder: 10
     }
   },
@@ -127,8 +127,8 @@ export const DEFAULT_PLANS = [
     support: { channel: 'priority', responseSLAHours: 24, uptimeSLAPct: null },
     trial_days: 14,
     metadata: {
-      description: 'Medium charities ($500K–$3M)',
-      targetCustomer: 'Medium charities ($500K–$3M)',
+      description: 'Medium charities ($1M–$5M)',
+      targetCustomer: 'Medium charities ($1M–$5M)',
       sortOrder: 20
     }
   },
@@ -153,8 +153,8 @@ export const DEFAULT_PLANS = [
     support: { channel: 'dedicated-csm', responseSLAHours: 4, uptimeSLAPct: 99.9 },
     trial_days: 0,
     metadata: {
-      description: 'Large charities ($3M+) / groups',
-      targetCustomer: 'Large charities ($3M+) / groups',
+      description: 'Large charities ($5M–$10M) / groups',
+      targetCustomer: 'Large charities ($5M–$10M) / groups',
       sortOrder: 30
     }
   },
@@ -186,7 +186,7 @@ export const DEFAULT_PLANS = [
     is_contact_sales: true,
     metadata: {
       description: 'Networks, federations and complex group structures — built to fit.',
-      targetCustomer: 'Federations, peak bodies, multi-state groups',
+      targetCustomer: 'Federations, peak bodies, groups ($10M+)',
       sortOrder: 40
     }
   }

@@ -104,8 +104,8 @@ const PLANS = [
     support: { channel: 'email', responseSLAHours: 48, uptimeSLAPct: null },
     trial_days: 14,
     metadata: {
-      description: 'Small charities ($50K–$500K)',
-      targetCustomer: 'Small charities ($50K–$500K)',
+      description: 'Small charities ($50K–$1M)',
+      targetCustomer: 'Small charities ($50K–$1M)',
       sortOrder: 10
     },
     // Legacy mirrors (kept in sync so any old reader still works).
@@ -145,8 +145,8 @@ const PLANS = [
     support: { channel: 'priority', responseSLAHours: 24, uptimeSLAPct: null },
     trial_days: 14,
     metadata: {
-      description: 'Medium charities ($500K–$3M)',
-      targetCustomer: 'Medium charities ($500K–$3M)',
+      description: 'Medium charities ($1M–$5M)',
+      targetCustomer: 'Medium charities ($1M–$5M)',
       sortOrder: 20
     },
     monthly_price: 1299,
@@ -185,8 +185,8 @@ const PLANS = [
     support: { channel: 'dedicated-csm', responseSLAHours: 4, uptimeSLAPct: 99.9 },
     trial_days: 0,
     metadata: {
-      description: 'Large charities ($3M+) / groups',
-      targetCustomer: 'Large charities ($3M+) / groups',
+      description: 'Large charities ($5M–$10M) / groups',
+      targetCustomer: 'Large charities ($5M–$10M) / groups',
       sortOrder: 30
     },
     monthly_price: 4999,

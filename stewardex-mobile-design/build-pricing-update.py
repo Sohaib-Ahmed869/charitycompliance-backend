@@ -111,9 +111,9 @@ body("All prices are in Australian dollars (AUD) and exclude GST. Annual billing
 heading(2, "Plan line-up & pricing")
 make_table(
     ["Plan","Monthly","Annual (save 10%)","Best for","Staff seats","Approvals / mo","Storage"],
-    [["Starter","$399","$4,309","Small charities ($50K–$500K)","5","50","20 GB"],
-     ["Professional","$1,499","$16,189","Medium charities ($500K–$3M)","25","750","100 GB"],
-     ["Organisational","$5,999","$64,789","Larger charities ($3M–$10M)","Unlimited","1,500","Unlimited"],
+    [["Starter","$399","$4,309","Small charities ($50K–$1M)","5","50","20 GB"],
+     ["Professional","$1,499","$16,189","Medium charities ($1M–$5M)","25","750","100 GB"],
+     ["Organisational","$5,999","$64,789","Larger charities ($5M–$10M)","Unlimited","1,500","Unlimited"],
      ["Enterprise","Contact us","Contact us","Large organisations & groups ($10M+)","Unlimited","Unlimited","Unlimited"]],
     widths=[Cm(2.7),Cm(1.9),Cm(2.3),Cm(4.4),Cm(1.9),Cm(1.9),Cm(1.9)], fontsize=9,
     center_cols={1,2,4,5,6})
