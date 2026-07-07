@@ -268,8 +268,10 @@ import itRegisterRoutes from './routes/platform/itRegisterRoutes.js';
 import offboardingRoutes from './routes/platform/offboardingRoutes.js';
 import sweepFundsRoutes from './routes/platform/sweepFundsRoutes.js';
 import chatRoutes from './routes/platform/chatRoutes.js';
+import pushTokenRoutes from './routes/platform/pushTokenRoutes.js';
 // Calcite SuperAdmin portal (separate /admin namespace, isolated from tenant routes).
 import adminPlanRoutes from './routes/admin/planRoutes.js';
+import adminReminderConfigRoutes from './routes/admin/reminderConfigRoutes.js';
 import adminAuthRoutes from './routes/admin/authRoutes.js';
 import adminOpsRoutes from './routes/admin/opsRoutes.js';
 import adminStaffRoutes from './routes/admin/staffRoutes.js';
@@ -345,6 +347,8 @@ if (isModuleEnabled('it-register')) app.use('/api/v1/platform/it-register', itRe
 if (isModuleEnabled('offboarding')) app.use('/api/v1/platform/offboarding', offboardingRoutes);
 if (isModuleEnabled('sweep-funds')) app.use('/api/v1/platform/sweep-funds', sweepFundsRoutes);
 if (isModuleEnabled('chat')) app.use('/api/v1/platform/chat', chatRoutes);
+// Mobile push token registration — cross-cutting, always mounted (no feature flag).
+app.use('/api/v1/platform/push-tokens', pushTokenRoutes);
 
 // Calcite SuperAdmin portal — sits outside the /platform namespace.
 // Auth (login + me) is public; everything else is gated by
@@ -357,6 +361,7 @@ app.use('/api/v1/admin', requireIpAllowlist);
 
 app.use('/api/v1/admin/auth', adminAuthRoutes);
 app.use('/api/v1/admin', adminPlanRoutes);
+app.use('/api/v1/admin', adminReminderConfigRoutes);
 app.use('/api/v1/admin', adminOpsRoutes);
 app.use('/api/v1/admin', adminStaffRoutes);
 app.use('/api/v1/admin', adminTicketsRoutes);

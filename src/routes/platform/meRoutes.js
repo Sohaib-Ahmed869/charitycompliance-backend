@@ -30,6 +30,9 @@ router.patch(
 );
 router.post('/profile/picture', uploadSingle, handleUploadError, profileController.uploadProfilePicture);
 
+// Self-service account closure (soft delete) — App Store compliance.
+router.post('/delete-account', profileController.deleteAccount);
+
 // Logout — JWT is stateless so there is nothing to invalidate server-side;
 // this endpoint exists so the client can signal an explicit sign-out, which
 // the global audit middleware records as a "User logged out" event.

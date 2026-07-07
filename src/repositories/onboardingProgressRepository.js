@@ -87,12 +87,16 @@ export class OnboardingProgressRepository {
     const initialCompletionPercentage = Math.round((completedInitialSteps / 4) * 100);
     
     progress.initial_completion_percentage = initialCompletionPercentage;
-    
-    // Mark initial onboarding as complete if all 4 steps are done
-    if (completedInitialSteps === 4 && !progress.initial_onboarding_complete) {
-      progress.initial_onboarding_complete = true;
-      progress.initial_onboarding_completed_at = new Date();
-    }
+
+    // NOTE: do NOT auto-complete initial onboarding here. Completing the four
+    // data steps (org details → departments → positions → approval matrix) is
+    // NOT the end of the wizard — the user still has the Review step (Step 5).
+    // Flipping `initial_onboarding_complete` as soon as those four are recorded
+    // (which a template setup can do all at once) made ProtectedRoute + the
+    // wizard bounce the owner to /dashboard mid-flow — e.g. right after the
+    // Stripe subscription gate reload, skipping the rest of onboarding.
+    // `initial_onboarding_complete` is set ONLY by handleStep5() when the user
+    // actually submits the Review step (via POST /onboarding/complete).
 
     // 4 initial onboarding steps + 5 dashboard profile steps = 9 total
     const profileSteps = [

@@ -22,6 +22,7 @@ import marketplacePolicySchema from '../schemas/router/marketplacePolicySchema.j
 import marketplacePurchaseSchema from '../schemas/router/marketplacePurchaseSchema.js';
 import marketplacePublicPurchaseSchema from '../schemas/router/marketplacePublicPurchaseSchema.js';
 import planRequestSchema from '../schemas/router/planRequestSchema.js';
+import reminderConfigSchema from '../schemas/router/reminderConfigSchema.js';
 
 let routerConnection = null;
 
@@ -46,7 +47,8 @@ const getRouterModels = () => {
     MarketplacePolicy: routerConnection.model('MarketplacePolicy', marketplacePolicySchema),
     MarketplacePurchase: routerConnection.model('MarketplacePurchase', marketplacePurchaseSchema),
     MarketplacePublicPurchase: routerConnection.model('MarketplacePublicPurchase', marketplacePublicPurchaseSchema),
-    PlanRequest: routerConnection.model('PlanRequest', planRequestSchema)
+    PlanRequest: routerConnection.model('PlanRequest', planRequestSchema),
+    ReminderConfig: routerConnection.model('ReminderConfig', reminderConfigSchema)
   };
 };
 

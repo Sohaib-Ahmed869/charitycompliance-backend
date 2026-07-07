@@ -14,8 +14,10 @@
  */
 
 import webpush from 'web-push';
+import { Expo } from 'expo-server-sdk';
 import { webPush as webPushConfig } from '../config/index.js';
 import pushSubscriptionSchema from '../db/schemas/platform/pushSubscriptionSchema.js';
+import PushTokenRepository from '../repositories/pushTokenRepository.js';
 import { logError, logInfo } from '../utils/logger.js';
 
 // Configure VAPID once at module load. If keys are missing, `configured`
@@ -90,4 +92,75 @@ export async function sendPushToUsers(tenantDb, userIds, payload) {
   }));
 }
 
-export default { isPushConfigured, sendPushToUsers };
+// ─────────────────────────────────────────────────────────────────────────
+// Expo mobile push (Stewardex mobile app) — MOBILE_PUSH_NOTIFICATIONS_SPEC §4
+//
+// Separate transport from Web Push above: this delivers REMOTE push to the
+// Expo (React Native) app via Expo's Push API. The backend never talks to
+// FCM/APNs directly; Expo relays using the credentials in the Expo project.
+// Tokens live in the tenant DB (push_tokens collection).
+// ─────────────────────────────────────────────────────────────────────────
+
+const expo = new Expo(
+  process.env.EXPO_ACCESS_TOKEN ? { accessToken: process.env.EXPO_ACCESS_TOKEN } : {}
+);
+
+/**
+ * Send one notification to a set of users within a tenant via Expo push.
+ *
+ * Best-effort / fire-and-forget by contract: everything is wrapped so a push
+ * failure NEVER blocks or breaks the event that triggered it.
+ *
+ * @param {object} tenantDb  the tenant mongoose connection (req.tenantDb or scheduler conn)
+ * @param {Array}  userIds   user ObjectIds/strings to notify
+ * @param {object} payload   { title, body, data } — data drives the app deep-link (spec §6)
+ * @returns {Promise<string[]>} receipt ids for an optional async receipt sweep (may be empty)
+ */
+export async function sendToUsers(tenantDb, userIds, { title, body, data = {} } = {}) {
+  try {
+    if (!tenantDb) return [];
+    const ids = (Array.isArray(userIds) ? userIds : [userIds]).filter(Boolean);
+    if (!ids.length) return [];
+
+    const repo = new PushTokenRepository(tenantDb);
+    const rows = await repo.listForUsers(ids);
+    const tokens = [...new Set(rows.map((r) => r.token))].filter((t) => Expo.isExpoPushToken(t));
+    if (!tokens.length) return [];
+
+    const messages = tokens.map((to) => ({
+      to,
+      sound: 'default',
+      title,
+      body,
+      data, // { type, id, screen, params } — see spec §6
+      channelId: 'default', // matches the Android channel the app creates
+      priority: 'high'
+    }));
+
+    const tickets = [];
+    for (const chunk of expo.chunkPushNotifications(messages)) {
+      try {
+        const res = await expo.sendPushNotificationsAsync(chunk);
+        tickets.push(...res.map((t, i) => ({ ...t, token: chunk[i].to })));
+      } catch (err) {
+        // Log and continue — never let a push failure break the triggering request.
+        logError('[push] Expo push chunk failed:', err?.message || err);
+      }
+    }
+
+    // Immediate ticket errors: prune tokens Expo already knows are dead.
+    const dead = tickets
+      .filter((t) => t.status === 'error' && t.details?.error === 'DeviceNotRegistered')
+      .map((t) => t.token);
+    if (dead.length) {
+      await repo.removeManyByTokens(dead).catch(() => {});
+    }
+
+    return tickets.filter((t) => t.status === 'ok').map((t) => t.id).filter(Boolean);
+  } catch (err) {
+    logError('[push] sendToUsers failed:', err?.message || err);
+    return [];
+  }
+}
+
+export default { isPushConfigured, sendPushToUsers, sendToUsers };

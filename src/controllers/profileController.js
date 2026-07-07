@@ -104,6 +104,26 @@ export const uploadProfilePicture = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * POST /me/delete-account — self-service account closure (soft delete /
+ * suspension). Sets the caller's own user to status 'inactive' + locked, so the
+ * auth middleware returns 403 ACCOUNT_INACTIVE on every subsequent request and
+ * they can no longer sign in. Data is retained (governance records must persist)
+ * and an administrator can restore access. Exists to satisfy the App Store
+ * requirement that in-app account creation is matched by in-app deletion.
+ */
+export const deleteAccount = asyncHandler(async (req, res) => {
+  const { user, userRepo } = await getTenantAndProfileContext(req);
+  await userRepo.update(user._id, {
+    status: 'inactive',
+    locked: true,
+    locked_until: null,
+    mfa_enabled: false,
+    mfa_secret: null
+  });
+  res.json({ success: true, message: 'Your account has been closed and you have been signed out.' });
+});
+
 /** PATCH /me/profile - update current user's name/email */
 export const updateProfile = asyncHandler(async (req, res) => {
   const { boardMember, user, org, boardMemberRepo, userRepo } = await getTenantAndProfileContext(req);

@@ -45,6 +45,23 @@ const approvalStepSchema = new mongoose.Schema({
   rejected_at: {
     type: Date
   },
+  /**
+   * When this step became the CURRENT pending step (routed to its approver).
+   * Drives the approval reminder scheduler's cadence. Set at creation for the
+   * initially-active step(s) and when a later step is advanced to pending.
+   */
+  activated_at: {
+    type: Date,
+    default: null
+  },
+  /**
+   * Offset-hours (from reminder config) already reminded for this step, so the
+   * scheduler never sends the same reminder twice.
+   */
+  reminders_sent: {
+    type: [Number],
+    default: []
+  },
   comments: {
     type: String
   },

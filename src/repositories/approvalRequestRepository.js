@@ -12,6 +12,51 @@ import approvalMatrixSchema from '../db/schemas/platform/approvalMatrixSchema.js
 import partnerVettingSchema from '../db/schemas/platform/partnerVettingSchema.js';
 import { UserRepository } from './userRepository.js';
 
+/**
+ * Indices of the steps that are CURRENTLY awaiting a decision.
+ *  - sequential: the first still-pending step (all earlier ones approved).
+ *  - parallel / any: every pending step.
+ * Used to stamp `activated_at` (drives approval reminders) and to route the
+ * "approval needs your review" push to the right approver(s).
+ */
+function computeActiveStepIndices(steps = [], approvalType = 'sequential') {
+  const pending = [];
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
+    const status = s?.status || 'pending';
+    if (status === 'pending') pending.push(i);
+  }
+  if (!pending.length) return [];
+  if (approvalType === 'parallel' || approvalType === 'any') return pending;
+  // sequential — only the first pending step is active.
+  return [pending[0]];
+}
+
+/** Human-friendly label for a request type (used in push copy). */
+function humanizeRequestType(t) {
+  return String(t || 'request').replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/**
+ * Best-effort routed push to a set of approver user ids for an approval request.
+ * Fully wrapped — never throws, never blocks the caller (spec §4/§5).
+ */
+async function fireRoutedApproverPush(tenantDb, requestId, requestType, approverUserIds) {
+  try {
+    const ids = [...new Set((approverUserIds || []).filter(Boolean).map(String))];
+    if (!ids.length || !tenantDb) return;
+    const { sendToUsers } = await import('../services/pushService.js');
+    const id = String(requestId);
+    await sendToUsers(tenantDb, ids, {
+      title: 'Approval needs your review',
+      body: humanizeRequestType(requestType),
+      data: { type: 'approval', id, screen: 'ApprovalDetail', params: { id } }
+    });
+  } catch {
+    // swallow — push is best-effort
+  }
+}
+
 export class ApprovalRequestRepository {
   constructor(tenantDb) {
     // Ensure related models are registered on this tenant connection so populate() works
@@ -199,8 +244,31 @@ export class ApprovalRequestRepository {
         };
       });
     }
+    // Stamp activated_at on the step(s) that are immediately awaiting a
+    // decision, so the approval reminder scheduler has a cadence baseline.
+    // (MOBILE_PUSH_NOTIFICATIONS_SPEC §5 / task §3 — done centrally here so it
+    // covers every workflow-creation path in approvalWorkflowService.)
+    const activeIndices = computeActiveStepIndices(data?.approval_steps, data?.approval_type);
+    const now = new Date();
+    for (const idx of activeIndices) {
+      const step = data.approval_steps[idx];
+      if (step && !step.activated_at) step.activated_at = now;
+    }
+
     const approvalRequest = new this.ApprovalRequest(data);
-    return await approvalRequest.save();
+    const saved = await approvalRequest.save();
+
+    // Best-effort routed push to the initial approver(s). Never blocks/throws.
+    try {
+      const approverIds = activeIndices
+        .map((idx) => saved.approval_steps?.[idx]?.approver_user_id)
+        .filter(Boolean);
+      await fireRoutedApproverPush(this.ApprovalRequest.db, saved._id, saved.request_type, approverIds);
+    } catch {
+      // swallow — push is best-effort
+    }
+
+    return saved;
   }
 
   async update(id, updateData) {
@@ -242,7 +310,35 @@ export class ApprovalRequestRepository {
     );
     console.log('[updateApprovalStep] Native update result:', JSON.stringify({ matched: result.matchedCount, modified: result.modifiedCount, keys: Object.keys($set) }));
 
-    return await this.ApprovalRequest.findById(requestId);
+    const fresh = await this.ApprovalRequest.findById(requestId);
+
+    // When a step is approved in a sequential workflow, the next pending step
+    // becomes the current one — stamp its activated_at (reminder baseline) and
+    // fire a best-effort routed push. Fully guarded; never blocks the decision.
+    try {
+      if (updateData?.status === 'approved' && fresh && String(fresh.status) === 'pending') {
+        const steps = fresh.approval_steps || [];
+        const activeIndices = computeActiveStepIndices(steps, fresh.approval_type);
+        const now = new Date();
+        const toStamp = [];
+        for (const idx of activeIndices) {
+          if (!steps[idx]?.activated_at) toStamp.push(idx);
+        }
+        if (toStamp.length) {
+          const $setActivate = {};
+          for (const idx of toStamp) $setActivate[`approval_steps.${idx}.activated_at`] = now;
+          await this.ApprovalRequest.collection.updateOne({ _id: fresh._id }, { $set: $setActivate });
+          const approverIds = toStamp
+            .map((idx) => steps[idx]?.approver_user_id)
+            .filter(Boolean);
+          await fireRoutedApproverPush(this.ApprovalRequest.db, fresh._id, fresh.request_type, approverIds);
+        }
+      }
+    } catch {
+      // swallow — activation/push is best-effort
+    }
+
+    return fresh;
   }
 
   async updateStatus(id, status, additionalData = {}) {
