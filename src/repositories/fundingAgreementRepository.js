@@ -5,6 +5,7 @@
  */
 
 import fundingAgreementSchema from '../db/schemas/platform/fundingAgreementSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 export class FundingAgreementRepository {
   constructor(tenantDb) {
@@ -19,7 +20,7 @@ export class FundingAgreementRepository {
     }
 
     if (filters.search) {
-      const pattern = new RegExp(filters.search, 'i');
+      const pattern = new RegExp(escapeRegex(filters.search), 'i');
       query.$or = [
         { agreement_title: pattern },
         { partner_name: pattern },

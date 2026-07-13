@@ -64,6 +64,15 @@ export const forgotPassword = asyncHandler(async (req, res) => {
   });
 });
 
+// AUTH-008: authenticated self-service password change (current → new).
+export const changePassword = asyncHandler(async (req, res) => {
+  const userId = req.user?.userId;
+  const orgId = req.orgId || req.user?.orgId;
+  const { currentPassword, newPassword } = req.body;
+  await authService.changePassword(orgId, userId, currentPassword, newPassword);
+  res.json({ success: true, message: 'Password changed successfully.' });
+});
+
 export const resetPassword = asyncHandler(async (req, res) => {
   const { token, password } = req.body;
   await authService.resetPassword(token, password);

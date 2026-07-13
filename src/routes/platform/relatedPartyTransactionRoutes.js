@@ -71,6 +71,9 @@ router.get('/:rptId', [param('rptId').isMongoId()], validate, rpt.getRpt);
 router.put('/:rptId', [param('rptId').isMongoId()], validate, rpt.updateRpt);
 router.delete('/:rptId', [param('rptId').isMongoId()], validate, rpt.deleteRpt);
 
+// Link an existing RPT to a COI declaration (counterpart of create-from-COI).
+router.post('/:rptId/link-to-coi', [param('rptId').isMongoId(), body('coi_request_id').isMongoId()], validate, rpt.linkRptToCoi);
+
 router.post('/:rptId/board-decision', [param('rptId').isMongoId()], validate, rpt.recordBoardDecision);
 router.post('/:rptId/status', [param('rptId').isMongoId(), body('status').isString()], validate, rpt.updateRptStatus);
 router.post('/:rptId/documents', [param('rptId').isMongoId(), body('file_key').notEmpty()], validate, rpt.addRptDocument);

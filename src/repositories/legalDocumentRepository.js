@@ -6,6 +6,7 @@
 
 import legalDocumentSchema from '../db/schemas/platform/legalDocumentSchema.js';
 import { UserRepository } from './userRepository.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 export class LegalDocumentRepository {
   constructor(tenantDb) {
@@ -30,7 +31,7 @@ export class LegalDocumentRepository {
     }
 
     if (filters.search) {
-      query.document_name = { $regex: filters.search, $options: 'i' };
+      query.document_name = { $regex: escapeRegex(filters.search), $options: 'i' };
     }
 
     return await this.LegalDocument.find(query)

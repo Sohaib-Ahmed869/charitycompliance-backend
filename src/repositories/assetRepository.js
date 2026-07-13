@@ -6,6 +6,7 @@
 
 import assetSchema from '../db/schemas/platform/assetSchema.js';
 import { UserRepository } from './userRepository.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 export class AssetRepository {
   constructor(tenantDb) {
@@ -31,9 +32,10 @@ export class AssetRepository {
     }
 
     if (filters.searchTerm) {
+      const rx = escapeRegex(filters.searchTerm);
       query.$or = [
-        { asset_name: { $regex: filters.searchTerm, $options: 'i' } },
-        { serial_number: { $regex: filters.searchTerm, $options: 'i' } }
+        { asset_name: { $regex: rx, $options: 'i' } },
+        { serial_number: { $regex: rx, $options: 'i' } }
       ];
     }
 

@@ -20,6 +20,7 @@
 
 import getRouterModels from '../db/models/routerModels.js';
 import { logInfo, logError } from '../utils/logger.js';
+import { maskEmail } from '../utils/maskPii.js';
 import { buildEmailTemplate } from './emailService.js';
 import emailService from './emailService.js';
 import { getOrgOwnerEmail } from '../utils/getOrgOwnerEmail.js';
@@ -73,7 +74,7 @@ async function sendStepUpNotice({ to, orgName, planName, lockEndsAt }) {
       html
     });
   } catch (err) {
-    logError('foundingCustomerRenewal: email send failed', err, { to });
+    logError('foundingCustomerRenewal: email send failed', err, { to: maskEmail(to) });
   }
 }
 

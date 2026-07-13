@@ -4,6 +4,7 @@
 
 import policySchema from '../db/schemas/platform/policySchema.js';
 import policyDocumentLogSchema from '../db/schemas/platform/policyDocumentLogSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 /** Parse version string "v1.0" and return next version "v2.0" */
 export function incrementVersion(version) {
@@ -37,9 +38,10 @@ export class PolicyRepository {
     
     if (filters.category) query.category = filters.category;
     if (filters.search) {
+      const rx = escapeRegex(filters.search);
       query.$or = [
-        { title: { $regex: filters.search, $options: 'i' } },
-        { description: { $regex: filters.search, $options: 'i' } }
+        { title: { $regex: rx, $options: 'i' } },
+        { description: { $regex: rx, $options: 'i' } }
       ];
     }
     return this.Policy.find(query).sort({ createdAt: -1 }).lean();

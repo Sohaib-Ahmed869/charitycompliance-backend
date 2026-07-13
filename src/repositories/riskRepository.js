@@ -5,6 +5,7 @@
  */
 
 import riskSchema from '../db/schemas/platform/riskSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 import approvalRequestSchema from '../db/schemas/platform/approvalRequestSchema.js';
 import approvalMatrixSchema from '../db/schemas/platform/approvalMatrixSchema.js';
 import positionSchema from '../db/schemas/platform/positionSchema.js';
@@ -32,12 +33,12 @@ export class RiskRepository {
       query.status = filters.status;
     }
     if (filters.category) {
-      query.category = new RegExp(filters.category, 'i');
+      query.category = new RegExp(escapeRegex(filters.category), 'i');
     }
     if (filters.search) {
       query.$or = [
-        { title: new RegExp(filters.search, 'i') },
-        { description: new RegExp(filters.search, 'i') }
+        { title: new RegExp(escapeRegex(filters.search), 'i') },
+        { description: new RegExp(escapeRegex(filters.search), 'i') }
       ];
     }
 

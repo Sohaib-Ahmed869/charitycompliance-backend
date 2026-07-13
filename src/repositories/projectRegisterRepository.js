@@ -5,6 +5,7 @@
  */
 
 import projectRegisterSchema from '../db/schemas/platform/projectRegisterSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 export class ProjectRegisterRepository {
   constructor(tenantDb) {
@@ -19,7 +20,7 @@ export class ProjectRegisterRepository {
     }
 
     if (filters.search) {
-      const pattern = new RegExp(filters.search, 'i');
+      const pattern = new RegExp(escapeRegex(filters.search), 'i');
       query.$or = [
         { project_name: pattern },
         { agreement_title: pattern },

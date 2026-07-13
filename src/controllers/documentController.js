@@ -17,6 +17,21 @@ import { logError, logInfo } from '../utils/logger.js';
 import { NotificationRepository } from '../repositories/notificationRepository.js';
 import { buildBasPeriodMetadata } from '../services/basPeriodDocumentHelper.js';
 
+// SECURITY (ATZ-006/007/013): consistent server-side ownership check — assert a
+// document belongs to the caller's org before returning or mutating it. The
+// per-tenant DB already scopes lookups; this makes that guarantee explicit and
+// uniform across every by-id handler (some had the check, some didn't).
+async function assertDocumentInOrg(tenantDb, documentId) {
+  const documentRepo = new DocumentRepository(tenantDb);
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const [doc, org] = await Promise.all([documentRepo.findById(documentId), orgRepo.findOne()]);
+  if (!doc || !org || String(doc.org_id) !== String(org._id)) {
+    throw new AppError('Document not found', 404, 'NOT_FOUND');
+  }
+  return doc;
+}
+
 const safeParseMetadata = (raw) => {
   if (!raw) return {};
   if (typeof raw === 'object') return raw;
@@ -118,12 +133,7 @@ export const getDocumentById = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { documentId } = req.params;
   const tenantDb = await getTenantConnection(orgId);
-  const documentRepo = new DocumentRepository(tenantDb);
-
-  const document = await documentRepo.findById(documentId);
-  if (!document) {
-    throw new AppError('Document not found', 404, 'NOT_FOUND');
-  }
+  const document = await assertDocumentInOrg(tenantDb, documentId);
 
   // Generate presigned URL for file access
   const fileUrl = await getFileUrl(document.file_path);
@@ -360,10 +370,7 @@ export const updateDocument = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const documentRepo = new DocumentRepository(tenantDb);
 
-  const existing = await documentRepo.findById(documentId);
-  if (!existing) {
-    throw new AppError('Document not found', 404, 'NOT_FOUND');
-  }
+  const existing = await assertDocumentInOrg(tenantDb, documentId);
 
   // Build the update payload field-by-field. We only forward fields
   // the caller actually sent (so an unrelated PUT can't accidentally
@@ -492,10 +499,7 @@ export const reviewYearlyStatement = asyncHandler(async (req, res) => {
   const documentRepo = new DocumentRepository(tenantDb);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
-  const doc = await documentRepo.findById(documentId);
-  if (!doc) {
-    throw new AppError('Document not found', 404, 'NOT_FOUND');
-  }
+  const doc = await assertDocumentInOrg(tenantDb, documentId);
   if (doc.category !== 'financial_statement') {
     throw new AppError('Only yearly statements can be reviewed here', 400, 'INVALID_CATEGORY');
   }
@@ -808,11 +812,8 @@ export const deleteDocument = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const documentRepo = new DocumentRepository(tenantDb);
 
-  // Get document to retrieve S3 key before deleting
-  const document = await documentRepo.findById(documentId);
-  if (!document) {
-    throw new AppError('Document not found', 404, 'NOT_FOUND');
-  }
+  // Get document to retrieve S3 key before deleting (ownership-checked).
+  const document = await assertDocumentInOrg(tenantDb, documentId);
 
   // Delete from S3
   try {

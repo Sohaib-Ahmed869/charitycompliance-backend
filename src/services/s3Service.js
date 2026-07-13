@@ -9,7 +9,16 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getS3Credentials } from './awsSecretsManager.js';
 import { logError, logInfo } from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { verifyUploadedFile } from '../utils/fileContentGuard.js';
 import crypto from 'crypto';
+
+// FUP-015: cap how long any presigned download URL can live. 7-day URLs grant
+// week-long, effectively-unauthenticated object access if the link leaks; 24h
+// is generous for in-session viewing while sharply reducing exposure. Callers
+// requesting more are clamped down to this ceiling.
+const MAX_DOWNLOAD_TTL_SECONDS = 24 * 60 * 60; // 24 hours
+// TTL for the URL returned immediately after upload (used once by the caller).
+const POST_UPLOAD_URL_TTL_SECONDS = 60 * 60;   // 1 hour
 
 let s3Client = null;
 let s3Config = null;
@@ -178,6 +187,11 @@ function generateS3Key(orgId, category, originalFileName) {
  * @returns {Promise<Object>} - Upload result with key and URL
  */
 export async function uploadToS3(fileBuffer, fileName, mimeType, orgId, category) {
+  // FUP-003/004/009: validate real file content + filename before it ever
+  // reaches storage. Throws AppError(400) on magic-byte mismatch, dangerous
+  // (double) extensions, or embedded markup/executable content.
+  verifyUploadedFile(fileBuffer, fileName, mimeType);
+
   // Create fresh client each time to match working pattern exactly
   // No caching, no region detection - just use what's in env
   const accessKeyId = (process.env.AWS_ACCESS_KEY_ID || '').trim();
@@ -225,7 +239,7 @@ export async function uploadToS3(fileBuffer, fileName, mimeType, orgId, category
         Bucket: bucketName,
         Key: key
       }),
-      { expiresIn: 604800 } // 7 days
+      { expiresIn: POST_UPLOAD_URL_TTL_SECONDS }
     );
 
     logInfo(`File uploaded to S3: ${key}`);
@@ -283,9 +297,9 @@ export async function uploadToS3(fileBuffer, fileName, mimeType, orgId, category
             Bucket: bucketName,
             Key: key
           }),
-          { expiresIn: 604800 }
+          { expiresIn: POST_UPLOAD_URL_TTL_SECONDS }
         );
-        
+
         logInfo(`File uploaded to S3 (with corrected region): ${key}`);
         
         return {
@@ -332,6 +346,9 @@ export async function uploadToS3(fileBuffer, fileName, mimeType, orgId, category
  */
 export async function getFileUrl(s3Key, expiresIn = 3600) {
   try {
+    // FUP-015: clamp to a 24h ceiling regardless of what the caller requests,
+    // so leaked presigned links cannot grant week-long access.
+    expiresIn = Math.min(Math.max(Number(expiresIn) || 3600, 60), MAX_DOWNLOAD_TTL_SECONDS);
     const { client, config } = await getS3Client();
     
     if (!config.bucketName) {

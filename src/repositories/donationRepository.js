@@ -1,4 +1,5 @@
 import donationSchema from '../db/schemas/platform/donationSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 export class DonationRepository {
   constructor(tenantDb) {
@@ -22,7 +23,7 @@ export class DonationRepository {
     }
 
     if (filters.search) {
-      const regex = new RegExp(filters.search, 'i');
+      const regex = new RegExp(escapeRegex(filters.search), 'i');
       query.$or = [{ title: regex }, { lead_name: regex }];
     }
 

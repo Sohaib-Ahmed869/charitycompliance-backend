@@ -260,6 +260,34 @@ export const getBoardMemberById = asyncHandler(async (req, res) => {
   });
 });
 
+// SECURITY (API-020): board-member create/update accept ONLY these fields from
+// the request body. Everything else is server-controlled and set through its
+// own vetted flow, and must NEVER be mass-assigned from the client:
+//   • org_id          — tenant binding (set from the resolved org)
+//   • user_id         — account linkage (set on invite-accept / manual create)
+//   • has_system_access, is_active, status, offboarded_at — auth / lifecycle
+//   • invitation_token, invitation_status, invitation_*    — the invite flow
+// Taking any of those from req.body is a privilege-escalation / auth-bypass /
+// invite-bypass vector, so they are stripped here regardless of role.
+export const EDITABLE_BOARD_MEMBER_FIELDS = [
+  'title', 'given_names', 'family_name', 'date_of_birth',
+  'position', 'department', 'custom_position_title', 'position_id',
+  'is_head_of_department', 'is_board_member',
+  'appointment_date', 'term_end_date',
+  'email', 'phone', 'residential_address', 'residential_address_changed_date',
+  'identification', 'profile_picture_key',
+  'wwcc', 'police_check', 'contract',
+  'induction_form_filled', 'induction_form_comments', 'suitability_check',
+];
+
+export const pickEditableBoardMemberFields = (body = {}) => {
+  const out = {};
+  for (const key of EDITABLE_BOARD_MEMBER_FIELDS) {
+    if (body && Object.prototype.hasOwnProperty.call(body, key)) out[key] = body[key];
+  }
+  return out;
+};
+
 export const createBoardMember = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -300,8 +328,10 @@ export const createBoardMember = asyncHandler(async (req, res) => {
   }
 
   const boardMember = await boardMemberRepo.create({
+    // Only client-editable fields; org_id / invitation state / system access are
+    // set server-side below — never mass-assigned from the body (API-020).
+    ...pickEditableBoardMemberFields(boardMemberData),
     org_id: org._id,
-    ...boardMemberData,
     is_volunteer: is_volunteer || false,
     ...invitationData
   });
@@ -568,7 +598,10 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
     }
   }
 
-  const boardMember = await boardMemberRepo.update(boardMemberId, req.body);
+  // SECURITY (API-020): only whitelisted fields — never the raw body — so
+  // org_id / user_id / has_system_access / status / invitation_* can't be
+  // mass-assigned to escalate privilege or bypass the invite/offboard flows.
+  const boardMember = await boardMemberRepo.update(boardMemberId, pickEditableBoardMemberFields(req.body));
   if (!boardMember) {
     throw new AppError('Board member not found', 404, 'NOT_FOUND');
   }
@@ -927,6 +960,14 @@ export const updatePosition = asyncHandler(async (req, res) => {
     : position.granted_permissions || [];
 
   const updated = await positionRepo.update(positionId, { granted_permissions });
+
+  // Position permissions changed — drop the runtime-permission cache so affected
+  // users pick up the change on their next request instead of waiting out the
+  // 20s TTL. Best-effort; a miss just means the change lands within the TTL.
+  try {
+    const { clearPermsCacheForUser } = await import('../middleware/auth.js');
+    clearPermsCacheForUser();
+  } catch { /* cache-clear is best-effort */ }
 
   res.json({
     success: true,

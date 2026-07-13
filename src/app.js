@@ -24,6 +24,11 @@ const isModuleEnabled = (name) => !disabledModules.has(String(name || '').toLowe
 const app = express();
 
 app.set('trust proxy', 1)
+// MDB-026: pin the query-string parser to 'simple' so query params are always
+// parsed as flat strings. This blocks NoSQL operator injection via the query
+// string (e.g. ?field[$ne]=x becoming a nested {$ne:'x'} object) as defence in
+// depth alongside the sanitizeMongo middleware.
+app.set('query parser', 'simple')
 // ============================================
 // MIDDLEWARE
 // ============================================
@@ -43,8 +48,11 @@ const isAllowedOrigin = (origin) => {
   if (allowedOrigins.some((allowed) => normalized === String(allowed).replace(/\/$/, ''))) {
     return true;
   }
-  // Allow localhost on arbitrary dev ports to avoid repeated env churn.
-  if (/^https?:\/\/localhost(?::\d+)?$/i.test(normalized)) return true;
+  // SECURITY (API-009): allow localhost on arbitrary dev ports ONLY outside
+  // production. In production, CORS with credentials:true must be limited to the
+  // explicit CORS_ORIGIN / FRONTEND_URL allowlist — an unconditional localhost
+  // allowance enables DNS-rebinding / local-app abuse against a logged-in user.
+  if (process.env.NODE_ENV !== 'production' && /^https?:\/\/localhost(?::\d+)?$/i.test(normalized)) return true;
   return false;
 };
 
@@ -91,6 +99,13 @@ app.use('/api/v1/webhooks/stripe', express.raw({ type: 'application/json' }), st
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '50mb';
 app.use(express.json({ limit: requestBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
+
+// SECURITY (INP-002): strip MongoDB operator injection ($-prefixed / dotted
+// keys) from every parsed body so object-shaped values like { "$ne": null }
+// can never reach a query filter. Mounted right after the body parsers, before
+// any route. (Handlers still type-check their own inputs — defence-in-depth.)
+import sanitizeMongo from './middleware/sanitizeMongo.js';
+app.use(sanitizeMongo);
 
 // Rate limiting intentionally disabled — the dashboard fans out ~20 parallel
 // queries per load and a shared tenant hits global IP limits immediately,

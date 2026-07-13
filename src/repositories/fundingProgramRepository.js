@@ -4,6 +4,7 @@
 
 import fundingProgramSchema from '../db/schemas/platform/fundingProgramSchema.js';
 import donorSchema from '../db/schemas/platform/donorSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 const DONOR_SUMMARY = 'name donor_type status vip';
 
@@ -28,10 +29,11 @@ export class FundingProgramRepository {
     const query = { org_id: orgId };
     if (filters.status) query.status = filters.status;
     if (filters.search) {
+      const rx = escapeRegex(filters.search);
       query.$or = [
-        { name: { $regex: filters.search, $options: 'i' } },
-        { description: { $regex: filters.search, $options: 'i' } },
-        { beneficiaries: { $regex: filters.search, $options: 'i' } }
+        { name: { $regex: rx, $options: 'i' } },
+        { description: { $regex: rx, $options: 'i' } },
+        { beneficiaries: { $regex: rx, $options: 'i' } }
       ];
     }
     return this.FundingProgram.find(query)

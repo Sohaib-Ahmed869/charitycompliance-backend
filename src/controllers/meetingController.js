@@ -8,6 +8,7 @@ import { MeetingService } from '../services/meetingService.js';
 import { getOrgByMeetingId } from '../db/router.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { validationResult } from 'express-validator';
+import { setSafeDownloadHeaders } from '../utils/safeDownloadHeaders.js';
 
 /**
  * Public RSVP - no auth. Attendee clicks Accept/Decline link in email.
@@ -433,8 +434,7 @@ export const streamMeetingDocument = asyncHandler(async (req, res) => {
   const { meetingId, documentIndex } = req.params;
   const meetingService = new MeetingService(orgId);
   const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await meetingService.streamMeetingDocument(meetingId, parseInt(documentIndex, 10), req.headers.range || null);
-  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
-  res.setHeader('Content-Disposition', 'inline');
+  setSafeDownloadHeaders(res, { contentType: ContentType, fileName: 'meeting-document' });
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.setHeader('Accept-Ranges', 'bytes');
   if (IsPartial && ContentRange) {
@@ -451,8 +451,7 @@ export const streamNoteDocument = asyncHandler(async (req, res) => {
   const { meetingId, noteId, documentIndex } = req.params;
   const meetingService = new MeetingService(orgId);
   const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await meetingService.streamNoteDocument(meetingId, noteId, parseInt(documentIndex, 10), req.headers.range || null);
-  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
-  res.setHeader('Content-Disposition', 'inline');
+  setSafeDownloadHeaders(res, { contentType: ContentType, fileName: 'meeting-document' });
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.setHeader('Accept-Ranges', 'bytes');
   if (IsPartial && ContentRange) {

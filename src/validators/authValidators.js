@@ -109,3 +109,22 @@ export const sendOtpValidator = [
   body('userId').notEmpty().withMessage('User ID is required'),
   body('orgId').notEmpty().withMessage('Organization ID is required')
 ];
+
+// AUTH-008: authenticated self-service password change requires the CURRENT
+// password, and the new password must meet the same policy as reset/register.
+export const changePasswordValidator = [
+  body('currentPassword')
+    .notEmpty()
+    .withMessage('Current password is required'),
+  body('newPassword')
+    .isLength({ min: config.password.minLength })
+    .withMessage(`Password must be at least ${config.password.minLength} characters`)
+    .matches(/[A-Z]/)
+    .withMessage('Password must contain at least one uppercase letter')
+    .matches(/[a-z]/)
+    .withMessage('Password must contain at least one lowercase letter')
+    .matches(/[0-9]/)
+    .withMessage('Password must contain at least one number')
+    .matches(/[^A-Za-z0-9]/)
+    .withMessage('Password must contain at least one special character')
+];

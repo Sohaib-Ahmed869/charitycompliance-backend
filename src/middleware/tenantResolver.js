@@ -24,32 +24,48 @@ import { getTenantConnection } from '../db/connectionManager.js';
  */
 export const resolveTenant = async (req, res, next) => {
   try {
-    // Extract orgId from various sources. `req.body` can be undefined
-    // when express.json() didn't parse anything (e.g. a GET with no body
-    // and no Content-Type: application/json), so guard with optional
-    // chaining — accessing .orgId on undefined throws a TypeError that
-    // surfaces upstream as "Cannot read properties of undefined (reading
-    // 'orgId')".
-    let orgId = req.headers['x-org-id'] ||
-                req.user?.orgId ||
-                req.params?.orgId ||
-                req.body?.orgId;
+    // SECURITY (ATZ-014): the tenant is bound to the AUTHENTICATED user's org,
+    // taken from the verified JWT (`req.user.orgId`) — this is the SINGLE source
+    // of truth. A client-supplied `x-org-id` header must NEVER be able to select
+    // a different tenant than the token; otherwise an authenticated user of org A
+    // could read/write org B's entire database just by changing a header.
+    //
+    // No legitimate flow needs the header to differ: normal users, admins and
+    // auditors carry their own org in the JWT, and the two cross-tenant paths —
+    // Calcite support "act-as" and the demo switcher — mint a FRESH token whose
+    // `orgId` is the target tenant. `resolveTenant` also only ever runs after
+    // `authenticate`, so `req.user` is always populated here.
+    const jwtOrgId = req.user?.orgId ? String(req.user.orgId).toLowerCase().trim() : null;
+    const headerOrgId = req.headers['x-org-id'] ? String(req.headers['x-org-id']).toLowerCase().trim() : null;
 
-    // In development, allow skipping tenant validation
-    if (!orgId && process.env.SKIP_TENANT_VALIDATION === 'true' && process.env.NODE_ENV === 'development') {
-      console.warn('⚠️ WARNING: Skipping tenant validation (development only)');
-      return next();
-    }
-
-    if (!orgId) {
-      return res.status(400).json({
+    if (!jwtOrgId) {
+      // No authenticated org. Only the development bypass may proceed without a
+      // tenant; we must NOT fall back to a client-supplied org (that IS the vuln).
+      if (process.env.SKIP_TENANT_VALIDATION === 'true' && process.env.NODE_ENV === 'development') {
+        console.warn('⚠️ WARNING: Skipping tenant validation (development only)');
+        return next();
+      }
+      return res.status(401).json({
         success: false,
-        error: 'Organization ID is required. Provide x-org-id header or ensure user is authenticated.'
+        error: 'Authentication required to resolve organization.'
       });
     }
 
-    // Normalize to string and lowercase so tenant lookup and decryption always use same key
-    const normalizedOrgId = String(orgId).toLowerCase().trim();
+    // Defence-in-depth: if the client sends a header it MUST match the token. A
+    // mismatch is a client bug or a cross-tenant attack — fail closed (and it's
+    // auditable). The JWT org is used regardless of what the header claims.
+    if (headerOrgId && headerOrgId !== jwtOrgId) {
+      return res.status(403).json({
+        success: false,
+        error: {
+          message: 'Organization mismatch — you are not authorised for this organization.',
+          code: 'ORG_MISMATCH'
+        }
+      });
+    }
+
+    // Bind strictly to the JWT org (already normalized).
+    const normalizedOrgId = jwtOrgId;
 
     // Get tenant database connection
     const tenantDb = await getTenantConnection(normalizedOrgId);

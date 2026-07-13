@@ -1,4 +1,5 @@
 import donationBoxSchema from '../db/schemas/platform/donationBoxSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 export class DonationBoxRepository {
   constructor(tenantDb) {
@@ -15,7 +16,7 @@ export class DonationBoxRepository {
     const query = { org_id: orgId };
     if (status) query.status = status;
     if (search) {
-      const regex = new RegExp(search, 'i');
+      const regex = new RegExp(escapeRegex(search), 'i');
       query.$or = [{ name: regex }, { 'location.address': regex }];
     }
 

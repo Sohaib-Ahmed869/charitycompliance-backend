@@ -17,6 +17,17 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 const _transferCache = new Map();
 const TRANSFER_CACHE_TTL = 30_000; // 30s
 
+// Per-user cache of the computed runtime permissions. Without this, EVERY
+// authenticated request re-reads the org + all the user's board_member records
+// (with field decryption) + every linked position — ~3-4 DB round-trips per
+// request. Multiplied by the layout's polling queries + each page's own
+// queries, that saturates the connection pool and the browser's ~6-connection
+// limit, so rapid page-to-page navigation stalls. A short TTL keeps permission
+// edits propagating quickly (the frontend also polls perms every 30s) while
+// making the common case a zero-DB cache hit.
+const _permsCache = new Map();
+const PERMS_CACHE_TTL = 20_000; // 20s
+
 /**
  * Compute effective module permissions for a non-admin user based on their positions.
  * Mirrors the logic used during login so runtime updates to position permissions
@@ -27,6 +38,15 @@ const TRANSFER_CACHE_TTL = 30_000; // 30s
  * @returns {Promise<string[]>}
  */
 async function computeRuntimePermissionsForUser(userId, orgId) {
+  const cacheKey = `${userId}:${orgId}`;
+  const cached = _permsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < PERMS_CACHE_TTL) return cached.perms;
+
+  // Store + return in one place so every exit path (including the empty-perms
+  // early returns) is cached. Failures inside the try are NOT cached (see catch)
+  // so a transient DB error can be retried on the next request.
+  const done = (perms) => { _permsCache.set(cacheKey, { perms, ts: Date.now() }); return perms; };
+
   try {
     const { getTenantConnection } = await import('../db/connectionManager.js');
     const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
@@ -36,19 +56,19 @@ async function computeRuntimePermissionsForUser(userId, orgId) {
     const tenantDb = await getTenantConnection(orgId);
     const orgRepo = new OrganizationRepository(tenantDb);
     const org = await orgRepo.findOne();
-    if (!org) return [];
+    if (!org) return done([]);
 
     const boardMemberRepo = new BoardMemberRepository(tenantDb);
     const positionRepo = new PositionRepository(tenantDb);
 
     // Get ALL active board_members (user may hold multiple positions after transfer)
     const allBoardMembers = await boardMemberRepo.findAllActiveByUserId(userId, org._id);
-    if (!allBoardMembers || allBoardMembers.length === 0) return [];
+    if (!allBoardMembers || allBoardMembers.length === 0) return done([]);
 
     const positionIds = allBoardMembers
       .map(bm => bm.position_id)
       .filter(Boolean);
-    if (positionIds.length === 0) return [];
+    if (positionIds.length === 0) return done([]);
 
     const positions = await Promise.all(positionIds.map(pid => positionRepo.findById(pid)));
 
@@ -111,9 +131,10 @@ async function computeRuntimePermissionsForUser(userId, orgId) {
       }
     }
 
-    return Array.from(new Set(result));
+    return done(Array.from(new Set(result)));
   } catch (err) {
-    // On any failure, fall back to token permissions
+    // On any failure, fall back to token permissions. Do NOT cache — allow the
+    // next request to retry once the transient error clears.
     return [];
   }
 }
@@ -125,6 +146,20 @@ async function computeRuntimePermissionsForUser(userId, orgId) {
 export function clearTransferCacheForUser(userId, orgId) {
   const cacheKey = `${userId}:${orgId}`;
   _transferCache.delete(cacheKey);
+}
+
+/**
+ * Invalidate the cached runtime permissions. Call after a position/role's
+ * module_permissions change so affected users pick it up on their next request
+ * instead of waiting out the TTL. With no args, clears the whole cache (cheap,
+ * in-memory) — the simplest correct choice when a change can affect many users.
+ */
+export function clearPermsCacheForUser(userId, orgId) {
+  if (userId && orgId) {
+    _permsCache.delete(`${userId}:${orgId}`);
+  } else {
+    _permsCache.clear();
+  }
 }
 
 async function checkTransferredUser(userId, orgId) {
@@ -323,6 +358,18 @@ export const authenticate = async (req, res, next) => {
             error: {
               message: 'Your account is inactive. Please contact your administrator.',
               code: 'ACCOUNT_INACTIVE'
+            }
+          });
+        }
+        // SECURITY (SESS-008): reject tokens issued before the last password
+        // change/reset. `iat` is in seconds; password_changed_at in ms.
+        if (usr.password_changed_at && decoded.iat &&
+            (decoded.iat * 1000) < new Date(usr.password_changed_at).getTime()) {
+          return res.status(401).json({
+            success: false,
+            error: {
+              message: 'Your session has expired after a password change. Please sign in again.',
+              code: 'SESSION_INVALIDATED'
             }
           });
         }

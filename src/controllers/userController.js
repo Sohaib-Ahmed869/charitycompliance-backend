@@ -15,6 +15,7 @@ import emailService, { buildEmailTemplate } from '../services/emailService.js';
 import { asyncHandler } from '../middleware/errorHandler.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
+import { maskEmail } from '../utils/maskPii.js';
 
 export const listTeamMembers = asyncHandler(async (req, res) => {
   const userId = req.user?.userId;
@@ -187,9 +188,9 @@ export const inviteAuditor = asyncHandler(async (req, res) => {
       { $set: { invitation_status: 'sent', invitation_sent_at: new Date() } }
     );
     emailSent = true;
-    logInfo('Auditor invitation email sent', { orgId, email, inviteId: result.insertedId });
+    logInfo('Auditor invitation email sent', { orgId, email: maskEmail(email), inviteId: result.insertedId });
   } catch (err) {
-    logError('Auditor invitation email failed', { orgId, email, error: err?.message });
+    logError('Auditor invitation email failed', { orgId, email: maskEmail(email), error: err?.message });
   }
 
   res.json({

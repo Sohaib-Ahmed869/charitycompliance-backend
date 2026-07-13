@@ -314,6 +314,66 @@ export const updateRpt = asyncHandler(async (req, res) => {
   res.json({ success: true, data: updated });
 });
 
+// Link an EXISTING RPT to a COI declaration (the "link to existing" counterpart
+// of create-from-COI). Stamps the RPT's provenance so the COI panel — which
+// resolves the link via RPT.source.coi_request_id — sees it, and couples the
+// COI's paused/resolved state to the RPT's current status, exactly like the
+// create path does. The RPT's own approval workflow already exists, so we do
+// NOT re-create or re-trigger it.
+export const linkRptToCoi = asyncHandler(async (req, res) => {
+  const repo = new RelatedPartyTransactionRepository(req.tenantDb);
+  const orgDocId = await getOrgDocId(req.tenantDb);
+  const { rptId } = req.params;
+  const coiRequestId = req.body.coi_request_id;
+  if (!coiRequestId) throw new AppError('coi_request_id is required', 400, 'VALIDATION_ERROR');
+
+  const rpt = await repo.findByIdMutable(rptId);
+  if (!rpt) throw new AppError('Related party transaction not found', 404, 'RPT_NOT_FOUND');
+
+  // Already linked to a COI? Idempotent if it's the same one; reject if different.
+  if (rpt.source?.type === 'coi' && rpt.source?.coi_request_id) {
+    if (String(rpt.source.coi_request_id) === String(coiRequestId)) {
+      return res.json({ success: true, data: await repo.findById(rptId), message: 'Already linked to this declaration' });
+    }
+    throw new AppError('This related party transaction is already linked to another declaration.', 409, 'RPT_ALREADY_LINKED');
+  }
+
+  // One RPT per COI — don't attach a second.
+  const existingForCoi = await repo.findByCoi(orgDocId, coiRequestId);
+  if (existingForCoi && String(existingForCoi._id) !== String(rptId)) {
+    throw new AppError('This declaration is already linked to a related party transaction.', 409, 'COI_ALREADY_LINKED');
+  }
+
+  const CoiRequest = req.tenantDb.models.CoiRequest || req.tenantDb.model('CoiRequest', coiRequestSchema);
+  const coi = await CoiRequest.findById(coiRequestId);
+  if (!coi) throw new AppError('Conflict of interest declaration not found', 404, 'COI_NOT_FOUND');
+
+  // Stamp provenance (the COI panel resolves the link off this).
+  await repo.update(rptId, { source: { type: 'coi', coi_request_id: coiRequestId }, updated_by: req.user.userId });
+
+  // Couple the COI to the RPT's current state, mirroring create + resume/halt.
+  const status = String(rpt.status || '').toLowerCase();
+  if (status === 'rejected') {
+    if (coi.status === 'pending') coi.status = 'paused_for_rpt';
+    coi.current_rpt_request_id = rpt._id;
+    coi.rpt_unresolved = true;
+  } else if (['approved', 'disclosed'].includes(status)) {
+    // Already resolved — link for the audit trail but don't hold the COI up.
+    if (coi.status === 'paused_for_rpt') coi.status = 'pending';
+    coi.current_rpt_request_id = null;
+    coi.rpt_unresolved = false;
+  } else {
+    // identified / under_review — halt the COI until the RPT is approved.
+    if (coi.status === 'pending') coi.status = 'paused_for_rpt';
+    coi.current_rpt_request_id = rpt._id;
+    coi.rpt_unresolved = false;
+  }
+  await coi.save();
+
+  logInfo('RPT linked to COI', { rptId, coiId: coiRequestId, rptStatus: status, orgId: req.orgId });
+  res.json({ success: true, data: await repo.findById(rptId), message: 'Linked to declaration' });
+});
+
 // Record the board's decision on the transaction (approval + abstention).
 export const recordBoardDecision = asyncHandler(async (req, res) => {
   const repo = new RelatedPartyTransactionRepository(req.tenantDb);

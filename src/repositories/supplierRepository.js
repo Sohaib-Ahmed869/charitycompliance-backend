@@ -7,6 +7,7 @@
  */
 
 import supplierSchema from '../db/schemas/platform/supplierSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 import approvalRequestSchema from '../db/schemas/platform/approvalRequestSchema.js';
 import { createBlindIndex } from '../utils/encryption.js';
 import { getMasterKeyHex } from '../config/encryption.js';
@@ -33,7 +34,7 @@ export class SupplierRepository {
     if (typeof filters.is_active === 'boolean') query.is_active = filters.is_active;
 
     if (filters.search) {
-      const re = new RegExp(filters.search, 'i');
+      const re = new RegExp(escapeRegex(filters.search), 'i');
       query.$or = [
         { legal_name: re },
         { trading_name: re },

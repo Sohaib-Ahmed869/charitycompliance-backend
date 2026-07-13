@@ -157,9 +157,12 @@ function slugify(s) {
 /** ISO timestamp or '—' for safe display. */
 const ts = (d) => (d ? new Date(d).toISOString() : '');
 
-/** CSV escape — quote on quotes/commas/newlines. */
+/** CSV escape — neutralise formula injection, then quote on quotes/commas/newlines. */
 function csvCell(v) {
-  const s = v == null ? '' : String(v);
+  let s = v == null ? '' : String(v);
+  // INP-014: a cell starting with = + - @ (or tab/CR) is run as a formula by
+  // Excel/Sheets. Prefix with ' so it's treated as text.
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }

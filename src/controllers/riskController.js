@@ -15,6 +15,7 @@ import { validationResult } from 'express-validator';
 import { uploadToS3, getFileStream } from '../services/s3Service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
+import { setSafeDownloadHeaders } from '../utils/safeDownloadHeaders.js';
 
 /**
  * Check if user can add risk treatment: admin (org owner) or head of department of the risk's department
@@ -467,8 +468,7 @@ export const streamRiskAttachment = asyncHandler(async (req, res) => {
   }
   const rangeHeader = req.headers.range || null;
   const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await getFileStream(att.file_path, rangeHeader);
-  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(att.file_name || 'attachment')}"`);
+  setSafeDownloadHeaders(res, { contentType: ContentType, fileName: att.file_name || 'attachment' });
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.setHeader('Accept-Ranges', 'bytes');
   if (IsPartial && ContentRange) {
@@ -495,8 +495,7 @@ export const streamEvidence = asyncHandler(async (req, res) => {
   }
   const rangeHeader = req.headers.range || null;
   const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await getFileStream(evidence.file_path, rangeHeader);
-  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(evidence.file_name || 'evidence')}"`);
+  setSafeDownloadHeaders(res, { contentType: ContentType, fileName: evidence.file_name || 'evidence' });
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.setHeader('Accept-Ranges', 'bytes');
   if (IsPartial && ContentRange) {

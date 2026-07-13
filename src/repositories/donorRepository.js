@@ -5,6 +5,7 @@
  */
 
 import donorSchema from '../db/schemas/platform/donorSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 export class DonorRepository {
   constructor(tenantDb) {
@@ -24,7 +25,7 @@ export class DonorRepository {
     const query = { org_id: orgId };
     if (filters.status) query.status = filters.status;
     if (filters.search) {
-      query.name = { $regex: filters.search, $options: 'i' };
+      query.name = { $regex: escapeRegex(filters.search), $options: 'i' };
     }
     return this.Donor.find(query).sort({ createdAt: -1 });
   }

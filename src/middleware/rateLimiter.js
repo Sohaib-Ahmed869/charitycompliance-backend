@@ -20,6 +20,22 @@ export const authLimiter = rateLimit({
 });
 
 /**
+ * Limiter for public "trigger an action" auth endpoints — forgot/reset password
+ * and OTP send. Unlike authLimiter these count EVERY request (no
+ * skipSuccessfulRequests), because forgot-password intentionally always returns
+ * 200 (anti-enumeration), so success-skipping would leave it unthrottled and
+ * open to reset-email spam / token brute-force / operator-injection probing.
+ */
+export const passwordResetLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  message: {
+    success: false,
+    error: 'Too many requests, please try again later.'
+  }
+});
+
+/**
  * Rate limiter for file uploads
  */
 export const uploadLimiter = rateLimit({
@@ -45,6 +61,7 @@ export const apiLimiter = rateLimit({
 
 export default {
   authLimiter,
+  passwordResetLimiter,
   uploadLimiter,
   apiLimiter
 };

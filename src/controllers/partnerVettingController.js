@@ -14,6 +14,7 @@ import { CoiRequestRepository } from '../repositories/coiRequestRepository.js';
 import { ApprovalMatrixRepository } from '../repositories/approvalMatrixRepository.js';
 import { CoiWorkflowService } from '../services/coiWorkflowService.js';
 import emailService from '../services/emailService.js';
+import { setSafeDownloadHeaders } from '../utils/safeDownloadHeaders.js';
 import { createPartnerActionToken, resolvePartnerActionToken, markPartnerActionTokenUsed, findPartnerActionToken } from '../services/partnerActionTokenService.js';
 
 const parsePublicToken = (token, req) => {
@@ -167,8 +168,7 @@ export const streamPartnerDocument = asyncHandler(async (req, res) => {
     rangeHeader
   );
 
-  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
-  res.setHeader('Content-Disposition', 'inline');
+  setSafeDownloadHeaders(res, { contentType: ContentType, fileName: 'vetting-document' });
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.setHeader('Accept-Ranges', 'bytes');
   if (IsPartial && ContentRange) {
@@ -218,8 +218,7 @@ export const streamVettingCheckDocument = asyncHandler(async (req, res) => {
     rangeHeader
   );
 
-  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
-  res.setHeader('Content-Disposition', 'inline');
+  setSafeDownloadHeaders(res, { contentType: ContentType, fileName: 'vetting-document' });
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.setHeader('Accept-Ranges', 'bytes');
   if (IsPartial && ContentRange) {

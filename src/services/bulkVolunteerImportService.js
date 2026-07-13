@@ -29,6 +29,7 @@ import emailService from '../services/emailService.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
 import { notifyVolunteerOfActivePolicies } from '../services/volunteerPolicyNotifier.js';
 import { logInfo, logError } from '../utils/logger.js';
+import { maskEmail } from '../utils/maskPii.js';
 
 /* ------------------------------------------------------------------ */
 /* Row-level validation                                                */
@@ -253,7 +254,7 @@ export const runBulkVolunteerImport = async ({ tenantDb, orgId, inviter, rows })
     try {
       existingPerson = await boardMemberRepo.findActiveByEmailInOrg(data.email, org._id);
     } catch (err) {
-      logError('Bulk volunteer import: dedup lookup failed', err, { rowNumber, email: data.email, orgId });
+      logError('Bulk volunteer import: dedup lookup failed', err, { rowNumber, email: maskEmail(data.email), orgId });
     }
     if (existingPerson) {
       seenEmails.add(data.email);
@@ -266,7 +267,7 @@ export const runBulkVolunteerImport = async ({ tenantDb, orgId, inviter, rows })
       const result = await createOneVolunteer({ tenantDb, orgId, org, inviter, data });
       created.push({ row_number: rowNumber, ...result });
     } catch (err) {
-      logError('Bulk volunteer import: row failed', err, { rowNumber, email: data.email, orgId });
+      logError('Bulk volunteer import: row failed', err, { rowNumber, email: maskEmail(data.email), orgId });
       failed.push({
         row_number: rowNumber,
         email: data.email,
