@@ -1,6 +1,7 @@
 import express from 'express';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
+import { requirePermission } from '../../middleware/rbac.js';
 import * as itAccessController from '../../controllers/itAccessController.js';
 import { body, param } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
@@ -10,7 +11,9 @@ const router = express.Router();
 router.use(authAndResolveTenant);
 router.use(requireFeatureFlag('it.register'));
 
-router.get('/mfa-status', itAccessController.getMfaStatus);
+// MFA status feeds the Access Control & Offboarding page — admin-only by
+// default, opt-in via the `access_control` module permission.
+router.get('/mfa-status', requirePermission('module:access_control:view'), itAccessController.getMfaStatus);
 router.post('/access-log', itAccessController.createAccessLogEntry);
 router.get('/sweep-funds-access', itAccessController.listSweepFundsAccessAssignments);
 router.post(

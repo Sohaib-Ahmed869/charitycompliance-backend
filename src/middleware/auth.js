@@ -86,12 +86,15 @@ async function computeRuntimePermissionsForUser(userId, orgId) {
     const MODULE_IDS = [
       'dashboard', 'calendar', 'meetings', 'approval_workflow', 'audit_trail', 'complaints',
       'charity_admin', 'charity_admin_registrations', 'charity_admin_responsible_people', 'charity_admin_governing_docs', 'charity_admin_approval_thresholds',
-      'policies', 'human_resources', 'financial_mgmt', 'risk_mgmt', 'programs', 'grants_donors', 'reporting', 'systems_legal', 'donation_boxes', 'members', 'related_party_transactions'
+      'policies', 'human_resources', 'financial_mgmt', 'risk_mgmt', 'programs', 'grants_donors', 'reporting', 'systems_legal', 'donation_boxes', 'members', 'related_party_transactions', 'access_control'
     ];
 
     // Fixed modules: dashboard & audit_trail (view only), approval_workflow & human_resources (view+edit)
     const FIXED_VIEW_ONLY = ['dashboard', 'audit_trail'];
     const FIXED_VIEW_EDIT = ['approval_workflow', 'human_resources'];
+    // Opt-in, admin-only modules: NEVER granted by default. Admins get them via
+    // their `*:*` token; non-admins only when a position explicitly grants them.
+    const OPT_IN_ADMIN_ONLY = ['access_control'];
 
     // Merge module_permissions from all positions (most permissive wins)
     const permsMap = {};
@@ -117,8 +120,8 @@ async function computeRuntimePermissionsForUser(userId, orgId) {
         if (permsMap[mod].view) result.push(`module:${mod}:view`);
         if (permsMap[mod].edit) result.push(`module:${mod}:edit`);
         if (permsMap[mod].delete) result.push(`module:${mod}:delete`);
-      } else {
-        // No permissions set - use defaults
+      } else if (!OPT_IN_ADMIN_ONLY.includes(mod)) {
+        // No permissions set - use defaults (opt-in/admin-only modules get nothing)
         const isFixedViewEdit = FIXED_VIEW_EDIT.includes(mod);
         const isFixedViewOnly = FIXED_VIEW_ONLY.includes(mod);
         if (isFixedViewOnly || isFixedViewEdit) {
