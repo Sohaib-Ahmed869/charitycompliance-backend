@@ -14,7 +14,10 @@ export class DonationBoxRepository {
 
   async list({ orgId, status = 'active', search = '' } = {}) {
     const query = { org_id: orgId };
-    if (status) query.status = status;
+    // `all` (or empty) means "every status" — otherwise callers that want the
+    // full register (e.g. the mobile Cash Handling list, which filters status
+    // client-side) would only ever receive active boxes and never see the rest.
+    if (status && status !== 'all') query.status = status;
     if (search) {
       const regex = new RegExp(escapeRegex(search), 'i');
       query.$or = [{ name: regex }, { 'location.address': regex }];

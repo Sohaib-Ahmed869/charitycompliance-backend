@@ -42,14 +42,36 @@ function humanizeRequestType(t) {
  * Fully wrapped — never throws, never blocks the caller (spec §4/§5).
  */
 async function fireRoutedApproverPush(tenantDb, requestId, requestType, approverUserIds) {
+  const ids = [...new Set((approverUserIds || []).filter(Boolean).map(String))];
+  if (!ids.length || !tenantDb) return;
+  const id = String(requestId);
+  const label = humanizeRequestType(requestType);
+
+  // Persist an in-app notification for the newly-activated approver(s) — not just
+  // a transient push. Without this, the next person in a sequential chain never
+  // saw the pending step in their notifications list (a push alone was silently
+  // lost if their device had no registered token). Best-effort; never blocks.
   try {
-    const ids = [...new Set((approverUserIds || []).filter(Boolean).map(String))];
-    if (!ids.length || !tenantDb) return;
+    const { NotificationRepository } = await import('./notificationRepository.js');
+    const notificationRepo = new NotificationRepository(tenantDb);
+    await notificationRepo.createMany(ids.map((uid) => ({
+      user_id: uid,
+      type: 'approval_pending',
+      title: 'Approval needs your review',
+      message: `${label} is awaiting your approval.`,
+      link: `/approvals/${id}`,
+      related_entity_id: requestId,
+      related_entity_type: 'approval_request'
+    })));
+  } catch {
+    // swallow — in-app notification is best-effort
+  }
+
+  try {
     const { sendToUsers } = await import('../services/pushService.js');
-    const id = String(requestId);
     await sendToUsers(tenantDb, ids, {
       title: 'Approval needs your review',
-      body: humanizeRequestType(requestType),
+      body: label,
       data: { type: 'approval', id, screen: 'ApprovalDetail', params: { id } }
     });
   } catch {
