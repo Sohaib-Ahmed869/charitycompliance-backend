@@ -34,7 +34,7 @@ import {
   emitNewMessage, emitUpdatedMessage, emitDeletedMessage,
   emitChannelListChanged, emitMention, emitMessagesRead
 } from '../services/chatSocketService.js';
-import { sendPushToUsers, isPushConfigured } from '../services/pushService.js';
+import { sendPushToUsers, sendToUsers, isPushConfigured } from '../services/pushService.js';
 
 /**
  * Modules surfaced in the #-mention picker. Each entry is a stable mention
@@ -561,16 +561,15 @@ export class ChatRepository {
   }
 
   /**
-   * Send a Web Push notification to channel members for a new message.
-   * Honours each member's per-channel `notify` preference. The browser
-   * Service Worker decides whether to actually display it — it skips the
-   * notification when a Stewardex window is focused, so an active user
-   * isn't double-notified. Best-effort — wrapped so it can never disturb
-   * message creation.
+   * Notify channel members of a new message — Web Push (browser) plus Expo
+   * mobile push. Honours each member's per-channel `notify` preference. The
+   * browser Service Worker skips the notification when a Stewardex window is
+   * focused; the mobile app suppresses foreground chat pushes the same way
+   * (its socket-driven local notifications cover the foreground). Best-effort
+   * — wrapped so it can never disturb message creation.
    */
   async _notifyChannelMembers(channel, message, senderUserId) {
     try {
-      if (!isPushConfigured()) return;
       const senderId = String(senderUserId);
       const mentioned = new Set(
         (message?.mentioned_user_ids || []).map((u) => String(u?._id || u))
@@ -600,11 +599,29 @@ export class ChatRepository {
         ? (text.length > 140 ? `${text.slice(0, 139)}…` : text)
         : 'Sent an attachment';
 
-      await sendPushToUsers(this.tenantDb, recipientIds, {
-        title: channelLabel ? `${senderName} · ${channelLabel}` : senderName,
+      const channelId = String(channel._id);
+      const title = channelLabel ? `${senderName} · ${channelLabel}` : senderName;
+
+      if (isPushConfigured()) {
+        await sendPushToUsers(this.tenantDb, recipientIds, {
+          title,
+          body: preview,
+          url: '/chat',
+          tag: `chat-${channelId}`
+        });
+      }
+
+      // Expo mobile push — reaches the app even when it's closed. Deep-links
+      // straight into the channel (spec §6).
+      await sendToUsers(this.tenantDb, recipientIds, {
+        title,
         body: preview,
-        url: '/chat',
-        tag: `chat-${String(channel._id)}`
+        data: {
+          type: 'chat',
+          id: channelId,
+          screen: 'ChatThread',
+          params: { channelId, name: channel?.name || '' }
+        }
       });
     } catch {
       /* push is best-effort — never disturb the message flow */

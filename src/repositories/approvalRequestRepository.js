@@ -50,7 +50,9 @@ async function fireRoutedApproverPush(tenantDb, requestId, requestType, approver
   // Persist an in-app notification for the newly-activated approver(s) — not just
   // a transient push. Without this, the next person in a sequential chain never
   // saw the pending step in their notifications list (a push alone was silently
-  // lost if their device had no registered token). Best-effort; never blocks.
+  // lost if their device had no registered token). The repository mirrors every
+  // created notification to mobile push, so no explicit send is needed here.
+  // Best-effort; never blocks.
   try {
     const { NotificationRepository } = await import('./notificationRepository.js');
     const notificationRepo = new NotificationRepository(tenantDb);
@@ -65,17 +67,6 @@ async function fireRoutedApproverPush(tenantDb, requestId, requestType, approver
     })));
   } catch {
     // swallow — in-app notification is best-effort
-  }
-
-  try {
-    const { sendToUsers } = await import('../services/pushService.js');
-    await sendToUsers(tenantDb, ids, {
-      title: 'Approval needs your review',
-      body: label,
-      data: { type: 'approval', id, screen: 'ApprovalDetail', params: { id } }
-    });
-  } catch {
-    // swallow — push is best-effort
   }
 }
 

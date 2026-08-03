@@ -6,9 +6,9 @@
  * reminder_type 'approval'): `offsets_hours` after a step becomes the current
  * pending step, capped by `max_reminders`.
  *
- * For each due offset it sends BOTH an in-app notification and a best-effort
- * mobile push (Expo). Mirrors the tenant-iteration structure of
- * registrationLicenseReminderService.js.
+ * For each due offset it creates an in-app notification; the notification
+ * repository mirrors it to mobile push (Expo). Mirrors the tenant-iteration
+ * structure of registrationLicenseReminderService.js.
  */
 
 import { getRouterConnection } from '../config/database.js';
@@ -16,7 +16,6 @@ import { getTenantConnection } from '../db/connectionManager.js';
 import { NotificationRepository } from '../repositories/notificationRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
 import { getApprovalReminderConfig } from '../repositories/reminderConfigRepository.js';
-import { sendToUsers } from './pushService.js';
 import { logError, logInfo } from '../utils/logger.js';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -118,7 +117,7 @@ export async function runApprovalRemindersOnce() {
             const requestId = String(req._id);
             const label = humanizeRequestType(req.request_type);
 
-            // In-app notification.
+            // In-app notification — the repository mirrors it to mobile push.
             await notificationRepo.create({
               user_id: approverUserId,
               type: 'approval_pending',
@@ -129,13 +128,6 @@ export async function runApprovalRemindersOnce() {
               related_entity_type: 'approval_request',
               read: false,
               created_at: new Date()
-            });
-
-            // Best-effort mobile push (never throws).
-            await sendToUsers(tenantDb, [approverUserId], {
-              title: 'Approval still needs your review',
-              body: label,
-              data: { type: 'approval', id: requestId, screen: 'ApprovalDetail', params: { id: requestId } }
             });
 
             newlySent.push(offset);
