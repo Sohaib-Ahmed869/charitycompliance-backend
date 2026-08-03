@@ -18,6 +18,7 @@ import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { validate } from '../../middleware/validation.js';
 import { asyncHandler } from '../../middleware/errorHandler.js';
 import { PushTokenRepository } from '../../repositories/pushTokenRepository.js';
+import { logInfo } from '../../utils/logger.js';
 
 const router = express.Router();
 
@@ -27,6 +28,18 @@ router.use(authAndResolveTenant);
 router.post(
   '/',
   [
+    // Log every attempt (before validation) so registration failures are
+    // visible in the server logs — the app treats them as best-effort and
+    // stays silent on its side.
+    (req, _res, next) => {
+      logInfo('[push-tokens] register attempt', {
+        userId: req.user?.userId,
+        orgId: req.orgId,
+        platform: req.body?.platform,
+        tokenPrefix: String(req.body?.token || '').slice(0, 24)
+      });
+      next();
+    },
     body('token').isString().notEmpty().matches(/^Expo(nent)?PushToken\[/)
       .withMessage('token must be a valid Expo push token'),
     body('platform').optional().isIn(['ios', 'android', 'web']),
@@ -43,6 +56,7 @@ router.post(
       device_id: req.body.device_id ?? null,
       app_version: req.body.app_version ?? null
     });
+    logInfo('[push-tokens] registered', { userId: req.user.userId, orgId: req.orgId });
     return res.status(201).json({ success: true });
   })
 );
