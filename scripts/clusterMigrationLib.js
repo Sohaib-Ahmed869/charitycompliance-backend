@@ -19,10 +19,18 @@ export const SYSTEM_DBS = new Set(['admin', 'local', 'config']);
 export const mask = (uri) => String(uri || '').replace(/\/\/[^@]*@/, '//***@');
 
 export function getUris() {
-  const source = String(process.env.ROUTER_DB_URI || '').trim();
+  let source = String(process.env.ROUTER_DB_URI || '').trim();
   const target = String(process.env.NEW_ROUTE_DB_URI || '').trim();
+  const oldUri = String(process.env.OLD_ROUTER_DB_URI || '').trim();
   if (!source) throw new Error('ROUTER_DB_URI is required in .env');
   if (!target) throw new Error('NEW_ROUTE_DB_URI is required in .env');
+
+  // After cutover ROUTER_DB_URI points at the new cluster. Fall back to
+  // OLD_ROUTER_DB_URI so verification can still diff old vs new.
+  if (hostOf(source) === hostOf(target) && oldUri && hostOf(oldUri) !== hostOf(target)) {
+    console.log('[note] ROUTER_DB_URI is already on the new cluster — using OLD_ROUTER_DB_URI as source');
+    source = oldUri;
+  }
   if (hostOf(source) === hostOf(target)) {
     throw new Error('Source and target point at the same cluster host — refusing to run.');
   }

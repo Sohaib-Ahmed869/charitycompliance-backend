@@ -35,10 +35,20 @@ const fail = (msg) => {
   console.log(`    FAIL  ${msg}`);
 };
 
+/**
+ * Fields the migration intentionally rewrites, so they must be excluded from
+ * the content checksum or router.tenants would always "mismatch".
+ */
+const OMIT_FROM_CHECKSUM = {
+  'router.tenants': ['clusterEndpoint', 'updatedAt'],
+};
+
 async function checksum(db, name) {
+  const omit = OMIT_FROM_CHECKSUM[`${db.databaseName}.${name}`] || [];
   const hash = crypto.createHash('md5');
   const cursor = db.collection(name).find({}).sort({ _id: 1 }).batchSize(500);
   for await (const doc of cursor) {
+    for (const f of omit) delete doc[f];
     hash.update(BSON.serialize(doc));
   }
   return hash.digest('hex');
@@ -124,8 +134,16 @@ async function main() {
       const label = `    ${String(t.orgId).padEnd(32)} -> ${hostOf(t.clusterEndpoint)}`;
       if (onNew) console.log(`${label}  OK`);
       else fail(`tenant ${t.orgId} clusterEndpoint still points at ${hostOf(t.clusterEndpoint)}`);
-      // does the tenant's database actually exist on target?
-      if (!dstDbs.includes(t.dbName)) fail(`tenant ${t.orgId}: database ${t.dbName} not present on target`);
+      // Does the tenant's database exist on target? Only a migration failure if
+      // it existed on the SOURCE — a tenant record whose DB was never created
+      // (org registered but never provisioned) is a pre-existing orphan.
+      if (!dstDbs.includes(t.dbName)) {
+        if (srcDbs.includes(t.dbName)) {
+          fail(`tenant ${t.orgId}: database ${t.dbName} existed on source but is missing on target`);
+        } else {
+          console.log(`    ${' '.repeat(32)}    note: ${t.dbName} has no data on EITHER cluster (orphan tenant record, pre-existing)`);
+        }
+      }
     }
   } finally {
     await srcClient.close();
