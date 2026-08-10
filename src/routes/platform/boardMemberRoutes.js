@@ -243,14 +243,11 @@ router.post(
       .withMessage('Postcode is required'),
 
     // ─── Identification ──────────────────────────────────────────
-    // Optional at creation: the quick-setup forms (e.g. the onboarding
-    // "Set Up" person modal) don't collect a licence/passport yet, so we
-    // let members be created without ID and captured later via edit —
-    // matching the update route. WHEN an identification block IS supplied,
-    // the at-least-one rule still applies (mirrors the schema pre-validate
-    // hook, which only fires when the block is present).
-    body('identification').optional().custom((value) => {
-      if (!value) return true;
+    // At least one of licence_number OR passport_number is required.
+    // The schema's pre('validate') hook is the authoritative check;
+    // we mirror it here so callers get a 400 with a friendly message
+    // instead of a 500 from the schema validator.
+    body('identification').custom((value) => {
       const lic = value?.licence?.number?.trim?.() || '';
       const pas = value?.passport?.number?.trim?.() || '';
       if (!lic && !pas) {

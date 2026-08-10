@@ -594,7 +594,20 @@ export class ChatRepository {
       const senderName = `${sender.first_name || ''} ${sender.last_name || ''}`.trim()
         || sender.email || 'Someone';
       const channelLabel = channel?.name ? `#${channel.name}` : '';
-      const text = String(message?.body || '').replace(/\s+/g, ' ').trim();
+      // Plain text for the push preview: compliance tokens → their label,
+      // markdown markers stripped (matches the clients' messageToPlain).
+      const text = String(message?.body || '')
+        .replace(/<#[a-z-]+:[a-zA-Z0-9_-]+\|([^>]+)>/g, '$1')
+        .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, '$1')
+        .replace(/`([^`\n]+?)`/g, '$1')
+        .replace(/\*\*([^*\n]+?)\*\*/g, '$1')
+        .replace(/~~([^~\n]+?)~~/g, '$1')
+        .replace(/\*([^*\n]+?)\*/g, '$1')
+        .replace(/_([^_\n]+?)_/g, '$1')
+        .replace(/^#{1,6}\s+/gm, '')
+        .replace(/^>\s?/gm, '')
+        .replace(/^[-*]\s+/gm, '')
+        .replace(/\s+/g, ' ').trim();
       const preview = text
         ? (text.length > 140 ? `${text.slice(0, 139)}…` : text)
         : 'Sent an attachment';

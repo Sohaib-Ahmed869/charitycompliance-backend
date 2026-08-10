@@ -21,7 +21,10 @@ router.get(
   [
     query('status')
       .optional()
-      .isIn(['active', 'inactive'])
+      // 'all' returns every box regardless of status (the repository already
+      // treats it as "no status filter") — the mobile app lists everything and
+      // filters client-side.
+      .isIn(['active', 'inactive', 'all'])
       .withMessage('Invalid status'),
     query('search').optional().trim(),
   ],
