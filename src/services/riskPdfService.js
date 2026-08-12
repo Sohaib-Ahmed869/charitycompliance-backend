@@ -234,6 +234,7 @@ export const generateRiskDetailPDF = async (payload, logoUrl, options = {}) => {
     .info-table td:first-child {
       background-color: #F7FAFC;
       font-weight: 600;
+      
       width: 28%;
     }
     .info-table { background: rgba(255,255,255,0.95); }

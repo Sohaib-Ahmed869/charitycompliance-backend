@@ -30,6 +30,7 @@ import { createVolunteerActionToken } from '../services/volunteerActionTokenServ
 import { notifyVolunteerOfActivePolicies } from '../services/volunteerPolicyNotifier.js';
 import { logInfo, logError } from '../utils/logger.js';
 import { maskEmail } from '../utils/maskPii.js';
+import { getFrontendBaseUrl } from '../utils/frontendUrl.js';
 
 /* ------------------------------------------------------------------ */
 /* Row-level validation                                                */
@@ -141,7 +142,7 @@ const createOneVolunteer = async ({ tenantDb, orgId, org, inviter, data }) => {
   });
 
   // Generate the three public volunteer action tokens.
-  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const frontendUrl = getFrontendBaseUrl();
   const [complaintDoc, riskDoc, coiDoc] = await Promise.all([
     createVolunteerActionToken({ orgId, boardMemberId: boardMember._id, actionType: 'complaint', email: data.email }),
     createVolunteerActionToken({ orgId, boardMemberId: boardMember._id, actionType: 'risk',      email: data.email }),

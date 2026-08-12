@@ -20,6 +20,7 @@ import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
 import { notifyVolunteerOfActivePolicies } from '../services/volunteerPolicyNotifier.js';
+import { getFrontendBaseUrl } from '../utils/frontendUrl.js';
 import { runBulkVolunteerImport } from '../services/bulkVolunteerImportService.js';
 import { runBulkImport } from '../services/bulkImportService.js';
 import { employeeImporter } from '../services/importers/employeeImporter.js';
@@ -343,7 +344,7 @@ export const createBoardMember = asyncHandler(async (req, res) => {
       const position = boardMemberData.custom_position_title || boardMemberData.position;
       let volunteerActionLinks = null;
       if (is_volunteer) {
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const frontendUrl = getFrontendBaseUrl();
         const [complaintDoc, riskDoc, coiDoc] = await Promise.all([
           createVolunteerActionToken({
             orgId,
