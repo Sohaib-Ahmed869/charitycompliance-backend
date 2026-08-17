@@ -34,6 +34,7 @@ import {
 } from '../../services/stripeService.js';
 import { sendPlanChangeNotice } from '../../services/billingEmails.js';
 import { getOrgOwnerEmail } from '../../utils/getOrgOwnerEmail.js';
+import { invalidateMarketplaceGateCache } from '../../middleware/marketplaceGate.js';
 
 const router = express.Router();
 
@@ -2120,6 +2121,7 @@ router.get('/settings', asyncHandler(async (req, res) => {
       defaultHardCapPct: doc?.defaultHardCapPct ?? 100,
       defaultTrialDays: doc?.defaultTrialDays ?? 14,
       overagesGloballyDisabled: !!doc?.overagesGloballyDisabled,
+      policyMarketplaceEnabled: !!doc?.policyMarketplaceEnabled,
       currency: 'AUD'
     }
   });
@@ -2133,13 +2135,14 @@ router.patch(
     body('defaultSoftCapPct').optional().isInt({ min: 50, max: 95 }),
     body('defaultHardCapPct').optional().isInt({ min: 80, max: 200 }),
     body('defaultTrialDays').optional().isInt({ min: 0, max: 90 }),
-    body('overagesGloballyDisabled').optional().isBoolean()
+    body('overagesGloballyDisabled').optional().isBoolean(),
+    body('policyMarketplaceEnabled').optional().isBoolean()
   ],
   validate,
   asyncHandler(async (req, res) => {
     const col = await getSettingsDoc();
     const update = { updated_at: new Date(), updated_by: req.user?.userId || null };
-    for (const k of ['stripeMode', 'defaultSoftCapPct', 'defaultHardCapPct', 'defaultTrialDays', 'overagesGloballyDisabled']) {
+    for (const k of ['stripeMode', 'defaultSoftCapPct', 'defaultHardCapPct', 'defaultTrialDays', 'overagesGloballyDisabled', 'policyMarketplaceEnabled']) {
       if (Object.prototype.hasOwnProperty.call(req.body, k)) update[k] = req.body[k];
     }
     const before = await col.findOne({ key: 'global' });
@@ -2147,6 +2150,7 @@ router.patch(
 
     // Bust every tenant's entitlement cache — settings changes are global.
     invalidateAllEntitlements();
+    invalidateMarketplaceGateCache();
 
     // Special audit: kill-switch toggles get their own action codes.
     if (Object.prototype.hasOwnProperty.call(req.body, 'overagesGloballyDisabled')) {
@@ -2158,6 +2162,19 @@ router.patch(
           targetType: 'settings',
           targetId: 'global',
           targetLabel: 'Disable all overages',
+          metadata: { from: wasOn, to: isOn }
+        });
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body, 'policyMarketplaceEnabled')) {
+      const wasOn = !!before?.policyMarketplaceEnabled;
+      const isOn = !!req.body.policyMarketplaceEnabled;
+      if (wasOn !== isOn) {
+        await writeBillingEvent(req, {
+          action: isOn ? 'system.marketplace_enabled' : 'system.marketplace_disabled',
+          targetType: 'settings',
+          targetId: 'global',
+          targetLabel: 'Policy marketplace',
           metadata: { from: wasOn, to: isOn }
         });
       }

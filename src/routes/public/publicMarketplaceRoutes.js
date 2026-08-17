@@ -38,8 +38,26 @@ import {
 } from '../../services/stripeService.js';
 import { server as serverConfig } from '../../config/index.js';
 import { logError, logInfo } from '../../utils/logger.js';
+import { isPolicyMarketplaceEnabled } from '../../middleware/marketplaceGate.js';
 
 const router = express.Router();
+
+/**
+ * GET /public/marketplace/status — is the marketplace switched on
+ * inside Stewardex?
+ *
+ * The SuperAdmin kill switch controls the Stewardex-embedded surfaces:
+ * the marketing site calls this to decide whether to render the
+ * Marketplace nav link and /marketplace page, and the in-app
+ * /platform/marketplace routes are hard-gated by the same flag.
+ *
+ * The rest of this router is intentionally NOT gated — the standalone
+ * marketplace frontend (separately deployed, its own domain) is powered
+ * by these endpoints and stays live regardless of the switch.
+ */
+router.get('/status', asyncHandler(async (_req, res) => {
+  res.json({ success: true, data: { enabled: await isPolicyMarketplaceEnabled() } });
+}));
 
 // 5 MB cap — logo is a single PNG/JPG, anything bigger is a mistake.
 const upload = multer({

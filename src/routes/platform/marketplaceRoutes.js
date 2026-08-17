@@ -33,9 +33,15 @@ import { getFileStream, uploadToS3 } from '../../services/s3Service.js';
 import { ensureStripeCustomer } from '../../services/stripeService.js';
 import getRouterModels from '../../db/models/routerModels.js';
 import serverConfig from '../../config/index.js';
+import { requireMarketplaceEnabled } from '../../middleware/marketplaceGate.js';
 
 const router = express.Router();
 router.use(authAndResolveTenant);
+
+// SuperAdmin kill switch. Purchases and checkout reconciliation stay
+// reachable so already-paid orders still deliver and remain visible
+// while the marketplace is switched off.
+router.use(requireMarketplaceEnabled(/^\/(purchases|policies\/reconcile-checkout)(\/|$)/));
 
 // ── helpers ─────────────────────────────────────────────────────────
 
