@@ -632,6 +632,21 @@ export const acknowledgePolicy = asyncHandler(async (req, res) => {
   const signatureData = typeof req.body?.signature_data === 'string' ? req.body.signature_data : null;
   const acknowledgement = await acknowledgementRepo.acknowledge(policyId, userId, signatureData, userName, userTitle);
 
+  // Metering — fire-and-forget, idempotent on (policy, user) pair so the
+  // same person re-signing doesn't double-count.
+  try {
+    const { publishUsageEvent } = await import('../utils/publishUsageEvent.js');
+    const orgRow = await orgRepo.findOne();
+    publishUsageEvent({
+      tenantDb,
+      orgId: orgRow?._id,
+      eventCode: 'policy.acknowledged',
+      eventId: `policy_ack:${policyId}:${userIdString}`,
+      countsAsWorkflow: true,
+      payload: { policy_id: String(policyId), user_id: String(userIdString) }
+    });
+  } catch (_) { /* metering must not block the user */ }
+
   res.status(201).json({
     success: true,
     data: acknowledgement

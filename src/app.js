@@ -8,7 +8,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
-import { connectRouterDB } from './config/database.js';
+import { connectRouterDB, getRouterConnection } from './config/database.js';
 import { logDebug, logInfo, logWarn } from './utils/logger.js';
 
 dotenv.config();
@@ -24,6 +24,11 @@ const isModuleEnabled = (name) => !disabledModules.has(String(name || '').toLowe
 const app = express();
 
 app.set('trust proxy', 1)
+// MDB-026: pin the query-string parser to 'simple' so query params are always
+// parsed as flat strings. This blocks NoSQL operator injection via the query
+// string (e.g. ?field[$ne]=x becoming a nested {$ne:'x'} object) as defence in
+// depth alongside the sanitizeMongo middleware.
+app.set('query parser', 'simple')
 // ============================================
 // MIDDLEWARE
 // ============================================
@@ -43,8 +48,11 @@ const isAllowedOrigin = (origin) => {
   if (allowedOrigins.some((allowed) => normalized === String(allowed).replace(/\/$/, ''))) {
     return true;
   }
-  // Allow localhost on arbitrary dev ports to avoid repeated env churn.
-  if (/^https?:\/\/localhost(?::\d+)?$/i.test(normalized)) return true;
+  // SECURITY (API-009): allow localhost on arbitrary dev ports ONLY outside
+  // production. In production, CORS with credentials:true must be limited to the
+  // explicit CORS_ORIGIN / FRONTEND_URL allowlist — an unconditional localhost
+  // allowance enables DNS-rebinding / local-app abuse against a logged-in user.
+  if (process.env.NODE_ENV !== 'production' && /^https?:\/\/localhost(?::\d+)?$/i.test(normalized)) return true;
   return false;
 };
 
@@ -81,10 +89,23 @@ const corsOptions = {
 };
 app.use(cors(corsOptions));
 
+// Stripe webhook MUST be mounted BEFORE express.json() — Stripe signs
+// the raw bytes, so the JSON parser would invalidate the signature.
+// The webhook router uses express.raw() locally to keep req.body as Buffer.
+import stripeWebhookRoutes from './routes/webhooks/stripeWebhookRoutes.js';
+app.use('/api/v1/webhooks/stripe', express.raw({ type: 'application/json' }), stripeWebhookRoutes);
+
 // Body Parser
 const requestBodyLimit = process.env.REQUEST_BODY_LIMIT || '50mb';
 app.use(express.json({ limit: requestBodyLimit }));
 app.use(express.urlencoded({ extended: true, limit: requestBodyLimit }));
+
+// SECURITY (INP-002): strip MongoDB operator injection ($-prefixed / dotted
+// keys) from every parsed body so object-shaped values like { "$ne": null }
+// can never reach a query filter. Mounted right after the body parsers, before
+// any route. (Handlers still type-check their own inputs — defence-in-depth.)
+import sanitizeMongo from './middleware/sanitizeMongo.js';
+app.use(sanitizeMongo);
 
 // Rate limiting intentionally disabled — the dashboard fans out ~20 parallel
 // queries per load and a shared tenant hits global IP limits immediately,
@@ -99,15 +120,91 @@ if (process.env.NODE_ENV === 'development') {
   });
 }
 
-// Health Check Endpoint (before auth)
-app.get('/health', (req, res) => {
+// ============================================
+// HEALTH CHECK
+// ============================================
+//
+// Two flavours, both unauthenticated:
+//
+//   GET /health          - LIVENESS. Returns 200 the moment Express
+//                          is responsive. No DB ping. This is what
+//                          the AWS load balancer / target group
+//                          should hit to decide whether to keep the
+//                          instance in rotation. We don't want a
+//                          transient Mongo blip to deregister us.
+//
+//   GET /api/v1/health   - READINESS. Pings the Router DB and only
+//                          returns 200 when Mongo is connected. This
+//                          is what the deploy pipeline + smoke tests
+//                          hit after a pm2 reload to confirm the
+//                          new process can actually serve requests.
+//                          Returns 503 (NOT 200) when the DB is down,
+//                          so a broken deploy fails fast.
+//
+// We also alias readiness at `/healthz` for any kubernetes-style
+// probe that goes looking for it by convention.
+
+// Liveness: cheap, always green if the event loop is alive.
+app.get('/health', (_req, res) => {
   res.json({
     success: true,
+    status: 'live',
     message: 'Charity Compliance API is running',
     timestamp: new Date().toISOString(),
-    environment: process.env.NODE_ENV
+    environment: process.env.NODE_ENV,
+    uptime_s: Math.floor(process.uptime())
   });
 });
+
+// Readiness: confirms the Router DB is connected and answers a ping.
+// Uses a 1.5s timeout so a half-dead Mongo doesn't keep the health
+// check hanging indefinitely.
+const readinessHandler = async (_req, res) => {
+  const started = Date.now();
+  let dbState = 'unknown';
+  let dbOk = false;
+  let dbPingMs = null;
+
+  try {
+    const conn = getRouterConnection();
+    // mongoose readyState: 0 disconnected, 1 connected, 2 connecting, 3 disconnecting
+    const stateMap = { 0: 'disconnected', 1: 'connected', 2: 'connecting', 3: 'disconnecting' };
+    dbState = stateMap[conn.readyState] || `state-${conn.readyState}`;
+
+    if (conn.readyState === 1) {
+      const pingStart = Date.now();
+      // 1.5s race so a wedged primary doesn't stall the response.
+      await Promise.race([
+        conn.db.admin().command({ ping: 1 }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('ping timeout')), 1500))
+      ]);
+      dbPingMs = Date.now() - pingStart;
+      dbOk = true;
+    }
+  } catch (err) {
+    dbState = `error: ${err.message || 'unknown'}`;
+    dbOk = false;
+  }
+
+  const status = dbOk ? 200 : 503;
+  res.status(status).json({
+    success: dbOk,
+    status: dbOk ? 'ready' : 'not-ready',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    uptime_s: Math.floor(process.uptime()),
+    checks: {
+      router_db: {
+        state: dbState,
+        ping_ms: dbPingMs
+      }
+    },
+    elapsed_ms: Date.now() - started
+  });
+};
+
+app.get('/api/v1/health', readinessHandler);
+app.get('/healthz',         readinessHandler);
 
 // ============================================
 // ROUTES
@@ -117,11 +214,29 @@ app.get('/health', (req, res) => {
 import authRoutes from './routes/platform/authRoutes.js';
 app.use('/api/v1/auth', authRoutes);
 
+// Public, unauthenticated marketing data (used by the /pricing page on the
+// public site). No tenant context, no auth middleware — read-only catalogue.
+import publicPlansRoutes from './routes/public/publicPlansRoutes.js';
+app.use('/api/v1/public/plans', publicPlansRoutes);
+
+// Public-facing policy marketplace (guest checkout, no JWT).
+import publicMarketplaceRoutes from './routes/public/publicMarketplaceRoutes.js';
+app.use('/api/v1/public/marketplace', publicMarketplaceRoutes);
+
+// Public "contact-sales" / bespoke plan request form — POST only, no JWT.
+// On submit we persist a PlanRequest in the Router DB and fire dual emails
+// (one to SUPPORT_EMAIL, one to the requester). Triage happens from the
+// Calcite admin portal under /calcite-admin/plan-requests.
+import planRequestRoutes from './routes/public/planRequestRoutes.js';
+app.use('/api/v1/public/plan-request', planRequestRoutes);
+
 // Platform routes (auth required)
 import organizationRoutes from './routes/platform/organizationRoutes.js';
 import roleRoutes from './routes/platform/roleRoutes.js';
 import onboardingRoutes from './routes/platform/onboardingRoutes.js';
 import expenseRoutes from './routes/platform/expenseRoutes.js';
+import supplierRoutes from './routes/platform/supplierRoutes.js';
+import memberRoutes from './routes/platform/memberRoutes.js';
 import approvalRoutes from './routes/platform/approvalRoutes.js';
 import boardMemberRoutes from './routes/platform/boardMemberRoutes.js';
 import documentRoutes from './routes/platform/documentRoutes.js';
@@ -131,7 +246,10 @@ import financialControlsRoutes from './routes/platform/financialControlsRoutes.j
 import governanceStructureRoutes from './routes/platform/governanceStructureRoutes.js';
 import trainingRoutes from './routes/platform/trainingRoutes.js';
 import riskRoutes from './routes/platform/riskRoutes.js';
+import inquiryRoutes from './routes/platform/inquiryRoutes.js';
+import relatedPartyTransactionRoutes from './routes/platform/relatedPartyTransactionRoutes.js';
 import policyRoutes from './routes/platform/policyRoutes.js';
+import marketplaceRoutes from './routes/platform/marketplaceRoutes.js';
 import meRoutes from './routes/platform/meRoutes.js';
 import positionPermissionsRoutes from './routes/platform/positionPermissions.js';
 import notificationRoutes from './routes/platform/notificationRoutes.js';
@@ -165,15 +283,37 @@ import itRegisterRoutes from './routes/platform/itRegisterRoutes.js';
 import offboardingRoutes from './routes/platform/offboardingRoutes.js';
 import sweepFundsRoutes from './routes/platform/sweepFundsRoutes.js';
 import chatRoutes from './routes/platform/chatRoutes.js';
+import pushTokenRoutes from './routes/platform/pushTokenRoutes.js';
 // Calcite SuperAdmin portal (separate /admin namespace, isolated from tenant routes).
 import adminPlanRoutes from './routes/admin/planRoutes.js';
+import adminReminderConfigRoutes from './routes/admin/reminderConfigRoutes.js';
 import adminAuthRoutes from './routes/admin/authRoutes.js';
 import adminOpsRoutes from './routes/admin/opsRoutes.js';
 import integrationRoutes from './routes/integration/index.js';
+import adminStaffRoutes from './routes/admin/staffRoutes.js';
+import adminTicketsRoutes from './routes/admin/ticketsRoutes.js';
+import adminApprovalsRoutes from './routes/admin/approvalsRoutes.js';
+import adminMarketplacePoliciesRoutes from './routes/admin/marketplacePoliciesRoutes.js';
+import adminPlanRequestRoutes from './routes/admin/planRequestRoutes.js';
+import { requireIpAllowlist } from './middleware/requireIpAllowlist.js';
+import billingRoutes from './routes/platform/billingRoutes.js';
+import weeklyReportRoutes from './routes/platform/weeklyReportRoutes.js';
+import { auditLogMutationMiddleware } from './middleware/auditLogger.js';
+
+// Audit logging — single choke point for the whole tenant API. Registers a
+// response-finish hook on every /platform request and writes an append-only
+// audit_logs row for successful POST/PUT/PATCH/DELETE actions across every
+// module. Must be mounted BEFORE the platform routes so the hook is attached
+// before the handler runs (req.user/req.tenantDb are populated by the
+// per-route auth+tenant middleware and read inside the hook after finish).
+app.use('/api/v1/platform', auditLogMutationMiddleware);
+
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
 if (isModuleEnabled('expenses')) app.use('/api/v1/platform/expenses', expenseRoutes);
+if (isModuleEnabled('suppliers')) app.use('/api/v1/platform/suppliers', supplierRoutes);
+if (isModuleEnabled('members')) app.use('/api/v1/platform/members', memberRoutes);
 if (isModuleEnabled('approvals')) app.use('/api/v1/platform/approvals', approvalRoutes);
 if (isModuleEnabled('checklists')) app.use('/api/v1/platform/checklists', checklistRoutes);
 if (isModuleEnabled('approval-thresholds')) app.use('/api/v1/platform/approval-thresholds', approvalThresholdRoutes);
@@ -186,7 +326,13 @@ if (isModuleEnabled('financial-controls')) app.use('/api/v1/platform/financial-c
 if (isModuleEnabled('governance-structure')) app.use('/api/v1/platform/governance-structure', governanceStructureRoutes);
 if (isModuleEnabled('training')) app.use('/api/v1/platform/training', trainingRoutes);
 if (isModuleEnabled('risks')) app.use('/api/v1/platform/risks', riskRoutes);
+// Inquiries Register — user-defined "mini registers" for ad-hoc data
+// not covered by the hard-coded modules. Always mounted (no DISABLED
+// flag) so new tenants get the feature out of the box.
+app.use('/api/v1/platform/inquiries', inquiryRoutes);
+app.use('/api/v1/platform/related-party-transactions', relatedPartyTransactionRoutes);
 if (isModuleEnabled('policies')) app.use('/api/v1/platform/policies', policyRoutes);
+if (isModuleEnabled('policies')) app.use('/api/v1/platform/marketplace', marketplaceRoutes);
 app.use('/api/v1/platform/me', meRoutes);
 if (isModuleEnabled('position-permissions')) app.use('/api/v1/platform/position-permissions', positionPermissionsRoutes);
 if (isModuleEnabled('notifications')) app.use('/api/v1/platform/notifications', notificationRoutes);
@@ -217,13 +363,29 @@ if (isModuleEnabled('it-register')) app.use('/api/v1/platform/it-register', itRe
 if (isModuleEnabled('offboarding')) app.use('/api/v1/platform/offboarding', offboardingRoutes);
 if (isModuleEnabled('sweep-funds')) app.use('/api/v1/platform/sweep-funds', sweepFundsRoutes);
 if (isModuleEnabled('chat')) app.use('/api/v1/platform/chat', chatRoutes);
+// Mobile push token registration — cross-cutting, always mounted (no feature flag).
+app.use('/api/v1/platform/push-tokens', pushTokenRoutes);
 
 // Calcite SuperAdmin portal — sits outside the /platform namespace.
 // Auth (login + me) is public; everything else is gated by
 // requireSuperAdmin (Sprint 1: read-only catalogue browsing).
+//
+// Network-level allowlist runs FIRST so credential probes never reach
+// auth. Set CALCITE_ADMIN_IP_ALLOWLIST env to enable; empty = open
+// (development default).
+app.use('/api/v1/admin', requireIpAllowlist);
+
 app.use('/api/v1/admin/auth', adminAuthRoutes);
 app.use('/api/v1/admin', adminPlanRoutes);
+app.use('/api/v1/admin', adminReminderConfigRoutes);
 app.use('/api/v1/admin', adminOpsRoutes);
+app.use('/api/v1/admin', adminStaffRoutes);
+app.use('/api/v1/admin', adminTicketsRoutes);
+app.use('/api/v1/admin', adminApprovalsRoutes);
+app.use('/api/v1/admin', adminMarketplacePoliciesRoutes);
+app.use('/api/v1/admin/plan-requests', adminPlanRequestRoutes);
+app.use('/api/v1/platform/billing', billingRoutes);
+if (isModuleEnabled('weekly-reports')) app.use('/api/v1/platform/weekly-reports', weeklyReportRoutes);
 
 // Server-to-server integration API (Calcite Hyper) — API-key auth, see
 // middleware/requireApiKey.js.

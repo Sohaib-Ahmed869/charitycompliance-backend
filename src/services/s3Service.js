@@ -9,7 +9,16 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { getS3Credentials } from './awsSecretsManager.js';
 import { logError, logInfo } from '../utils/logger.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { verifyUploadedFile } from '../utils/fileContentGuard.js';
 import crypto from 'crypto';
+
+// FUP-015: cap how long any presigned download URL can live. 7-day URLs grant
+// week-long, effectively-unauthenticated object access if the link leaks; 24h
+// is generous for in-session viewing while sharply reducing exposure. Callers
+// requesting more are clamped down to this ceiling.
+const MAX_DOWNLOAD_TTL_SECONDS = 24 * 60 * 60; // 24 hours
+// TTL for the URL returned immediately after upload (used once by the caller).
+const POST_UPLOAD_URL_TTL_SECONDS = 60 * 60;   // 1 hour
 
 let s3Client = null;
 let s3Config = null;
@@ -178,6 +187,11 @@ function generateS3Key(orgId, category, originalFileName) {
  * @returns {Promise<Object>} - Upload result with key and URL
  */
 export async function uploadToS3(fileBuffer, fileName, mimeType, orgId, category) {
+  // FUP-003/004/009: validate real file content + filename before it ever
+  // reaches storage. Throws AppError(400) on magic-byte mismatch, dangerous
+  // (double) extensions, or embedded markup/executable content.
+  verifyUploadedFile(fileBuffer, fileName, mimeType);
+
   // Create fresh client each time to match working pattern exactly
   // No caching, no region detection - just use what's in env
   const accessKeyId = (process.env.AWS_ACCESS_KEY_ID || '').trim();
@@ -225,16 +239,24 @@ export async function uploadToS3(fileBuffer, fileName, mimeType, orgId, category
         Bucket: bucketName,
         Key: key
       }),
-      { expiresIn: 604800 } // 7 days
+      { expiresIn: POST_UPLOAD_URL_TTL_SECONDS }
     );
 
     logInfo(`File uploaded to S3: ${key}`);
+
+    // Bump storage counter for this tenant (fire-and-forget).
+    if (orgId && fileBuffer?.length) {
+      trackStorageDelta(orgId, fileBuffer.length).catch((err) => {
+        console.error('[s3Service] storage counter +bytes failed:', err?.message || err);
+      });
+    }
 
     return {
       key,
       url,
       bucket: bucketName,
-      region: region
+      region: region,
+      bytes: fileBuffer?.length || 0
     };
   } catch (error) {
     logError('Error uploading file to S3:', error);
@@ -275,9 +297,9 @@ export async function uploadToS3(fileBuffer, fileName, mimeType, orgId, category
             Bucket: bucketName,
             Key: key
           }),
-          { expiresIn: 604800 }
+          { expiresIn: POST_UPLOAD_URL_TTL_SECONDS }
         );
-        
+
         logInfo(`File uploaded to S3 (with corrected region): ${key}`);
         
         return {
@@ -324,6 +346,9 @@ export async function uploadToS3(fileBuffer, fileName, mimeType, orgId, category
  */
 export async function getFileUrl(s3Key, expiresIn = 3600) {
   try {
+    // FUP-015: clamp to a 24h ceiling regardless of what the caller requests,
+    // so leaked presigned links cannot grant week-long access.
+    expiresIn = Math.min(Math.max(Number(expiresIn) || 3600, 60), MAX_DOWNLOAD_TTL_SECONDS);
     const { client, config } = await getS3Client();
     
     if (!config.bucketName) {
@@ -375,12 +400,21 @@ export async function getFileStream(s3Key, rangeHeader = null) {
  * @param {string} s3Key - S3 object key
  * @returns {Promise<void>}
  */
-export async function deleteFromS3(s3Key) {
+export async function deleteFromS3(s3Key, orgIdForMetering) {
   try {
     const { client, config } = await getS3Client();
-    
+
     if (!config.bucketName) {
       throw new AppError('S3 bucket name not configured', 500, 'S3_CONFIG_ERROR');
+    }
+
+    // Look up object size BEFORE delete so we can decrement the storage counter.
+    let objectSize = 0;
+    if (orgIdForMetering) {
+      try {
+        const head = await client.send(new HeadObjectCommand({ Bucket: config.bucketName, Key: s3Key }));
+        objectSize = Number(head?.ContentLength || 0);
+      } catch { /* HEAD failure is non-fatal — just skip the credit */ }
     }
 
     const command = new DeleteObjectCommand({
@@ -390,6 +424,12 @@ export async function deleteFromS3(s3Key) {
 
     await client.send(command);
     logInfo(`File deleted from S3: ${s3Key}`);
+
+    if (orgIdForMetering && objectSize > 0) {
+      trackStorageDelta(orgIdForMetering, -objectSize).catch((err) => {
+        console.error('[s3Service] storage counter -bytes failed:', err?.message || err);
+      });
+    }
   } catch (error) {
     logError('Error deleting file from S3:', error);
     throw new AppError('Failed to delete file from S3', 500, 'S3_DELETE_ERROR');
@@ -423,4 +463,21 @@ export async function fileExistsInS3(s3Key) {
     logError('Error checking file existence in S3:', error);
     return false;
   }
+}
+
+/**
+ * Resolve the tenant DB connection for an orgId and bump (or credit) the
+ * storage byte counter. Used by uploadToS3 / deleteFromS3 to keep the
+ * `storageBytes` row in usage_counters in sync with actual S3 usage.
+ *
+ * Fire-and-forget — caller does not await this.
+ */
+async function trackStorageDelta(orgId, deltaBytes) {
+  if (!orgId || !deltaBytes) return;
+  const [{ getTenantConnection }, { adjustStorageBytes }] = await Promise.all([
+    import('../db/connectionManager.js'),
+    import('./usageMeterService.js')
+  ]);
+  const tenantDb = await getTenantConnection(String(orgId).toLowerCase());
+  await adjustStorageBytes({ tenantDb, orgId: String(orgId).toLowerCase(), deltaBytes });
 }

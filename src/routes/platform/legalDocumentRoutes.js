@@ -9,11 +9,13 @@ import * as legalDocController from '../../controllers/legalDocumentController.j
 import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { uploadSingle, handleUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
 
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.organisation'));
 
 router.post(
   '/',

@@ -40,7 +40,9 @@ export const CATEGORY_TO_ACTION = {
   financial_reporting_approval: 'financial_reporting',
   project_delivery_approval: 'project_delivery',
   project_delivery_changes_approval: 'project_delivery_changes',
-  refunds_approval: 'refunds'
+  refunds_approval: 'refunds',
+  members_approval: 'members',
+  related_party_transaction: 'related_party_transaction'
 };
 
 export const ACTION_TO_CATEGORY = Object.fromEntries(
@@ -70,7 +72,9 @@ export const CATEGORY_DISPLAY_NAMES = {
   financial_reporting_approval: 'Fiscal Reports',
   project_delivery_approval: 'Project Delivery',
   project_delivery_changes_approval: 'Project Delivery Changes',
-  refunds_approval: 'Refunds'
+  refunds_approval: 'Refunds',
+  members_approval: 'Member Approvals',
+  related_party_transaction: 'Related Party Transaction'
 };
 
 const _normalize = (v) => String(v || '').trim().toLowerCase();

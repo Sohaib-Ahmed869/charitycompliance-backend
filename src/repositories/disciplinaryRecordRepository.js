@@ -1,4 +1,5 @@
 import disciplinaryRecordSchema from '../db/schemas/platform/disciplinaryRecordSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 export class DisciplinaryRecordRepository {
   constructor(tenantDb) {
@@ -31,7 +32,7 @@ export class DisciplinaryRecordRepository {
     const query = { org_id: orgId };
     if (filters.status) query.status = filters.status;
     if (filters.search) {
-      const regex = new RegExp(filters.search, 'i');
+      const regex = new RegExp(escapeRegex(filters.search), 'i');
       query.$or = [
         { issue_type: regex },
         { description: regex },

@@ -8,10 +8,12 @@ import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { requirePermission } from '../../middleware/rbac.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { uploadPolicySingle, handlePolicyUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.policy_management'));
 
 router.get(
   '/counts',

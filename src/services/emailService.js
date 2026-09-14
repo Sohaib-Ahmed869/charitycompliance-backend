@@ -78,7 +78,7 @@ function buildEmailTemplate({ heading, headingHighlight, bodyHtml, buttonText, b
   // into a tiny broken-icon).
   const logoUrl = resolveLogoUrl();
   const logoHtml = logoUrl
-    ? `<img src="${logoUrl}" alt="${APP_NAME}" width="180" height="44" border="0" style="width: 180px; height: 44px; max-width: 180px; display: block; margin: 0 auto; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />`
+    ? `<img src="${logoUrl}" alt="${APP_NAME}" width="180" height="52" border="0" style="width: 180px; height: 52px; max-width: 180px; display: block; margin: 0 auto; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic;" />`
     : `<span style="font-family: 'Bodoni Moda', Georgia, 'Times New Roman', serif; font-size: 30px; font-weight: 700; letter-spacing: -0.015em; color: ${BRAND_DEEP};">${APP_NAME}</span>`;
 
   // Heading — first word can be painted brand-azure for visual emphasis.
@@ -303,8 +303,10 @@ class EmailService {
    * @param {string} options.subject - Email subject
    * @param {string} options.html - HTML content
    * @param {string} options.text - Plain text content (optional)
+   * @param {Array}  options.attachments - nodemailer attachments (optional);
+   *        each item is `{ filename, content (Buffer|string), contentType }`.
    */
-  async sendEmail({ to, subject, html, text, brandTemplate }) {
+  async sendEmail({ to, subject, html, text, brandTemplate, attachments }) {
     // Belt-and-braces: if `html` wasn't built via `buildEmailTemplate` (no
     // sentinel), wrap it now so every outbound email lands in the brand chrome
     // — gradient strip, logo, footer. Callers can opt out by passing
@@ -352,12 +354,17 @@ class EmailService {
 
     try {
       const mailOptions = {
-        from: `"${process.env.EMAIL_FROM_NAME || 'Charity Compliance'}" <${process.env.EMAIL_USER}>`,
+        from: `"${process.env.EMAIL_FROM_NAME || 'Stewardex'}" <${process.env.EMAIL_USER}>`,
         to,
         subject,
         html,
         text: text || html.replace(/<[^>]*>/g, '') // Strip HTML for text version
       };
+      // File attachments (e.g. an invoice PDF) — only set when provided so
+      // the vast majority of emails that carry none stay unaffected.
+      if (Array.isArray(attachments) && attachments.length > 0) {
+        mailOptions.attachments = attachments;
+      }
 
       const sendTimeout = parseInt(process.env.SMTP_SEND_TIMEOUT_MS) || 30000;
       const result = await Promise.race([

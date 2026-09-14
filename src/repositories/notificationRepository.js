@@ -5,21 +5,74 @@
  */
 
 import notificationSchema from '../db/schemas/platform/notificationSchema.js';
+import { sendToUsers } from '../services/pushService.js';
+
+/**
+ * Map an in-app notification to the mobile app's deep-link contract
+ * ({ screen, params } consumed by PushRegistrar — MOBILE_PUSH_NOTIFICATIONS_SPEC §6).
+ * Unknown entity types land on the in-app Notifications screen.
+ */
+const ENTITY_SCREENS = {
+  approval_request: 'ApprovalDetail',
+  meeting: 'MeetingDetail',
+  complaint: 'ComplaintDetail',
+  risk: 'RiskDetail',
+  policy: 'PolicyDetail',
+  support_ticket: 'SupportTicketDetail',
+  inquiry_record: 'InquiryRecord'
+};
+
+function mobileDeepLink(notification) {
+  const entityType = notification.related_entity_type;
+  const id = notification.related_entity_id ? String(notification.related_entity_id) : null;
+  const screen = id && ENTITY_SCREENS[entityType];
+  if (screen) {
+    return { type: entityType, id, screen, params: { id } };
+  }
+  if (entityType === 'expense') return { type: 'expense', id, screen: 'Expenses', params: {} };
+  if (entityType === 'training_program') return { type: 'training', id, screen: 'MyTraining', params: {} };
+  return { type: notification.type, id, screen: 'Notifications', params: {} };
+}
+
+/**
+ * Mirror freshly-created in-app notifications to the mobile app via Expo push.
+ * Batches identical payloads (createMany fan-outs differ only by user) and is
+ * fire-and-forget by contract — callers do not await it.
+ */
+async function mirrorToMobilePush(tenantDb, items) {
+  const groups = new Map();
+  for (const n of items) {
+    if (!n?.user_id || !n.title) continue;
+    const data = mobileDeepLink(n);
+    const key = `${n.title}|${n.message || ''}|${data.screen}|${data.id || ''}`;
+    const group = groups.get(key) || { title: n.title, body: n.message || '', data, userIds: [] };
+    group.userIds.push(n.user_id);
+    groups.set(key, group);
+  }
+  for (const { title, body, data, userIds } of groups.values()) {
+    await sendToUsers(tenantDb, userIds, { title, body, data });
+  }
+}
 
 export class NotificationRepository {
   constructor(tenantDb) {
+    this.tenantDb = tenantDb;
     this.Notification = tenantDb.models.Notification ||
       tenantDb.model('Notification', notificationSchema);
   }
 
   async create(data) {
     const notification = new this.Notification(data);
-    return await notification.save();
+    const saved = await notification.save();
+    mirrorToMobilePush(this.tenantDb, [saved]).catch(() => {});
+    return saved;
   }
 
   async createMany(items) {
     if (!items || items.length === 0) return [];
-    return await this.Notification.insertMany(items);
+    const docs = await this.Notification.insertMany(items);
+    mirrorToMobilePush(this.tenantDb, docs).catch(() => {});
+    return docs;
   }
 
   async findByUserId(userId, options = {}) {

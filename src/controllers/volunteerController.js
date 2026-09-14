@@ -16,8 +16,7 @@ import {
   resolveVolunteerActionToken,
   markVolunteerActionTokenUsed,
 } from '../services/volunteerActionTokenService.js';
-
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+import { getFrontendBaseUrl, rebasePublicLink } from '../utils/frontendUrl.js';
 
 async function getVolunteerContextFromToken(token, expectedType = null) {
   const tokenDoc = await resolveVolunteerActionToken(token, expectedType);
@@ -71,12 +70,13 @@ export const generateVolunteerActionLinks = asyncHandler(async (req, res) => {
     }),
   ]);
 
+  const frontendUrl = getFrontendBaseUrl();
   res.json({
     success: true,
     data: {
-      complaint: `${FRONTEND_URL}/public/volunteer/complaint/${complaintDoc.token}`,
-      risk: `${FRONTEND_URL}/public/volunteer/risk/${riskDoc.token}`,
-      coi: `${FRONTEND_URL}/public/volunteer/coi/${coiDoc.token}`,
+      complaint: `${frontendUrl}/public/volunteer/complaint/${complaintDoc.token}`,
+      risk: `${frontendUrl}/public/volunteer/risk/${riskDoc.token}`,
+      coi: `${frontendUrl}/public/volunteer/coi/${coiDoc.token}`,
     },
   });
 });
@@ -449,10 +449,11 @@ export const regenerateVolunteerActionLinks = asyncHandler(async (req, res) => {
   ]);
 
   // Update the volunteer record with new action links
+  const frontendUrl = getFrontendBaseUrl();
   const actionLinks = {
-    complaint: `${FRONTEND_URL}/public/volunteer/complaint/${complaintDoc.token}`,
-    risk: `${FRONTEND_URL}/public/volunteer/risk/${riskDoc.token}`,
-    coi: `${FRONTEND_URL}/public/volunteer/coi/${coiDoc.token}`,
+    complaint: `${frontendUrl}/public/volunteer/complaint/${complaintDoc.token}`,
+    risk: `${frontendUrl}/public/volunteer/risk/${riskDoc.token}`,
+    coi: `${frontendUrl}/public/volunteer/coi/${coiDoc.token}`,
     generated_at: new Date(),
   };
 
@@ -504,7 +505,7 @@ export const resendVolunteerActionLinks = asyncHandler(async (req, res) => {
 
   if (!hasAnyLink) {
     // Ensure links exist before sending.
-    const frontendUrl = process.env.FRONTEND_URL || FRONTEND_URL;
+    const frontendUrl = getFrontendBaseUrl();
     const [complaintDoc, riskDoc, coiDoc] = await Promise.all([
       createVolunteerActionToken({ orgId, boardMemberId, actionType: 'complaint', email: volunteer.email }),
       createVolunteerActionToken({ orgId, boardMemberId, actionType: 'risk', email: volunteer.email }),
@@ -517,6 +518,21 @@ export const resendVolunteerActionLinks = asyncHandler(async (req, res) => {
       generated_at: new Date(),
     };
     await boardMemberRepo.update(boardMemberId, { volunteer_action_links: links });
+  } else {
+    // Stored links carry the origin they were generated with; rebase onto the
+    // current FRONTEND_URL so a past env misconfiguration isn't re-emailed.
+    const rebased = {
+      ...(links.toObject ? links.toObject() : links),
+      complaint: rebasePublicLink(links.complaint),
+      risk: rebasePublicLink(links.risk),
+      coi: rebasePublicLink(links.coi),
+    };
+    const changed =
+      rebased.complaint !== links.complaint || rebased.risk !== links.risk || rebased.coi !== links.coi;
+    if (changed) {
+      links = rebased;
+      await boardMemberRepo.update(boardMemberId, { volunteer_action_links: links });
+    }
   }
 
   const recipientName = [volunteer.given_names, volunteer.family_name].filter(Boolean).join(' ').trim() || 'Volunteer';

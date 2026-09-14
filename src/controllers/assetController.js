@@ -14,6 +14,8 @@ import { validationResult } from 'express-validator';
 import { AppError } from '../middleware/errorHandler.js';
 import { uploadToS3, deleteFromS3, getFileUrl } from '../services/s3Service.js';
 import { encryptSecret, decryptSecret } from '../services/secretCryptoService.js';
+import { runBulkImport } from '../services/bulkImportService.js';
+import { assetImporter } from '../services/importers/assetImporter.js';
 
 const normalizeAssignedTo = (assignedTo) => {
   if (!assignedTo) return undefined;
@@ -76,6 +78,27 @@ export const createAsset = asyncHandler(async (req, res) => {
       assetData.policyCompliance = {};
     }
   }
+  // bank_cards arrives as a JSON-stringified array when posted via
+  // multipart (which the create modal uses for file upload). Parse so
+  // the asset schema receives the proper array shape. Also normalise
+  // numeric fields — multipart stringifies everything.
+  if (typeof assetData?.bank_cards === 'string') {
+    try {
+      assetData.bank_cards = JSON.parse(assetData.bank_cards);
+    } catch {
+      assetData.bank_cards = [];
+    }
+  }
+  if (Array.isArray(assetData.bank_cards)) {
+    assetData.bank_cards = assetData.bank_cards.map((c) => ({
+      ...c,
+      expiry_month: c?.expiry_month ? Number(c.expiry_month) : undefined,
+      expiry_year:  c?.expiry_year  ? Number(c.expiry_year)  : undefined,
+      credit_limit: (c?.credit_limit !== undefined && c?.credit_limit !== '')
+        ? Number(c.credit_limit)
+        : undefined
+    }));
+  }
 
   const creationIntent = assetData.creation_intent === 'credentials' ? 'credentials' : 'subscription';
   delete assetData.creation_intent;
@@ -137,6 +160,21 @@ export const createAsset = asyncHandler(async (req, res) => {
       documentation_url: documentationUrl
     }
   });
+});
+
+// ─── BULK IMPORT ───────────────────────────────────────────────────────
+// Each row → an asset via AssetService.createAsset. Dedupes on serial
+// number / asset name. Assets have no approval workflow, so created rows
+// report approval 'skipped'. Returns 207 (multi-status).
+export const bulkImportAssets = asyncHandler(async (req, res) => {
+  const result = await runBulkImport({
+    tenantDb: req.tenantDb,
+    orgId: req.orgId,
+    actor: { userId: req.user.userId },
+    rows: Array.isArray(req.body?.rows) ? req.body.rows : [],
+    importer: assetImporter
+  });
+  res.status(207).json({ success: true, data: result });
 });
 
 export const getAssets = asyncHandler(async (req, res) => {
@@ -226,6 +264,27 @@ export const updateAsset = asyncHandler(async (req, res) => {
     } catch {
       assetData.policyCompliance = {};
     }
+  }
+  // bank_cards arrives as a JSON-stringified array when posted via
+  // multipart (which the create modal uses for file upload). Parse so
+  // the asset schema receives the proper array shape. Also normalise
+  // numeric fields — multipart stringifies everything.
+  if (typeof assetData?.bank_cards === 'string') {
+    try {
+      assetData.bank_cards = JSON.parse(assetData.bank_cards);
+    } catch {
+      assetData.bank_cards = [];
+    }
+  }
+  if (Array.isArray(assetData.bank_cards)) {
+    assetData.bank_cards = assetData.bank_cards.map((c) => ({
+      ...c,
+      expiry_month: c?.expiry_month ? Number(c.expiry_month) : undefined,
+      expiry_year:  c?.expiry_year  ? Number(c.expiry_year)  : undefined,
+      credit_limit: (c?.credit_limit !== undefined && c?.credit_limit !== '')
+        ? Number(c.credit_limit)
+        : undefined
+    }));
   }
 
   if (req.file) {

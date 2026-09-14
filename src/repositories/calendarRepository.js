@@ -295,6 +295,58 @@ export class CalendarRepository {
   }
 
   /**
+   * Find documents that have superseded (replaced) expiry dates.
+   * Returns each historical expiry as a flattened row so the calendar can
+   * render the old expiry struck-off. Filtered to the same categories as
+   * the live expiry query so only licence/registration/governing docs
+   * surface. The optional date window filters on the historical date.
+   */
+  async findSupersededDocumentExpiries(orgId, options = {}) {
+    let orgIdObj = orgId;
+    try {
+      if (typeof orgId === 'string' && mongoose.Types.ObjectId.isValid(orgId)) {
+        orgIdObj = new mongoose.Types.ObjectId(orgId);
+      }
+    } catch (e) {
+      // Use original if conversion fails
+    }
+
+    const docs = await this.Document.find({
+      org_id: orgIdObj,
+      status: { $in: ['submitted', 'approved'] },
+      category: { $in: ['governing_document', 'constitution', 'trust_deed', 'certificate_of_incorporation', 'registration_license'] },
+      'expiry_history.0': { $exists: true }
+    })
+      .select('_id title document_type category expiry_date expiry_history')
+      .lean();
+
+    const startDate = options.start_date ? new Date(options.start_date) : null;
+    const endDate = options.end_date ? new Date(options.end_date) : null;
+
+    const rows = [];
+    for (const d of docs) {
+      (d.expiry_history || []).forEach((h, idx) => {
+        if (!h?.expiry_date) return;
+        const due = new Date(h.expiry_date);
+        if (Number.isNaN(due.getTime())) return;
+        if (startDate && due < startDate) return;
+        if (endDate && due > endDate) return;
+        rows.push({
+          _id: `${d._id}-exphist-${idx}`,
+          source_doc_id: d._id,
+          title: d.title,
+          document_type: d.document_type,
+          category: d.category,
+          expiry_date: h.expiry_date,
+          current_expiry: d.expiry_date,
+          superseded_at: h.superseded_at
+        });
+      });
+    }
+    return rows;
+  }
+
+  /**
    * Find governing document review dates.
    * Uses review_date when available, with effective_date/date_adopted as fallback.
    */

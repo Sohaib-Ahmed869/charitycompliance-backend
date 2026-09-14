@@ -14,8 +14,7 @@ import { createVolunteerActionToken } from './volunteerActionTokenService.js';
 import { decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { getMasterKeyHex } from '../config/encryption.js';
 import { logError, logInfo } from '../utils/logger.js';
-
-const FRONTEND_URL = () => process.env.FRONTEND_URL || 'http://localhost:5173';
+import { getFrontendBaseUrl } from '../utils/frontendUrl.js';
 
 function fullName(bm) {
   return `${bm?.given_names || ''} ${bm?.family_name || ''}`.trim() || 'Volunteer';
@@ -29,7 +28,7 @@ async function emailVolunteerAboutPolicy(orgId, volunteer, policy) {
     email: volunteer.email,
     metadata: { policy_id: String(policy._id) }
   });
-  const acknowledgeUrl = `${FRONTEND_URL()}/public/volunteer/policy_ack/${tokenDoc.token}`;
+  const acknowledgeUrl = `${getFrontendBaseUrl()}/public/volunteer/policy_ack/${tokenDoc.token}`;
   return emailService.sendVolunteerPolicyNotification({
     to: volunteer.email,
     recipientName: fullName(volunteer),

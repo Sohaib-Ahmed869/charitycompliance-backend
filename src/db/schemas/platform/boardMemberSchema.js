@@ -33,7 +33,8 @@ const boardMemberSchema = new mongoose.Schema({
   },
   date_of_birth: {
     type: Date,
-    required: true,
+    // Volunteers are just contacts; only board members must supply DOB.
+    required: function () { return !this.is_volunteer; },
     encrypted: true
   },
   // Governance/responsible person role title (not limited to board positions)
@@ -95,29 +96,80 @@ const boardMemberSchema = new mongoose.Schema({
     encrypted: true
   },
   residential_address: {
+    // Required for board members, optional for volunteers — a volunteer
+    // record is created from just name + email, address can be added
+    // later via their profile.
     line1: {
       type: String,
-      required: true,
+      required: function () { return !this.is_volunteer; },
       encrypted: true
     },
     suburb: {
       type: String,
-      required: true,
+      required: function () { return !this.is_volunteer; },
       encrypted: true
     },
     state: {
       type: String,
-      required: true,
-      enum: ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT']
+      required: function () { return !this.is_volunteer; },
+      enum: {
+        values: ['NSW', 'VIC', 'QLD', 'SA', 'WA', 'TAS', 'NT', 'ACT', ''],
+        message: 'Valid state is required'
+      }
     },
     postcode: {
       type: String,
-      required: true,
+      required: function () { return !this.is_volunteer; },
       encrypted: true
     }
   },
   residential_address_changed_date: {
     type: Date
+  },
+
+  // ─── Government-issued ID ────────────────────────────────────────────
+  // Captured for every person tracked on the platform — directors,
+  // responsible people, volunteers, and employees (all share this
+  // schema; the flags `is_board_member`, `is_volunteer`,
+  // `is_head_of_department` and the presence of `position_id`
+  // discriminate).
+  //
+  // Rule: at least ONE of licence_number or passport_number must be
+  // set. Enforced via a `pre('validate')` hook below — Mongoose
+  // can't express "either-of" inside the field declarations alone.
+  //
+  // Document numbers + dates are encrypted at rest. Optional upload
+  // points at a record in the existing Document collection.
+  identification: {
+    licence: {
+      number:       { type: String, trim: true, encrypted: true, searchable: true },
+      issue_date:   { type: Date },
+      expiry_date:  { type: Date, index: true },
+      issuing_authority: { type: String, trim: true },
+      country:      { type: String, trim: true, default: 'Australia' },
+      document_id:  { type: mongoose.Schema.Types.ObjectId, ref: 'Document' },
+      uploaded_at:  { type: Date },
+      // Prior expiry dates, kept so the calendar shows the old date
+      // struck-off (superseded) rather than dropping it when the licence
+      // is renewed to a later date.
+      expiry_history: [{
+        expiry_date:   { type: Date },
+        superseded_at: { type: Date, default: Date.now }
+      }]
+    },
+    passport: {
+      number:       { type: String, trim: true, encrypted: true, searchable: true },
+      issue_date:   { type: Date },
+      expiry_date:  { type: Date, index: true },
+      country_of_issue: { type: String, trim: true },
+      document_id:  { type: mongoose.Schema.Types.ObjectId, ref: 'Document' },
+      uploaded_at:  { type: Date },
+      // See licence.expiry_history above — same purpose for passports.
+      expiry_history: [{
+        expiry_date:   { type: Date },
+        superseded_at: { type: Date, default: Date.now }
+      }]
+    }
   },
   // System user account link (if they have platform access)
   user_id: {
@@ -157,7 +209,9 @@ const boardMemberSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['active', 'resigned', 'removed'],
+    // 'inactive' = volunteer offboarded/made inactive (kept on the register,
+    // not removed) — see the Volunteers page offboard action (#3).
+    enum: ['active', 'resigned', 'removed', 'inactive'],
     default: 'active'
   },
   offboarded_at: {
@@ -263,5 +317,42 @@ boardMemberSchema.plugin(mongooseEncryptPlugin);
 boardMemberSchema.index({ org_id: 1, is_active: 1 });
 boardMemberSchema.index({ email: 1 });
 boardMemberSchema.index({ invitation_token: 1 });
+// Index expiry dates so the Expired IDs list + calendar feed can scan
+// without a full-collection sweep. Org-scoped to keep the partition tight.
+boardMemberSchema.index({ org_id: 1, 'identification.licence.expiry_date': 1 });
+boardMemberSchema.index({ org_id: 1, 'identification.passport.expiry_date': 1 });
+
+/**
+ * At-least-one validator for identification documents.
+ *
+ * Every person tracked must have at least one government ID on record:
+ * either a driver's licence number OR a passport number. Both are also
+ * fine. Other fields (issue date, expiry date, upload) are optional.
+ *
+ * Skipped when the document is a legacy pre-feature record (no
+ * `identification` block at all) so existing rows don't fail on
+ * unrelated saves — the migration happens organically when each row is
+ * next edited. Once the frontend forms ship the field, every new save
+ * gets the rule.
+ */
+boardMemberSchema.pre('validate', function (next) {
+  const hadIdentification = !!this.identification && (
+    this.identification.licence
+    || this.identification.passport
+    || this.isModified('identification')
+  );
+  if (!hadIdentification) return next();
+  const lic = this.identification?.licence?.number?.trim?.() || '';
+  const pas = this.identification?.passport?.number?.trim?.() || '';
+  if (!lic && !pas) {
+    this.invalidate(
+      'identification',
+      'At least one of driver\'s licence number or passport number is required.',
+      this.identification,
+      'ID_REQUIRED'
+    );
+  }
+  next();
+});
 
 export default boardMemberSchema;

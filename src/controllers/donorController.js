@@ -149,6 +149,42 @@ export const initiateDonorRefund = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Manually record a donor refund — bookkeeping entry that bypasses the
+ * standard donor-initiated workflow. Used when the donor isn't in the
+ * Donor Register (small one-off donors) or when the refund happened
+ * out-of-band and just needs to be on the record.
+ */
+export const createManualDonorRefund = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user?.userId || req.userId;
+  const tenantDb = await getTenantConnection(orgId);
+  const service = new DonorService(orgId, tenantDb);
+  const refund = await service.createManualDonorRefund(userId, req.body);
+  res.status(201).json({ success: true, data: refund });
+});
+
+/**
+ * Get a single refund by id — works for BOTH donor and project refunds
+ * because they share the `project_refunds` collection. Used by the
+ * approval detail page when a refunds-category approval is opened, so
+ * approvers can see who / what they're approving.
+ */
+export const getRefundById = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+  const { DonorRefundRepository } = await import('../repositories/donorRefundRepository.js');
+  const repo = new DonorRefundRepository(tenantDb);
+  const refund = await repo.findById(req.params.refundId);
+  if (!refund) {
+    return res.status(404).json({
+      success: false,
+      error: { code: 'NOT_FOUND', message: 'Refund not found' }
+    });
+  }
+  res.json({ success: true, data: refund });
+});
+
+/**
  * List donor refunds
  */
 export const listDonorRefunds = asyncHandler(async (req, res) => {

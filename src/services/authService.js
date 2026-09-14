@@ -14,9 +14,36 @@ import { UserRepository } from '../repositories/userRepository.js';
 import getRouterModels from '../db/models/routerModels.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo, logWarn } from '../utils/logger.js';
+import { maskEmail } from '../utils/maskPii.js';
 import { decrypt, isEncrypted } from '../utils/encryption.js';
 import emailService from './emailService.js';
 import { buildAuditorPermissions } from '../utils/auditorAccess.js';
+import { recordAuditLog } from './auditLogService.js';
+
+// AUTH-020: a fixed, valid bcrypt hash (cost 12, matching real password hashes)
+// used to normalise login timing. When the email doesn't exist we still run a
+// bcrypt.compare against this, so "no such user" takes ~the same time as "wrong
+// password" — defeating timing-based account enumeration. Computed once at load.
+const TIMING_NORMALIZER_HASH = bcrypt.hashSync('__timing_normalizer__', 12);
+
+/** Best-effort login/logout audit entry. Never throws. */
+async function recordAuthEvent(tenantDb, { orgId, userId, email, action, outcome, reason }) {
+  if (!tenantDb) return;
+  await recordAuditLog(tenantDb, {
+    org_id: orgId || null,
+    actor_user_id: userId || null,
+    actor_email: email || null,
+    actor_role: null,
+    action,
+    module: 'auth',
+    method: 'POST',
+    path: 'auth',
+    entity_type: 'session',
+    entity_id: userId ? String(userId) : null,
+    outcome: outcome || 'success',
+    details: reason ? { reason } : {}
+  });
+}
 
 const SALT_ROUNDS = 12;
 const MAX_FAILED_ATTEMPTS = 5;
@@ -104,6 +131,7 @@ export const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => 
       'policies',
       'human_resources',
       'financial_mgmt',
+      'supplier_register',
       'donation_boxes',
       'risk_mgmt',
 
@@ -120,6 +148,7 @@ export const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => 
       'bcp',
       'asset_mgmt',
       'legal_docs',
+      'access_control',
 
       // Support
       'support_tickets',
@@ -128,6 +157,10 @@ export const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => 
     // Fixed modules: dashboard & audit_trail (view only), approval_workflow & human_resources (view+edit)
     const FIXED_VIEW_ONLY = ['dashboard', 'audit_trail'];
     const FIXED_VIEW_EDIT = ['approval_workflow', 'human_resources'];
+    // Opt-in, admin-only modules: NEVER granted by default. Admins get them via
+    // their `*:*` token; non-admins only when a position explicitly grants them
+    // in Roles & Permissions. (Access Control & Offboarding is sensitive.)
+    const OPT_IN_ADMIN_ONLY = ['access_control'];
 
     // Merge module_permissions from all positions (most permissive wins)
     const permsMap = {};
@@ -153,8 +186,8 @@ export const getPositionPermissionsForUser = async (tenantDb, userId, orgId) => 
         if (permsMap[mod].view) result.push(`module:${mod}:view`);
         if (permsMap[mod].edit) result.push(`module:${mod}:edit`);
         if (permsMap[mod].delete) result.push(`module:${mod}:delete`);
-      } else {
-        // No permissions set - use defaults
+      } else if (!OPT_IN_ADMIN_ONLY.includes(mod)) {
+        // No permissions set - use defaults (opt-in/admin-only modules get nothing)
         const isFixedViewEdit = FIXED_VIEW_EDIT.includes(mod);
         result.push(`module:${mod}:view`);
         if (isFixedViewEdit) result.push(`module:${mod}:edit`);
@@ -402,7 +435,10 @@ export class AuthService {
       }
 
       if (!user) {
-        logWarn('Login failed - user not found in any tenant', { email });
+        // AUTH-020: run a dummy bcrypt compare so a missing email costs about
+        // the same as a wrong password — no timing-based account enumeration.
+        await bcrypt.compare(password, TIMING_NORMALIZER_HASH).catch(() => {});
+        logWarn('Login failed - user not found in any tenant', { email: maskEmail(email) });
         throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
       }
 
@@ -423,16 +459,19 @@ export class AuthService {
           const lockUntil = new Date(Date.now() + LOCK_DURATION_MS);
           await userRepo.lockUser(user._id, lockUntil);
           logWarn('Account locked due to failed attempts', { userId: user._id, orgId });
+          await recordAuthEvent(tenantDb, { orgId, userId: user._id, email, action: 'Login failed (account locked)', outcome: 'failure', reason: 'Too many failed attempts' });
           throw new AppError('Account locked due to too many failed attempts', 423, 'ACCOUNT_LOCKED');
         }
 
         logWarn('Login failed - invalid password', { userId: user._id, orgId });
+        await recordAuthEvent(tenantDb, { orgId, userId: user._id, email, action: 'Login failed', outcome: 'failure', reason: 'Invalid password' });
         throw new AppError('Invalid email or password', 401, 'INVALID_CREDENTIALS');
       }
 
       // Block login for any non-active account state.
       if (user.status && user.status !== 'active') {
         logWarn('Login blocked - user account not active', { userId: user._id, orgId, status: user.status });
+        await recordAuthEvent(tenantDb, { orgId, userId: user._id, email, action: 'Login blocked (inactive account)', outcome: 'failure', reason: `Status: ${user.status}` });
         throw new AppError(
           'Your account is inactive. Please contact your administrator.',
           403,
@@ -474,6 +513,10 @@ export class AuthService {
       // Update last login
       const userRepo = new UserRepository(tenantDb);
       await userRepo.updateLastLogin(user._id);
+
+      // Audit: successful credential authentication (logged once per sign-in;
+      // for MFA users this marks credential acceptance ahead of the OTP step).
+      await recordAuthEvent(tenantDb, { orgId, userId: user._id, email, action: 'User logged in', outcome: 'success' });
 
       // Normalize orgId to lowercase for consistency (needed for both MFA and non-MFA paths)
       const normalizedOrgId = orgId.toLowerCase().trim();
@@ -691,7 +734,7 @@ export class AuthService {
       if (error instanceof AppError) {
         throw error;
       }
-      logError('Login failed', error, { email });
+      logError('Login failed', error, { email: maskEmail(email) });
       throw new AppError('Login failed', 500, 'LOGIN_ERROR');
     }
   }
@@ -1051,7 +1094,7 @@ export class AuthService {
     }
 
     if (!user) {
-      logWarn('Forgot password - user not found', { email });
+      logWarn('Forgot password - user not found', { email: maskEmail(email) });
       return; // Don't reveal if email exists
     }
 
@@ -1076,9 +1119,9 @@ export class AuthService {
         recipientName,
         resetToken
       });
-      logInfo('Password reset email sent', { email: recipientEmail });
+      logInfo('Password reset email sent', { email: maskEmail(recipientEmail) });
     } catch (emailErr) {
-      logError('Failed to send password reset email', emailErr, { email: recipientEmail });
+      logError('Failed to send password reset email', emailErr, { email: maskEmail(recipientEmail) });
       throw new AppError('Failed to send reset email. Please try again.', 500, 'EMAIL_SEND_FAILED');
     }
   }
@@ -1119,6 +1162,16 @@ export class AuthService {
    * Reset password using token from email
    */
   async resetPassword(token, newPassword) {
+    // SECURITY (INP-002): guard the token type BEFORE it reaches any query —
+    // mirrors verifyResetToken. An object-shaped token ({ $ne: null }) would
+    // otherwise match any pending reset and take over that account.
+    if (!token || typeof token !== 'string') {
+      throw new AppError('Invalid or expired reset link. Please request a new one.', 400, 'INVALID_RESET_TOKEN');
+    }
+    if (!newPassword || typeof newPassword !== 'string') {
+      throw new AppError('A valid new password is required.', 400, 'VALIDATION_ERROR');
+    }
+
     const routerModels = getRouterModels();
     const tenants = await routerModels.Tenant.find({ status: 'active' });
 
@@ -1146,7 +1199,9 @@ export class AuthService {
     await userRepo.update(user._id, {
       password_hash,
       password_reset_token: null,
-      password_reset_expires: null
+      password_reset_expires: null,
+      // SESS-008: invalidate every session issued before this reset.
+      password_changed_at: new Date()
     });
 
     logInfo('Password reset successful', { userId: user._id });
@@ -1154,13 +1209,52 @@ export class AuthService {
   }
 
   /**
+   * AUTH-008: authenticated self-service password change. Requires the user's
+   * CURRENT password (so a stolen session alone can't silently change it), and
+   * rejects re-using the same password (partial AUTH-005).
+   */
+  async changePassword(orgId, userId, currentPassword, newPassword) {
+    if (!currentPassword || typeof currentPassword !== 'string' || !newPassword || typeof newPassword !== 'string') {
+      throw new AppError('Current and new password are required.', 400, 'VALIDATION_ERROR');
+    }
+    const normalizedOrgId = (orgId || '').toLowerCase().trim();
+    if (!normalizedOrgId || !userId) {
+      throw new AppError('Authentication required.', 401, 'UNAUTHENTICATED');
+    }
+    const tenantDb = await getTenantConnection(normalizedOrgId);
+    const userRepo = new UserRepository(tenantDb);
+    const user = await userRepo.findById(userId);
+    if (!user || !user.password_hash) {
+      throw new AppError('User not found.', 404, 'USER_NOT_FOUND');
+    }
+
+    const currentValid = await bcrypt.compare(currentPassword, user.password_hash);
+    if (!currentValid) {
+      logWarn('Password change failed - wrong current password', { userId });
+      throw new AppError('Your current password is incorrect.', 401, 'INVALID_CURRENT_PASSWORD');
+    }
+
+    const sameAsOld = await bcrypt.compare(newPassword, user.password_hash);
+    if (sameAsOld) {
+      throw new AppError('Your new password must be different from your current password.', 400, 'PASSWORD_REUSE');
+    }
+
+    const password_hash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    // SESS-008: invalidate every session issued before this change (incl. the
+    // current one) — the user re-authenticates with the new password.
+    await userRepo.update(userId, { password_hash, password_changed_at: new Date() });
+    logInfo('Password changed', { userId });
+    return { success: true };
+  }
+
+  /**
    * Generate the OTP code.
    *
-   * TEMPORARY (development / demo): always returns the fixed 4-digit
-   * code "1743" so QA + sales demos don't need email delivery to log
-   * in. Revert to a random 4-/6-digit generator before production.
+   * Fixed demo code "1743" (4 digits) — matches the 4-digit input on the
+   * Verify screen. (The AUTH-014 random-6-digit change was reverted: the UI
+   * only accepts 4 digits, so a 6-digit emailed code made login impossible.)
    *
-   * @returns {string} fixed code
+   * @returns {string} 4-digit code
    */
   generateOtpCode() {
     return '1743';
@@ -1196,11 +1290,11 @@ export class AuthService {
         recipientName,
         code
       });
-      logInfo('OTP email sent', { userId: user._id, email: recipientEmail });
+      logInfo('OTP email sent', { userId: user._id, email: maskEmail(recipientEmail) });
     } catch (emailErr) {
       logError('Failed to send OTP email', emailErr, { userId: user._id });
       if (process.env.NODE_ENV !== 'production') {
-        logInfo('[DEV] OTP code (SMTP failed - use this to login)', { code, email: recipientEmail });
+        logInfo('[DEV] OTP code (SMTP failed - use this to login)', { code, email: maskEmail(recipientEmail) });
       } else {
         throw new AppError('Failed to send OTP code. Please try again.', 500, 'OTP_SEND_FAILED');
       }
@@ -1220,22 +1314,8 @@ export class AuthService {
     const { OtpRepository } = await import('../repositories/otpRepository.js');
     const otpRepo = new OtpRepository(tenantDb);
 
-    // TEMPORARY (development / demo): the generator always returns the
-    // fixed code "1743". Accept it for any user without consulting the
-    // OtpRepository so demos and QA tests don't depend on email
-    // delivery or DB state. Revert when re-enabling real OTP.
-    if (String(code) === '1743') {
-      // Best-effort cleanup of any stored OTPs for this user.
-      const stored = await otpRepo.findByUserIdAndCode(userId, '1743').catch(() => null);
-      if (stored?._id) {
-        await otpRepo.deleteById(stored._id).catch(() => {});
-      }
-      return true;
-    }
-
-    // Fallback to the real flow for any non-bypass code (so a future
-    // production switch only requires reverting `generateOtpCode` and
-    // removing the bypass above).
+    // Real OTP verification against the stored, per-user, single-use code.
+    // (The stored code is the fixed "1743" — see generateOtpCode.)
     const otp = await otpRepo.findByUserIdAndCode(userId, code);
 
     if (!otp) {

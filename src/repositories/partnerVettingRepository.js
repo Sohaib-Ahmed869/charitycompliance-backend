@@ -5,6 +5,7 @@
  */
 
 import partnerVettingSchema from '../db/schemas/platform/partnerVettingSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 export class PartnerVettingRepository {
   constructor(tenantDb) {
@@ -19,7 +20,7 @@ export class PartnerVettingRepository {
     }
 
     if (filters.search) {
-      const pattern = new RegExp(filters.search, 'i');
+      const pattern = new RegExp(escapeRegex(filters.search), 'i');
       query.$or = [
         { organization_name: pattern },
         { trading_name: pattern },

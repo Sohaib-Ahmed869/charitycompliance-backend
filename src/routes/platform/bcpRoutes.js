@@ -8,11 +8,15 @@ import express from 'express';
 import { body, param } from 'express-validator';
 import * as bcpController from '../../controllers/bcpController.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 
 const router = express.Router();
 
-// Apply authentication and tenant resolution to all routes
+// Auth + tenant resolution + feature-flag gate. The flag check returns
+// 403 FEATURE_NOT_INCLUDED if the tenant's plan/override doesn't enable
+// `governance.bcp_vault` (Enterprise-only by default).
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.bcp_vault'));
 
 // ==================== DASHBOARD ====================
 router.get('/dashboard/stats', bcpController.getDashboardStats);

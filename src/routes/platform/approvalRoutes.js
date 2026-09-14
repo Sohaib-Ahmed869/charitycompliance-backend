@@ -10,6 +10,11 @@ import { body, param } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { uploadAcknowledgementFiles, handleUploadError } from '../../middleware/upload.js';
+import { asyncHandler, AppError } from '../../middleware/errorHandler.js';
+import mongoose from 'mongoose';
+import { ApprovalRequestRepository } from '../../repositories/approvalRequestRepository.js';
+import { streamApprovalsZip } from '../../services/approvalZipExportService.js';
+import { streamApprovalsMergedPdf } from '../../services/approvalMergedPdfService.js';
 
 const router = express.Router();
 
@@ -117,6 +122,157 @@ router.post(
 // List all approval requests for the org (optional status filter)
 router.get('/list', approvalController.listApprovalRequests);
 
+/**
+ * POST /approvals/export-zip
+ *
+ * Audit-pack export. The frontend already knows which workflows match
+ * the user's filter view, so it passes the resulting approval_ids
+ * verbatim. The backend re-loads those (with org-scope safety) and
+ * streams a ZIP via approvalZipExportService.
+ *
+ * Body:
+ *   approval_ids: string[]                  required, MongoIds
+ *   filters?: object                        describes the filter set,
+ *                                           embedded in the README for
+ *                                           reproducibility
+ */
+router.post(
+  '/export-zip',
+  [
+    body('approval_ids').isArray({ min: 1, max: 5000 }),
+    body('approval_ids.*').isMongoId()
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const orgId = req.orgId;
+    const tenantDb = req.tenantDb;
+    if (!tenantDb) throw new AppError('Tenant DB not resolved', 500, 'TENANT_DB_MISSING');
+
+    // Building the repository registers ApprovalRequest + Position +
+    // Department + ApprovalMatrix + User on this tenant connection.
+    // Without that the populate chain below errors out with a
+    // MissingSchemaError on whichever ref hits Mongoose first.
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const ApprovalRequest = approvalRequestRepo.ApprovalRequest;
+
+    const ids = req.body.approval_ids.map((id) => new mongoose.Types.ObjectId(id));
+
+    // Resolve the org's _id once — the schema stores org_id as the
+    // Mongo _id of the Organization, not the string orgId.
+    const { OrganizationRepository } = await import('../../repositories/organizationRepository.js');
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (!org) throw new AppError('Organisation not found', 404, 'ORG_NOT_FOUND');
+
+    // Fetch the full docs with the populates the exporter needs.
+    const approvals = await ApprovalRequest.find({
+      _id: { $in: ids },
+      org_id: org._id
+    })
+      .populate('submitted_by', 'first_name last_name email')
+      .populate('approval_matrix_id', 'name')
+      // Field is `approval_steps`, not `steps` — matches the schema.
+      .populate('approval_steps.approver_user_id', 'first_name last_name email')
+      .populate('approval_steps.approver_position_id', 'name title')
+      .populate('approval_steps.approver_department_id', 'name')
+      .populate('rejection_reviews.rejected_by', 'first_name last_name email')
+      .populate('rejection_reviews.forwarded_to', 'first_name last_name email')
+      .populate('escalations.escalated_by', 'first_name last_name email')
+      .populate('escalations.escalated_to', 'first_name last_name email')
+      .sort({ created_at: -1 })
+      .lean();
+
+    if (!approvals.length) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NO_WORKFLOWS', message: 'No matching workflows found for this organisation.' }
+      });
+    }
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `approval-workflows-${orgId}-${dateStr}.zip`;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    await streamApprovalsZip(approvals, res, {
+      orgId,
+      filters: req.body.filters || {},
+      orgLogoUrl: org.logo_url || '',
+      // Pass the tenant connection so the service can look up + write
+      // the per-workflow PDF cache collection.
+      tenantDb
+    });
+  })
+);
+
+/**
+ * POST /approvals/export-pdf
+ *
+ * Sibling of /export-zip — same input contract (approval_ids), same
+ * caching pipeline, but the response is a SINGLE merged PDF containing
+ * every workflow's full audit page back-to-back. Replaces the older
+ * client-side `generateApprovalWorkflowsPDF` which only had summary
+ * data and couldn't see attachments / rejection reviews / escalations.
+ */
+router.post(
+  '/export-pdf',
+  [
+    body('approval_ids').isArray({ min: 1, max: 5000 }),
+    body('approval_ids.*').isMongoId()
+  ],
+  validate,
+  asyncHandler(async (req, res) => {
+    const orgId = req.orgId;
+    const tenantDb = req.tenantDb;
+    if (!tenantDb) throw new AppError('Tenant DB not resolved', 500, 'TENANT_DB_MISSING');
+
+    const approvalRequestRepo = new ApprovalRequestRepository(tenantDb);
+    const ApprovalRequest = approvalRequestRepo.ApprovalRequest;
+    const ids = req.body.approval_ids.map((id) => new mongoose.Types.ObjectId(id));
+
+    const { OrganizationRepository } = await import('../../repositories/organizationRepository.js');
+    const orgRepo = new OrganizationRepository(tenantDb);
+    const org = await orgRepo.findOne();
+    if (!org) throw new AppError('Organisation not found', 404, 'ORG_NOT_FOUND');
+
+    const approvals = await ApprovalRequest.find({
+      _id: { $in: ids },
+      org_id: org._id
+    })
+      .populate('submitted_by', 'first_name last_name email')
+      .populate('approval_matrix_id', 'name')
+      .populate('approval_steps.approver_user_id', 'first_name last_name email')
+      .populate('approval_steps.approver_position_id', 'name title')
+      .populate('approval_steps.approver_department_id', 'name')
+      .populate('rejection_reviews.rejected_by', 'first_name last_name email')
+      .populate('rejection_reviews.forwarded_to', 'first_name last_name email')
+      .populate('escalations.escalated_by', 'first_name last_name email')
+      .populate('escalations.escalated_to', 'first_name last_name email')
+      .sort({ created_at: -1 })
+      .lean();
+
+    if (!approvals.length) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'NO_WORKFLOWS', message: 'No matching workflows found for this organisation.' }
+      });
+    }
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = `approval-workflows-${orgId}-${dateStr}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    await streamApprovalsMergedPdf(approvals, res, {
+      orgId,
+      orgLogoUrl: org.logo_url || '',
+      tenantDb
+    });
+  })
+);
+
 // Update workflow positions for an action type
 router.put(
   '/workflows/:actionType',
@@ -138,6 +294,11 @@ router.put(
 
 // Get pending approvals for current user
 router.get('/pending', approvalController.getPendingApprovals);
+
+// Get in-flight approval request(s) for a specific entity — powers the
+// "routed for approval to X" banner on entity detail pages. Must stay
+// above the /:approvalRequestId route so "by-entity" isn't read as an id.
+router.get('/by-entity', approvalController.getApprovalRequestsByEntity);
 
 // Get approval request by ID
 router.get(
@@ -254,6 +415,35 @@ router.post(
   ],
   validate,
   approvalController.submitCoiRequest
+);
+
+// ─── Attached risks ────────────────────────────────────────────────
+// Trigger a risk from inside an approval workflow. Unlike COI, this
+// does NOT pause the approval — the risk runs its own treatment
+// lifecycle in the Risk Register while the approval keeps progressing.
+router.post(
+  '/:approvalRequestId/attached-risk',
+  [
+    param('approvalRequestId').isMongoId().withMessage('Invalid approval request ID'),
+    body('title').trim().notEmpty().withMessage('Risk title is required'),
+    body('category').trim().notEmpty().withMessage('Risk category is required'),
+    body('department_id').optional({ checkFalsy: true }).isMongoId().withMessage('department_id must be a valid id'),
+    body('description').optional().isString(),
+    body('existing_controls').optional().isString(),
+    body('next_review_date').optional({ checkFalsy: true }).isISO8601().withMessage('next_review_date must be ISO 8601')
+  ],
+  validate,
+  approvalController.attachRiskToApproval
+);
+
+// Workflow viewers fetch full details of every risk attached to this
+// approval (populated, decrypted as needed) so the approval-detail
+// page can render the "Attached risks" panel without N+1 calls.
+router.get(
+  '/:approvalRequestId/attached-risks',
+  [param('approvalRequestId').isMongoId().withMessage('Invalid approval request ID')],
+  validate,
+  approvalController.listAttachedRisks
 );
 
 // Rejection Workflow Routes

@@ -5,6 +5,7 @@
  */
 
 import riskSchema from '../db/schemas/platform/riskSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 import approvalRequestSchema from '../db/schemas/platform/approvalRequestSchema.js';
 import approvalMatrixSchema from '../db/schemas/platform/approvalMatrixSchema.js';
 import positionSchema from '../db/schemas/platform/positionSchema.js';
@@ -32,12 +33,12 @@ export class RiskRepository {
       query.status = filters.status;
     }
     if (filters.category) {
-      query.category = new RegExp(filters.category, 'i');
+      query.category = new RegExp(escapeRegex(filters.category), 'i');
     }
     if (filters.search) {
       query.$or = [
-        { title: new RegExp(filters.search, 'i') },
-        { description: new RegExp(filters.search, 'i') }
+        { title: new RegExp(escapeRegex(filters.search), 'i') },
+        { description: new RegExp(escapeRegex(filters.search), 'i') }
       ];
     }
 
@@ -56,6 +57,24 @@ export class RiskRepository {
       .populate('submitted_by', 'first_name last_name email')
       .populate('approval_matrix_id', 'name')
       .populate('approval_request_id');
+  }
+
+  /**
+   * Batch lookup used by the "attached risks" panel on the approval
+   * detail page. Preserves the original id order so the UI can render
+   * the list in the order they were attached.
+   */
+  async findByIds(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) return [];
+    const docs = await this.Risk.find({ _id: { $in: ids } })
+      .populate('risk_owner_id', 'first_name last_name email')
+      .populate('submitted_by', 'first_name last_name email')
+      .populate('approval_request_id', 'status workflow_stage')
+      .lean();
+    const byId = new Map(docs.map((d) => [String(d._id), d]));
+    return ids
+      .map((id) => byId.get(String(id)))
+      .filter(Boolean);
   }
 
   async create(data) {

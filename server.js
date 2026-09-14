@@ -38,6 +38,13 @@ const [{ default: app, initializeApp }, { closeRouterDB }, { closeAllConnections
   import('./src/services/chatMentionDigestService.js')
 ]);
 
+const { startTrialReminderScheduler } = await import('./src/services/trialReminderService.js');
+const { startOverrideExpiryScheduler } = await import('./src/services/overrideExpiryService.js');
+const { startUsageAggregator } = await import('./src/services/usageAggregator.js');
+const { startFoundingCustomerRenewalScheduler } = await import('./src/services/foundingCustomerRenewalService.js');
+const { startWeeklyDigestScheduler, runWeeklyDigestOnce } = await import('./src/services/weeklyComplianceDigestService.js');
+const { startApprovalReminderScheduler, runApprovalRemindersOnce } = await import('./src/services/approvalReminderService.js');
+
 const PORT = process.env.PORT || 5000;
 const isDevelopment = String(process.env.NODE_ENV || '').toLowerCase() === 'development';
 const backgroundJobsEnabled =
@@ -67,10 +74,21 @@ const startServer = async () => {
         startFiscalReportReminderScheduler();
         startSuitabilityRenewalScheduler();
         startSubscriptionMaintenanceReminderScheduler();
+        // Trial-ending reminders — sweep hourly, email tenants 3 days before
+        // their trial ends. Idempotent via trial_reminder_sent_for.
+        startTrialReminderScheduler();
+        startOverrideExpiryScheduler();
+        startUsageAggregator();
+        startFoundingCustomerRenewalScheduler();
         // Chat retention: daily sweep that purges expired attachments per channel.retention_days
         startChatRetentionScheduler();
         // Chat mention digest: emails users any unread @mention older than the threshold (default 30 min).
         startChatMentionDigestScheduler();
+        // Weekly compliance digest — Monday-morning summary email to org owners.
+        startWeeklyDigestScheduler();
+        // Approval reminders — nudge approvers whose pending step is aging.
+        // Cadence is super-admin configurable (Router DB reminder_configs).
+        startApprovalReminderScheduler();
 
         // Optional: run catch-up reminders immediately on boot (useful after downtime).
         // These are deduped (notifications) and phase-tracked (meetings), so safe on restarts.
@@ -82,6 +100,10 @@ const startServer = async () => {
             runFiscalReportRemindersOnce().catch((err) => logError('Fiscal report reminders run-on-boot failed', err));
             runSuitabilityRenewalsOnce().catch((err) => logError('Suitability renewals run-on-boot failed', err));
             runSubscriptionMaintenanceRemindersOnce().catch((err) => logError('Subscription maintenance reminders run-on-boot failed', err));
+            // Only sends when today is the configured send day (Mon by default), so safe to run on every boot.
+            runWeeklyDigestOnce().catch((err) => logError('Weekly digest run-on-boot failed', err));
+            // Approval reminders catch-up — deduped via each step's reminders_sent.
+            runApprovalRemindersOnce().catch((err) => logError('Approval reminders run-on-boot failed', err));
           }, Number(process.env.REMINDERS_RUN_ON_BOOT_DELAY_MS) || 8000);
         }
       } else {

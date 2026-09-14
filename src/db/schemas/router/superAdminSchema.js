@@ -31,6 +31,20 @@ const superAdminSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  /**
+   * Calcite-side role:
+   *   super_admin     — full access (plans, billing, tenants, invoices, audit, staff)
+   *   billing_operator — invoices, payments, refunds, coupons; READ-ONLY on plans
+   *   support_agent   — tickets, kanban boards, tenant read-only; cannot touch money
+   *
+   * Existing accounts default to 'super_admin' so the migration is safe.
+   */
+  role: {
+    type: String,
+    enum: ['super_admin', 'billing_operator', 'support_agent'],
+    default: 'super_admin',
+    index: true
+  },
   status: {
     type: String,
     enum: ['active', 'disabled'],
@@ -42,6 +56,12 @@ const superAdminSchema = new mongoose.Schema({
   last_login_ip: { type: String, default: '' },
   failed_login_attempts: { type: Number, default: 0 },
   locked_until: { type: Date, default: null },
+
+  // TOTP MFA for the Calcite admin portal (handbook §7).
+  // mfa_secret is a base32 string from speakeasy; mfa_enabled flips
+  // true after the operator confirms a code from their authenticator.
+  mfa_enabled: { type: Boolean, default: false },
+  mfa_secret:  { type: String,  default: '' },
 
   created_at: { type: Date, default: Date.now },
   updated_at: { type: Date, default: Date.now },

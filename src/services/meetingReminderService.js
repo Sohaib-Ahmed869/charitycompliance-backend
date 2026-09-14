@@ -18,6 +18,7 @@ import { NotificationRepository } from '../repositories/notificationRepository.j
 import { UserRepository } from '../repositories/userRepository.js';
 import emailService from './emailService.js';
 import { logError, logInfo } from '../utils/logger.js';
+import { maskEmail } from '../utils/maskPii.js';
 
 const MIN_MS = 60 * 1000;
 
@@ -163,7 +164,7 @@ async function sendMeetingReminderForMeeting({
             })
           })
           .catch((err) => {
-            logError('Meeting reminder email failed', err, { orgId, to: u.email, phase });
+            logError('Meeting reminder email failed', err, { orgId, to: maskEmail(u.email), phase });
           })
       );
     }
@@ -193,7 +194,7 @@ async function sendMeetingReminderForMeeting({
           })
         })
         .catch((err) => {
-          logError('Meeting reminder email failed (external)', err, { orgId, to: ext.email, phase });
+          logError('Meeting reminder email failed (external)', err, { orgId, to: maskEmail(ext.email), phase });
         })
     );
   }

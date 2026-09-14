@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Running Cost Estimate</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { font-family: 'Segoe UI','Helvetica Neue',Arial,sans-serif; color:#1f2d3a; -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+  :root { --deep:#0A2E3F; --teal:#117A8B; --mint:#4DB3A8; --amber:#E0A33B; --muted:#64748b; --bg:#f4f7f8; --line:#e4ebee; }
+  .page { width:210mm; min-height:297mm; padding:17mm 16mm; position:relative; page-break-after:always; background:#fff; }
+  .page:last-child { page-break-after:auto; }
+
+  h1 { font-size:30px; line-height:1.15; color:var(--deep); font-weight:700; }
+  h2 { font-size:20px; color:var(--deep); font-weight:700; }
+  h3 { font-size:13px; color:var(--teal); font-weight:700; text-transform:uppercase; letter-spacing:.06em; }
+  p  { font-size:12.5px; line-height:1.62; color:#38454f; }
+  .small { font-size:10.5px; color:var(--muted); line-height:1.55; }
+  .eyebrow { font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--teal); }
+
+  .sec-head { display:flex; align-items:center; gap:10px; border-bottom:2px solid var(--line); padding-bottom:8px; margin-bottom:14px; }
+  .sec-num { font-size:13px; font-weight:800; color:#fff; background:var(--teal); width:24px; height:24px; border-radius:6px; display:inline-flex; align-items:center; justify-content:center; }
+
+  .cover { background:linear-gradient(150deg,#0A2E3F 0%,#11515E 55%,#117A8B 100%); color:#fff; }
+  .cover .page-inner { height:263mm; display:flex; flex-direction:column; }
+  .cover h1 { color:#fff; font-size:39px; margin-top:6px; }
+  .cover .eyebrow { color:#8fd4cb; }
+  .brand-dot { width:46px; height:46px; border-radius:12px; background:linear-gradient(135deg,#4DB3A8,#8fd4cb); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:22px; color:#0A2E3F; }
+  .cover .lead { font-size:14px; color:#cfe6e4; max-width:152mm; margin-top:14px; line-height:1.7; }
+  .hero-cards { display:flex; gap:12px; margin-top:28px; }
+  .hero-card { flex:1; background:rgba(255,255,255,0.09); border:1px solid rgba(255,255,255,0.18); border-radius:14px; padding:18px 16px; }
+  .hero-card .big { font-size:26px; font-weight:800; color:#fff; }
+  .hero-card .lbl { font-size:11px; color:#b6d8d4; margin-top:4px; line-height:1.5; }
+  .cover-foot { margin-top:auto; border-top:1px solid rgba(255,255,255,0.2); padding-top:14px; display:flex; justify-content:space-between; font-size:11px; color:#b6d8d4; }
+
+  .callout { background:var(--bg); border-left:4px solid var(--mint); border-radius:6px; padding:11px 15px; margin:11px 0; }
+  .callout p { font-size:12px; }
+  .callout strong { color:var(--deep); }
+
+  .twobox { display:flex; gap:14px; margin:12px 0 4px; }
+  .box { flex:1; border:1px solid var(--line); border-radius:12px; padding:15px; }
+  .box .tag { display:inline-block; font-size:10px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; padding:3px 9px; border-radius:999px; margin-bottom:7px; }
+  .box.fixed .tag { background:#e7f1f3; color:var(--teal); }
+  .box.var .tag { background:#fdf2dd; color:#b8841f; }
+  .box h4 { font-size:14px; color:var(--deep); margin-bottom:5px; }
+  .box ul { list-style:none; margin-top:6px; }
+  .box li { font-size:11.3px; color:#475560; padding:3px 0 3px 15px; position:relative; }
+  .box li::before { content:""; position:absolute; left:0; top:8px; width:6px; height:6px; border-radius:50%; background:var(--mint); }
+
+  table { width:100%; border-collapse:collapse; margin-top:6px; }
+  thead th { background:var(--deep); color:#fff; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; padding:9px 7px; text-align:right; }
+  thead th:first-child { text-align:left; border-radius:6px 0 0 0; }
+  thead th:last-child { border-radius:0 6px 0 0; }
+  tbody td { font-size:11.5px; padding:8px 7px; text-align:right; border-bottom:1px solid var(--line); }
+  tbody td:first-child { text-align:left; font-weight:700; color:var(--deep); }
+  tbody tr:nth-child(even) { background:#fafcfc; }
+  tbody tr.hl { background:#e7f1f3 !important; }
+  tbody tr.hl td { font-weight:700; }
+  .tot { color:var(--deep); font-weight:800; }
+  .pt { color:var(--teal); font-weight:800; }
+
+  .steps { list-style:none; margin-top:8px; }
+  .steps li { font-size:11.3px; color:#475560; padding:5px 0 5px 84px; position:relative; border-bottom:1px dashed var(--line); }
+  .steps li:last-child { border-bottom:none; }
+  .steps li b { position:absolute; left:0; top:5px; color:var(--teal); font-size:10.5px; font-weight:800; }
+
+  .brk-row { display:flex; align-items:center; gap:10px; margin:8px 0; }
+  .brk-row .name { width:160px; font-size:11.3px; font-weight:600; color:var(--deep); }
+  .brk-track { flex:1; height:17px; background:#eef3f4; border-radius:5px; overflow:hidden; }
+  .brk-fill { height:100%; border-radius:5px; }
+  .brk-row .amt { width:62px; text-align:right; font-size:11.3px; font-weight:700; color:#38454f; }
+
+  .footer { position:absolute; bottom:9mm; left:16mm; right:16mm; display:flex; justify-content:space-between; font-size:9px; color:#9aa8b0; border-top:1px solid var(--line); padding-top:6px; }
+  .grid2 { display:flex; gap:14px; }
+
+  .recbox { border:2px solid var(--teal); border-radius:14px; padding:0; overflow:hidden; margin-top:6px; }
+  .recbox .top { background:var(--teal); color:#fff; padding:12px 16px; display:flex; justify-content:space-between; align-items:center; }
+  .recbox .top .name { font-size:19px; font-weight:800; }
+  .recbox .top .spec { font-size:11.5px; color:#cdeae6; }
+  .recbox .body { padding:13px 16px; }
+  .specrow { display:flex; gap:10px; margin-bottom:10px; }
+  .specpill { flex:1; background:var(--bg); border-radius:9px; padding:9px; text-align:center; }
+  .specpill .v { font-size:16px; font-weight:800; color:var(--deep); }
+  .specpill .k { font-size:9.5px; color:var(--muted); text-transform:uppercase; letter-spacing:.04em; }
+
+  .why li { font-size:11.5px; color:#475560; padding:4px 0 4px 20px; position:relative; list-style:none; }
+  .why li::before { content:"\2713"; position:absolute; left:0; top:4px; color:#fff; background:var(--mint); width:14px; height:14px; border-radius:50%; font-size:8.5px; text-align:center; line-height:14px; font-weight:800; }
+
+  .infocard { border-radius:11px; padding:13px 15px; flex:1; }
+  .infocard.green { background:#ecf7f1; border:1px solid #c9e8d8; }
+  .infocard.blue  { background:var(--bg); border:1px solid var(--line); }
+  .infocard h4 { font-size:12.5px; color:var(--deep); margin-bottom:6px; }
+  .infocard p { font-size:11px; }
+
+  .barchart { display:flex; align-items:flex-end; gap:14px; height:210px; padding:0 6px; border-bottom:2px solid var(--line); }
+  .bar-col { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:flex-end; height:100%; }
+  .bar { width:100%; background:linear-gradient(180deg,var(--teal),#0A2E3F); border-radius:6px 6px 0 0; position:relative; }
+  .bar .val { position:absolute; top:-17px; left:0; right:0; text-align:center; font-size:10px; font-weight:800; color:var(--deep); }
+  .bar-x { display:flex; gap:14px; padding:5px 6px 0; }
+  .bar-x div { flex:1; text-align:center; font-size:10px; color:#64748b; }
+
+  .driver { display:flex; gap:10px; margin-top:8px; }
+  .driver .d { flex:1; background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:11px 12px; }
+  .driver .d .h { font-size:11.5px; font-weight:800; color:var(--deep); margin-bottom:3px; }
+  .driver .d .t { font-size:10.5px; color:#5a6b75; line-height:1.5; }
+</style>
+</head>
+<body>
+
+<!-- ===== PAGE 1 — COVER ===== -->
+<div class="page cover">
+  <div class="page-inner">
+    <div style="display:flex; align-items:center; gap:12px;">
+      <div class="brand-dot">S</div>
+      <div style="font-size:13px; font-weight:700; letter-spacing:.04em;">StewardEx &mdash; Charity Compliance Platform</div>
+    </div>
+    <div style="margin-top:42px;">
+      <div class="eyebrow">Monthly Running Cost &mdash; Researched Estimate</div>
+      <h1>What it costs to<br/>run the platform</h1>
+      <p class="lead">
+        A researched breakdown of monthly cloud costs in Australian dollars, built
+        on exact AWS Sydney pricing. Shows the cost at each stage of growth &mdash;
+        from the first charity to one hundred &mdash; and the recommended server size.
+      </p>
+    </div>
+    <div class="hero-cards">
+      <div class="hero-card">
+        <div class="big">A$450<span style="font-size:13px;">/mo</span></div>
+        <div class="lbl">To launch &amp; run with<br/>the first charity</div>
+      </div>
+      <div class="hero-card">
+        <div class="big">~A$34<span style="font-size:13px;">/tenant</span></div>
+        <div class="lbl">Typical per-charity cost<br/>at 100 tenants</div>
+      </div>
+      <div class="hero-card">
+        <div class="big">c7i.xlarge</div>
+        <div class="lbl">Recommended server<br/>(4 vCPU / 8 GB)</div>
+      </div>
+    </div>
+    <div class="callout" style="background:rgba(255,255,255,0.10); border-left-color:#8fd4cb; margin-top:24px;">
+      <p style="color:#e7f4f2;">
+        <strong style="color:#fff;">The key idea:</strong> total cost rises with each
+        charity &mdash; from about A$450 to A$3,380 a month over the first 100 tenants.
+        Cost <em>per</em> charity falls and settles near A$34 &mdash; though it varies
+        with the size of the organisation and how heavily it uses the platform.
+      </p>
+    </div>
+    <div class="cover-foot">
+      <span>Prepared for client review &middot; 21 May 2026</span>
+      <span>AUD &middot; AWS Asia&nbsp;Pacific (Sydney) pricing</span>
+    </div>
+  </div>
+</div>
+
+<!-- ===== PAGE 2 — TABLE ===== -->
+<div class="page">
+  <div class="sec-head"><span class="sec-num">1</span><h2>Cost at each stage of growth</h2></div>
+
+  <p>
+    The cost is a <strong>fixed platform base</strong> plus an amount that grows with
+    each charity. The table shows real monthly figures in AUD at every growth band,
+    using exact AWS Sydney prices.
+  </p>
+
+  <div class="twobox">
+    <div class="box fixed">
+      <span class="tag">Fixed base</span>
+      <h4>The platform itself</h4>
+      <ul>
+        <li>Cloud server(s) &mdash; AWS EC2 c7i</li>
+        <li>Shared database &mdash; MongoDB Atlas</li>
+        <li>Load balancer, backups, monitoring</li>
+      </ul>
+    </div>
+    <div class="box var">
+      <span class="tag">Grows with tenants</span>
+      <h4>Capacity added as we scale</h4>
+      <ul>
+        <li>File storage &amp; data traffic per charity</li>
+        <li>More servers for load &amp; uptime</li>
+        <li>Larger database tier as data grows</li>
+      </ul>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Tenants</th><th>Servers</th><th>Database</th><th>Other AWS</th>
+        <th>Total / month</th><th>Cost per tenant</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>A$260</td><td>A$121</td><td>A$69</td><td class="tot">A$450</td><td class="pt">A$450</td></tr>
+      <tr><td>2 &ndash; 5</td><td>A$260</td><td>A$121</td><td>A$109</td><td class="tot">A$490</td><td class="pt">A$98</td></tr>
+      <tr class="hl"><td>5 &ndash; 15</td><td>A$520</td><td>A$121</td><td>A$274</td><td class="tot">A$915</td><td class="pt">A$61</td></tr>
+      <tr><td>15 &ndash; 50</td><td>A$780</td><td>A$300</td><td>A$810</td><td class="tot">A$1,890</td><td class="pt">A$38</td></tr>
+      <tr class="hl"><td>50 &ndash; 75</td><td>A$1,040</td><td>A$300</td><td>A$1,200</td><td class="tot">A$2,540</td><td class="pt">A$34</td></tr>
+      <tr><td>75 &ndash; 100</td><td>A$1,222</td><td>A$782</td><td>A$1,376</td><td class="tot">A$3,380</td><td class="pt">A$34</td></tr>
+    </tbody>
+  </table>
+  <p class="small" style="margin-top:6px;">
+    Monthly figures in AUD, at the upper end of each band. &ldquo;Servers&rdquo; = EC2
+    c7i.xlarge instances. &ldquo;Database&rdquo; = MongoDB Atlas. &ldquo;Other AWS&rdquo;
+    = storage, data traffic, load balancer, monitoring, email, DNS.
+  </p>
+
+  <h3 style="margin-top:14px;">What changes at each band</h3>
+  <ul class="steps">
+    <li><b>1</b>One c7i.xlarge server + entry database (Atlas M10). Full platform live.</li>
+    <li><b>2&ndash;5</b>Same single server &mdash; plenty of headroom, only storage/traffic grows.</li>
+    <li><b>5&ndash;15</b>A 2nd server is added for high availability &mdash; zero-downtime updates &amp; failover.</li>
+    <li><b>15&ndash;50</b>Database upgraded (M10&rarr;M20); servers auto-scale to 3 as traffic rises.</li>
+    <li><b>50&ndash;75</b>A 4th server added; data traffic becomes a larger share of the bill.</li>
+    <li><b>75&ndash;100</b>5-server fleet + larger database (M30) for the heavier load.</li>
+  </ul>
+
+  <div class="callout" style="margin-top:10px;">
+    <p><strong>Already covered &mdash; A$0:</strong> the customer website runs on Vercel's
+    free hosting and the domain is already purchased. Neither adds to this bill.</p>
+  </div>
+
+  <div class="footer"><span>StewardEx &mdash; Running Cost Estimate</span><span>Page 2</span></div>
+</div>
+
+<!-- ===== PAGE 3 — CHARTS + DRIVERS ===== -->
+<div class="page">
+  <div class="sec-head"><span class="sec-num">2</span><h2>The two trends, visualised</h2></div>
+
+  <h3>Total monthly cost &mdash; rises with tenants</h3>
+  <p class="small" style="margin-bottom:8px;">Whole-platform cost at each growth band (AUD).</p>
+  <div class="barchart">
+    <div class="bar-col"><div class="bar" style="height:27px;"><span class="val">A$450</span></div></div>
+    <div class="bar-col"><div class="bar" style="height:29px;"><span class="val">A$490</span></div></div>
+    <div class="bar-col"><div class="bar" style="height:54px;"><span class="val">A$915</span></div></div>
+    <div class="bar-col"><div class="bar" style="height:112px;"><span class="val">A$1,890</span></div></div>
+    <div class="bar-col"><div class="bar" style="height:150px;"><span class="val">A$2,540</span></div></div>
+    <div class="bar-col"><div class="bar" style="height:200px;"><span class="val">A$3,380</span></div></div>
+  </div>
+  <div class="bar-x">
+    <div>1 tenant</div><div>2&ndash;5</div><div>5&ndash;15</div><div>15&ndash;50</div><div>50&ndash;75</div><div>75&ndash;100</div>
+  </div>
+
+  <h3 style="margin-top:22px;">Cost per tenant &mdash; falls, then settles near A$34</h3>
+  <p class="small" style="margin-bottom:2px;">Monthly cost to serve <em>one</em> charity at each band. It drops, then levels off &mdash; it does not fall to near-zero.</p>
+
+  <svg viewBox="0 0 820 358" width="100%" style="margin-top:2px;">
+    <g stroke="#e4ebee" stroke-width="1">
+      <line x1="80" y1="40" x2="740" y2="40"/>
+      <line x1="80" y1="105" x2="740" y2="105"/>
+      <line x1="80" y1="170" x2="740" y2="170"/>
+      <line x1="80" y1="235" x2="740" y2="235"/>
+      <line x1="80" y1="300" x2="740" y2="300"/>
+    </g>
+    <g font-size="11" fill="#9aa8b0" text-anchor="end">
+      <text x="70" y="44">A$450</text>
+      <text x="70" y="109">A$338</text>
+      <text x="70" y="174">A$225</text>
+      <text x="70" y="239">A$113</text>
+      <text x="70" y="304">A$0</text>
+    </g>
+    <path d="M80,40 L212,243.4 L344,264.8 L476,278.1 L608,280.4 L740,280.4 L740,300 L80,300 Z"
+          fill="#117A8B" fill-opacity="0.12"/>
+    <path d="M80,40 L212,243.4 L344,264.8 L476,278.1 L608,280.4 L740,280.4"
+          fill="none" stroke="#117A8B" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>
+    <g fill="#0A2E3F">
+      <circle cx="80" cy="40" r="5"/>
+      <circle cx="212" cy="243.4" r="5"/>
+      <circle cx="344" cy="264.8" r="5"/>
+      <circle cx="476" cy="278.1" r="5"/>
+      <circle cx="608" cy="280.4" r="5"/>
+      <circle cx="740" cy="280.4" r="5"/>
+    </g>
+    <g font-size="12" font-weight="800" fill="#0A2E3F" text-anchor="middle">
+      <text x="104" y="33">A$450</text>
+      <text x="212" y="233">A$98</text>
+      <text x="344" y="255">A$61</text>
+      <text x="476" y="269">A$38</text>
+      <text x="608" y="271">A$34</text>
+      <text x="722" y="271">A$34</text>
+    </g>
+    <g font-size="11" fill="#64748b" text-anchor="middle">
+      <text x="80" y="322">1</text>
+      <text x="212" y="322">2&ndash;5</text>
+      <text x="344" y="322">5&ndash;15</text>
+      <text x="476" y="322">15&ndash;50</text>
+      <text x="608" y="322">50&ndash;75</text>
+      <text x="740" y="322">75&ndash;100</text>
+    </g>
+    <text x="410" y="345" font-size="11.5" fill="#64748b" text-anchor="middle" font-weight="700">NUMBER OF TENANTS (CHARITIES)</text>
+  </svg>
+
+  <h3 style="margin-top:14px;">The per-tenant cost is an average &mdash; it varies</h3>
+  <p class="small" style="margin-bottom:2px;">A$34 is a <em>blended</em> figure. The real cost of a charity depends on:</p>
+  <div class="driver">
+    <div class="d">
+      <div class="h">Size of the organisation</div>
+      <div class="t">More staff and board users means more accounts, documents and activity. A small charity (5&ndash;10 users) costs far less than a large one (100+ users).</div>
+    </div>
+    <div class="d">
+      <div class="h">Incoming traffic &amp; activity</div>
+      <div class="t">Frequent logins, report generation, file uploads and downloads all consume server time and data &mdash; a busy charity costs more than a quiet one.</div>
+    </div>
+  </div>
+  <p class="small" style="margin-top:7px;">
+    In practice a light, small charity may cost around <strong>A$20/month</strong>, while
+    a large, highly active organisation can run <strong>A$70&ndash;90/month</strong>.
+    A$34 is the typical blended average across a mixed customer base.
+  </p>
+
+  <div class="footer"><span>StewardEx &mdash; Running Cost Estimate</span><span>Page 3</span></div>
+</div>
+
+<!-- ===== PAGE 4 — EC2 RECOMMENDATION ===== -->
+<div class="page">
+  <div class="sec-head"><span class="sec-num">3</span><h2>Recommended server size</h2></div>
+
+  <p>
+    The backend runs the API, live updates (websockets) and <strong>PDF generation
+    with a headless browser</strong>. PDF generation is the heaviest task &mdash; each
+    report briefly uses a full processor core and several hundred MB of memory. The
+    server is sized around that.
+  </p>
+
+  <div class="recbox">
+    <div class="top">
+      <div>
+        <div class="name">AWS EC2 &mdash; c7i.xlarge</div>
+        <div class="spec">Compute-optimised &middot; Asia Pacific (Sydney)</div>
+      </div>
+      <div style="text-align:right;">
+        <div style="font-size:21px; font-weight:800;">A$260<span style="font-size:12px;">/mo</span></div>
+        <div class="spec">A$0.357 / hr &nbsp;(US$0.2331)</div>
+      </div>
+    </div>
+    <div class="body">
+      <div class="specrow">
+        <div class="specpill"><div class="v">4</div><div class="k">vCPU</div></div>
+        <div class="specpill"><div class="v">8 GB</div><div class="k">Memory</div></div>
+        <div class="specpill"><div class="v">4&ndash;6</div><div class="k">PDFs at once</div></div>
+        <div class="specpill"><div class="v">~A$187</div><div class="k">/mo w. 1-yr plan</div></div>
+      </div>
+      <ul class="why">
+        <li>8 GB memory comfortably runs the API, live updates and several PDF jobs at the same time</li>
+        <li>4 processor cores absorb PDF bursts without slowing down normal requests</li>
+        <li>Compute-optimised (c7i) &mdash; best value for this CPU-heavy workload</li>
+        <li>A 1-year commitment cuts the price about 28% &mdash; from A$260 to ~A$187 / month</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3 style="margin-top:16px;">Why not smaller or larger</h3>
+  <table>
+    <thead><tr><th>Option</th><th>Size</th><th>Cost / mo</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>c7i.large</td><td>2 vCPU / 4 GB</td><td>A$130</td><td style="text-align:left; color:#d0552f; font-weight:700;">Too small &mdash; PDF jobs risk running out of memory</td></tr>
+      <tr class="hl"><td>c7i.xlarge</td><td>4 vCPU / 8 GB</td><td>A$260</td><td style="text-align:left; color:#1f9d6b; font-weight:700;">Recommended &mdash; right fit for launch to 100+ tenants</td></tr>
+      <tr><td>c7i.2xlarge</td><td>8 vCPU / 16 GB</td><td>A$521</td><td style="text-align:left; color:var(--muted);">Only needed beyond ~150&ndash;200 tenants</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin-top:16px;">Auto Scaling Group (ASG) setup</h3>
+  <table>
+    <thead><tr><th>Stage</th><th>Minimum</th><th>Normal</th><th>Maximum</th><th>Purpose</th></tr></thead>
+    <tbody>
+      <tr><td>1 &ndash; 10 tenants</td><td>1</td><td>1</td><td>2</td><td style="text-align:left;">Single server &mdash; lean launch</td></tr>
+      <tr class="hl"><td>10 &ndash; 50 tenants</td><td>2</td><td>2&ndash;3</td><td>4</td><td style="text-align:left;">2+ servers across zones for zero-downtime</td></tr>
+      <tr><td>50 &ndash; 100 tenants</td><td>3</td><td>4&ndash;5</td><td>6</td><td style="text-align:left;">Adds capacity automatically at peak</td></tr>
+    </tbody>
+  </table>
+  <p class="small" style="margin-top:6px;">
+    Servers scale out automatically when processor use passes 60%, and scale back in
+    when quiet &mdash; so we only pay for extra capacity during busy hours.
+  </p>
+
+  <div class="footer"><span>StewardEx &mdash; Running Cost Estimate</span><span>Page 4</span></div>
+</div>
+
+<!-- ===== PAGE 5 — BREAKDOWN + RESEARCH ===== -->
+<div class="page">
+  <div class="sec-head"><span class="sec-num">4</span><h2>Breakdown &amp; pricing sources</h2></div>
+
+  <p>Where the <strong>A$3,380 / month</strong> goes at 100 tenants &mdash; the largest band.</p>
+
+  <div style="display:flex; gap:22px; align-items:center; margin-top:8px;">
+    <svg viewBox="0 0 200 200" width="166" height="166">
+      <circle cx="100" cy="100" r="70" fill="none" stroke="#eef3f4" stroke-width="34"/>
+      <circle cx="100" cy="100" r="70" fill="none" stroke="#117A8B" stroke-width="34" stroke-dasharray="159.1 439.8" stroke-dashoffset="0" transform="rotate(-90 100 100)"/>
+      <circle cx="100" cy="100" r="70" fill="none" stroke="#E0A33B" stroke-width="34" stroke-dasharray="120.2 439.8" stroke-dashoffset="-159.1" transform="rotate(-90 100 100)"/>
+      <circle cx="100" cy="100" r="70" fill="none" stroke="#0A2E3F" stroke-width="34" stroke-dasharray="101.8 439.8" stroke-dashoffset="-279.3" transform="rotate(-90 100 100)"/>
+      <circle cx="100" cy="100" r="70" fill="none" stroke="#4DB3A8" stroke-width="34" stroke-dasharray="29.9 439.8" stroke-dashoffset="-381.1" transform="rotate(-90 100 100)"/>
+      <circle cx="100" cy="100" r="70" fill="none" stroke="#9ec9c3" stroke-width="34" stroke-dasharray="28.9 439.8" stroke-dashoffset="-411.0" transform="rotate(-90 100 100)"/>
+      <text x="100" y="96" text-anchor="middle" font-size="18" font-weight="800" fill="#0A2E3F">A$3,380</text>
+      <text x="100" y="113" text-anchor="middle" font-size="9.5" fill="#64748b">per month</text>
+    </svg>
+    <div style="flex:1;">
+      <div class="brk-row"><div class="name">Cloud servers (EC2)</div><div class="brk-track"><div class="brk-fill" style="width:36%; background:#117A8B;"></div></div><div class="amt">A$1,222</div></div>
+      <div class="brk-row"><div class="name">Data traffic</div><div class="brk-track"><div class="brk-fill" style="width:27%; background:#E0A33B;"></div></div><div class="amt">A$924</div></div>
+      <div class="brk-row"><div class="name">Database (Atlas)</div><div class="brk-track"><div class="brk-fill" style="width:23%; background:#0A2E3F;"></div></div><div class="amt">A$782</div></div>
+      <div class="brk-row"><div class="name">Monitoring, email, DNS</div><div class="brk-track"><div class="brk-fill" style="width:7%; background:#4DB3A8;"></div></div><div class="amt">A$230</div></div>
+      <div class="brk-row"><div class="name">Load balancer + storage</div><div class="brk-track"><div class="brk-fill" style="width:7%; background:#9ec9c3;"></div></div><div class="amt">A$222</div></div>
+    </div>
+  </div>
+  <p class="small" style="margin-top:4px;">
+    Data traffic is a major share at scale &mdash; it grows directly with how much
+    charities log in, generate reports and download files.
+  </p>
+
+  <h3 style="margin-top:12px;">Exact prices used (AWS Sydney, 2026)</h3>
+  <table>
+    <thead><tr><th>Service</th><th>Exact rate (AUD &middot; USD)</th><th>Used for</th></tr></thead>
+    <tbody>
+      <tr><td>EC2 c7i.xlarge</td><td>A$0.357/hr &middot; US$0.2331 &rarr; A$260/mo</td><td style="text-align:left;">Main application server</td></tr>
+      <tr><td>EC2 c7i.large</td><td>A$0.178/hr &middot; US$0.1166 &rarr; A$130/mo</td><td style="text-align:left;">(Compared &mdash; too small)</td></tr>
+      <tr><td>MongoDB Atlas M10 / M20 / M30</td><td>~A$121 / ~A$300 / ~A$782 per mo</td><td style="text-align:left;">Shared tenant database</td></tr>
+      <tr><td>Data transfer out</td><td>First 100 GB free, then A$0.174/GB</td><td style="text-align:left;">Traffic to users</td></tr>
+      <tr><td>EBS gp3 disk</td><td>~A$0.147 / GB-month</td><td style="text-align:left;">Server disks</td></tr>
+      <tr><td>Application Load Balancer</td><td>~A$0.038/hr + usage</td><td style="text-align:left;">Traffic routing + HTTPS</td></tr>
+      <tr><td>S3 file storage</td><td>A$0.038 / GB-month</td><td style="text-align:left;">Documents &amp; uploads</td></tr>
+    </tbody>
+  </table>
+  <p class="small" style="margin-top:5px;">AWS bills in USD. AUD figures use 1 USD = 1.53 AUD. Sources: aws-pricing.com, mongodb.com/pricing, AWS pricing pages.</p>
+
+  <h3 style="margin-top:12px;">Two costs shown separately (not infrastructure)</h3>
+  <div class="grid2">
+    <div class="infocard blue">
+      <h4>Payment processing (Stripe)</h4>
+      <p>~1.7% + A$0.30 per charge. Charged only on income actually received &mdash; it scales with revenue, not servers.</p>
+    </div>
+    <div class="infocard blue">
+      <h4>AI assistant (OpenAI)</h4>
+      <p>Pay-as-you-go, ~A$30&ndash;45/mo at the start. Usage-based &mdash; only costs what charities actually use.</p>
+    </div>
+  </div>
+
+  <div class="callout" style="margin-top:12px;">
+    <p><strong>Estimate &mdash; not a quote.</strong> Built on exact AWS Asia Pacific
+    (Sydney) list prices, May 2026, with on-demand servers and a shared MongoDB Atlas
+    database. Per-tenant cost varies with organisation size and traffic. Excludes staff
+    wages, marketing and office overheads. A 1-year server commitment lowers every
+    figure by roughly 25&ndash;28%.</p>
+  </div>
+
+  <div class="footer"><span>StewardEx &mdash; Running Cost Estimate &middot; 21 May 2026</span><span>Page 5</span></div>
+</div>
+
+</body>
+</html>

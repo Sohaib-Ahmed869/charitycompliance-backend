@@ -25,6 +25,7 @@ export class ChecklistInstanceRepository {
     return await this.Instance.findOne({ _id: id, entity_type: 'instance' })
       .populate('approval_request_id')
       .populate('items.checked_by', 'first_name last_name email')
+      .populate('items.note_entries.author', 'first_name last_name email')
       .populate('items.evidence.uploaded_by', 'first_name last_name email')
       .populate('closed_by', 'first_name last_name email');
   }
@@ -46,7 +47,14 @@ export class ChecklistInstanceRepository {
     if (quarter) q['period.quarter'] = Number(quarter);
     if (arguments[1]?.entityType) q['context.entityType'] = String(arguments[1].entityType);
     if (arguments[1]?.entityId) q['context.entityId'] = String(arguments[1].entityId);
-    return await this.Instance.find(q).sort({ createdAt: -1 });
+    // Populate actor refs so listings (e.g. the monthly register) can show who
+    // completed each item and who authored each note without an extra findById.
+    return await this.Instance.find(q)
+      .sort({ createdAt: -1 })
+      .populate('items.checked_by', 'first_name last_name email')
+      .populate('items.note_entries.author', 'first_name last_name email')
+      .populate('items.evidence.uploaded_by', 'first_name last_name email')
+      .populate('closed_by', 'first_name last_name email');
   }
 
   async findByContext(orgId, { type, entityType, entityId }) {

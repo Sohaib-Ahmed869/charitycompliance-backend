@@ -1,4 +1,5 @@
 import donationMilestoneSchema from '../db/schemas/platform/donationMilestoneSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 export class DonationMilestoneRepository {
   constructor(tenantDb) {
@@ -24,7 +25,7 @@ export class DonationMilestoneRepository {
     }
 
     if (filters.search) {
-      const regex = new RegExp(filters.search, 'i');
+      const regex = new RegExp(escapeRegex(filters.search), 'i');
       query.title = regex;
     }
 

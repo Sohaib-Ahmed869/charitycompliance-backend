@@ -35,6 +35,19 @@ const donationBoxEntrySchema = new mongoose.Schema(
     variance: {
       type: Number,
     },
+    // CASH-010 — variance investigation documentation. Populated when the
+    // counted variance is non-zero and someone has reviewed why. Free-form
+    // notes + accountability fields so this is auditable.
+    variance_investigation: {
+      status: {
+        type: String,
+        enum: ['none', 'open', 'investigating', 'resolved', 'unresolved'],
+        default: 'none',
+      },
+      notes: { type: String, default: '', trim: true },
+      investigated_by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+      investigated_at: { type: Date },
+    },
     entry_date: {
       type: Date,
       required: true,

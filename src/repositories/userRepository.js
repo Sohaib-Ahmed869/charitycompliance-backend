@@ -85,6 +85,10 @@ const createUserSchema = () => {
       // Password reset
       password_reset_token: { type: String, default: null },
       password_reset_expires: { type: Date, default: null },
+      // SECURITY (SESS-008): timestamp of the last password change/reset. Any JWT
+      // issued BEFORE this (by `iat`) is rejected at auth time, so changing or
+      // resetting the password invalidates all previously-issued sessions.
+      password_changed_at: { type: Date, default: null },
 
       // Audit: who created this user (admin invite/manual create) or self (set to own id)
       created_by: {
@@ -122,6 +126,10 @@ export class UserRepository {
   }
 
   async findByResetToken(token) {
+    // SECURITY (INP-002): a reset token is ALWAYS a plain string. Reject any
+    // non-string (e.g. { $ne: null }) so it can't become a Mongo operator that
+    // matches any user with a pending reset → account takeover.
+    if (typeof token !== 'string' || !token) return null;
     return this.User.findOne({
       password_reset_token: token,
       password_reset_expires: { $gt: new Date() }

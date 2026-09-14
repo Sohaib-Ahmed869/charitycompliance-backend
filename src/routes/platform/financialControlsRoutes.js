@@ -10,11 +10,13 @@ import { body } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { requireAdminOrOwner } from '../../middleware/rbac.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 
 const router = express.Router();
 
 // All routes require authentication and tenant resolution
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('finance.statements'));
 
 // Get financial controls
 router.get(

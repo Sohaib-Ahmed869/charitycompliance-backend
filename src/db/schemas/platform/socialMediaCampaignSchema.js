@@ -87,10 +87,20 @@ const socialMediaCampaignSchema = new mongoose.Schema({
    */
   status: {
     type: String,
-    enum: ['draft', 'pending', 'approved', 'rejected', 'resubmission_required', 'lodged', 'published', 'compliance_pending', 'compliance_verified'],
+    enum: [
+      'draft', 'pending', 'approved', 'rejected', 'resubmission_required',
+      'lodged', 'published', 'compliance_pending', 'compliance_verified',
+      // MKT-007/008 — pause is reversible (paused → published / lodged
+      // depending on prior state stored in `paused_from_status`).
+      // Archive is terminal — campaign is read-only thereafter.
+      'paused', 'archived'
+    ],
     default: 'draft',
     index: true
   },
+  /** When status flips to `paused`, this remembers what it was before
+   *  so the resume action can restore it instead of guessing. */
+  paused_from_status: { type: String, default: null },
   /** Pre-publication (content) approval */
   approval_request_id: {
     type: mongoose.Schema.Types.ObjectId,

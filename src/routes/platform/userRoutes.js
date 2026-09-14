@@ -7,6 +7,7 @@ import express from 'express';
 import { body } from 'express-validator';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { validate } from '../../middleware/validation.js';
+import { enforceSeatLimit } from '../../middleware/enforceSeatLimit.js';
 import * as userController from '../../controllers/userController.js';
 
 const router = express.Router();
@@ -21,8 +22,13 @@ router.post(
     body('lastName').optional().isString().trim()
   ],
   validate,
+  enforceSeatLimit('staffSeats'),
   userController.inviteAuditor
 );
+
+// External auditor management (#18)
+router.get('/auditors', userController.listAuditors);
+router.post('/auditors/:inviteId/revoke', userController.revokeAuditor);
 
 router.get('/', userController.listTeamMembers);
 

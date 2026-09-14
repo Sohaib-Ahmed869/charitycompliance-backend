@@ -31,21 +31,26 @@
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
     "dotenv": "^17.4.2",
+    "expo-server-sdk": "^6.1.0",
     "express": "^5.2.1",
     "express-rate-limit": "^7.4.1",
     "express-validator": "^7.2.0",
+    "html-to-docx": "^1.8.0",
     "jsonwebtoken": "^9.0.2",
+    "mammoth": "^1.12.0",
     "mongoose": "^8.23.1",
     "multer": "^1.4.5-lts.1",
     "node-cache": "^5.1.2",
     "nodemailer": "^7.0.12",
     "openai": "^6.27.0",
+    "pdf-lib": "^1.17.1",
     "puppeteer": "^24.37.4",
     "react-grid-layout": "^2.2.2",
     "socket.io": "^4.8.3",
     "speakeasy": "^2.0.0",
     "stripe": "^17.3.1",
-    "tiptap": "^1.32.2"
+    "tiptap": "^1.32.2",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"

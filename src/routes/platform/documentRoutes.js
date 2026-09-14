@@ -100,9 +100,15 @@ router.post(
   documentController.replaceWorkflowDocumentFile
 );
 
-// Update document
+// Update document. Accepts BOTH application/json and multipart/form-data
+// payloads — the latter is used when the caller wants to replace the
+// document's file at the same time. Without multer on the PUT route,
+// FormData bodies would never be parsed and field updates would silently
+// no-op.
 router.put(
   '/:documentId',
+  uploadSingle,
+  handleUploadError,
   [
     param('documentId')
       .isMongoId()
@@ -110,6 +116,36 @@ router.put(
   ],
   validate,
   documentController.updateDocument
+);
+
+// List all versions for a parent document (chronological, newest version first)
+router.get(
+  '/:documentId/versions',
+  [
+    param('documentId')
+      .isMongoId()
+      .withMessage('Invalid document ID')
+  ],
+  validate,
+  documentController.getDocumentVersions
+);
+
+// Upload a new version of an existing document. Multipart payload —
+// the new file goes to S3, metadata is copied from the parent unless
+// overridden in the body, and the version row is linked to the parent
+// via parent_document_id. The parent stays the "head"; old versions
+// are accessible via /:id/versions.
+router.post(
+  '/:documentId/versions',
+  uploadSingle,
+  handleUploadError,
+  [
+    param('documentId')
+      .isMongoId()
+      .withMessage('Invalid document ID')
+  ],
+  validate,
+  documentController.uploadDocumentVersion
 );
 
 // Review and sign yearly statement (assigned board member only)

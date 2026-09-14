@@ -105,6 +105,32 @@ const riskSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'ApprovalRequest'
   },
+  /**
+   * Back-link to the workflow the risk was triggered from, if any.
+   * Populated when a user clicks "Trigger risk" while reviewing an
+   * approval — the resulting risk lives in the Risk Register normally
+   * but stays visible from the original workflow via this pointer.
+   *
+   * Distinct from `approval_request_id` (which is the risk's OWN
+   * head-of-department assessment approval, created by RiskService).
+   * Null for risks raised outside any workflow.
+   */
+  source_approval_request_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'ApprovalRequest',
+    index: true
+  },
+  /** Convenience copy of the source approval's entity type
+   *  (expense / policy / coi / etc.) — surfaces on the risk detail
+   *  page so the reviewer sees where the risk came from without
+   *  another join. */
+  source_entity_type: {
+    type: String,
+    trim: true
+  },
+  source_entity_id: {
+    type: mongoose.Schema.Types.ObjectId
+  },
   /** Simple semantic version for risk (v1.0, v1.1, etc.) */
   version: {
     type: String,

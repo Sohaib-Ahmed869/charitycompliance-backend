@@ -7,11 +7,13 @@ import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
 import { requirePermission } from '../../middleware/rbac.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import * as donationBoxController from '../../controllers/donationBoxController.js';
 
 const router = express.Router();
 
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('finance.cash_handling'));
 
 // List donation boxes
 router.get(
@@ -19,7 +21,10 @@ router.get(
   [
     query('status')
       .optional()
-      .isIn(['active', 'inactive'])
+      // 'all' returns every box regardless of status (the repository already
+      // treats it as "no status filter") — the mobile app lists everything and
+      // filters client-side.
+      .isIn(['active', 'inactive', 'all'])
       .withMessage('Invalid status'),
     query('search').optional().trim(),
   ],
@@ -99,6 +104,34 @@ router.get(
   validate,
   requirePermission('module:donation_boxes:view'),
   donationBoxController.getDonationBoxById
+);
+
+// CASH-016/017 — Activate / deactivate a donation box. Single endpoint
+// rather than two so the same client-side mutation handles both
+// transitions just by switching `status` in the body.
+router.patch(
+  '/:boxId/status',
+  [
+    param('boxId').isMongoId().withMessage('Invalid donation box ID'),
+    body('status').isIn(['active', 'inactive']).withMessage('Status must be active or inactive')
+  ],
+  validate,
+  requirePermission('module:donation_boxes:edit'),
+  donationBoxController.setDonationBoxStatus
+);
+
+// CASH-010 — record the variance investigation on a single entry.
+router.patch(
+  '/:boxId/entries/:entryId/variance-investigation',
+  [
+    param('boxId').isMongoId().withMessage('Invalid donation box ID'),
+    param('entryId').isMongoId().withMessage('Invalid entry ID'),
+    body('status').optional().isIn(['none', 'open', 'investigating', 'resolved', 'unresolved']).withMessage('Invalid status'),
+    body('notes').optional().isString().isLength({ max: 4000 }).withMessage('Notes must be 4000 chars or fewer')
+  ],
+  validate,
+  requirePermission('module:donation_boxes:edit'),
+  donationBoxController.setVarianceInvestigation
 );
 
 // Add entry against donation box / miscellaneous collection

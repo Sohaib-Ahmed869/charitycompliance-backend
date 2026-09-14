@@ -52,6 +52,9 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 
+# Internal / personal (not for repo)
+personal/
+
 # Editor/IDE
 .vscode/*
 !.vscode/extensions.json

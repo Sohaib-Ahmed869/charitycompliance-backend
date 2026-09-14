@@ -14,7 +14,23 @@ import { validationResult } from 'express-validator';
 import { AppError } from '../middleware/errorHandler.js';
 import { uploadToS3, deleteFromS3, getFileUrl } from '../services/s3Service.js';
 import { logError, logInfo } from '../utils/logger.js';
+import { NotificationRepository } from '../repositories/notificationRepository.js';
 import { buildBasPeriodMetadata } from '../services/basPeriodDocumentHelper.js';
+
+// SECURITY (ATZ-006/007/013): consistent server-side ownership check — assert a
+// document belongs to the caller's org before returning or mutating it. The
+// per-tenant DB already scopes lookups; this makes that guarantee explicit and
+// uniform across every by-id handler (some had the check, some didn't).
+async function assertDocumentInOrg(tenantDb, documentId) {
+  const documentRepo = new DocumentRepository(tenantDb);
+  const { OrganizationRepository } = await import('../repositories/organizationRepository.js');
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const [doc, org] = await Promise.all([documentRepo.findById(documentId), orgRepo.findOne()]);
+  if (!doc || !org || String(doc.org_id) !== String(org._id)) {
+    throw new AppError('Document not found', 404, 'NOT_FOUND');
+  }
+  return doc;
+}
 
 const safeParseMetadata = (raw) => {
   if (!raw) return {};
@@ -117,12 +133,7 @@ export const getDocumentById = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { documentId } = req.params;
   const tenantDb = await getTenantConnection(orgId);
-  const documentRepo = new DocumentRepository(tenantDb);
-
-  const document = await documentRepo.findById(documentId);
-  if (!document) {
-    throw new AppError('Document not found', 404, 'NOT_FOUND');
-  }
+  const document = await assertDocumentInOrg(tenantDb, documentId);
 
   // Generate presigned URL for file access
   const fileUrl = await getFileUrl(document.file_path);
@@ -261,6 +272,34 @@ export const createDocument = asyncHandler(async (req, res) => {
     metadata: fiscalMetadata || basMetadata || safeParseMetadata(req.body.metadata)
   });
 
+  // Yearly statements: notify the assigned board reviewer in-app so they know
+  // they need to review & sign (the upload UI promises this happens). Wrapped in
+  // try/catch so a notification failure never rolls back the upload.
+  if (req.body.category === 'financial_statement') {
+    const reviewerUserId = document.metadata?.reviewer_user_id;
+    // Always notify the assigned reviewer (even if they uploaded it themselves —
+    // uploading is not reviewing/signing, and the demo assigns self).
+    if (reviewerUserId) {
+      try {
+        const notificationRepo = new NotificationRepository(tenantDb);
+        await notificationRepo.create({
+          user_id: reviewerUserId,
+          type: 'yearly_statement_review_assigned',
+          title: 'Yearly statement to review',
+          message: `You have been assigned to review and sign ${document.title || 'a yearly statement'}.`,
+          link: '/charity-administration/yearly-statements',
+          related_entity_id: document._id,
+          related_entity_type: 'document',
+          created_at: new Date()
+        });
+      } catch (err) {
+        logError('Failed to create yearly statement reviewer notification', {
+          orgId, documentId: String(document._id), error: err?.message
+        });
+      }
+    }
+  }
+
   // Fiscal reports and BAS lodgements auto-start an approval workflow on upload.
   // We catch failures so the upload itself isn't rolled back, but we surface the
   // outcome on the response so the FE can tell the user what actually happened
@@ -331,7 +370,111 @@ export const updateDocument = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const documentRepo = new DocumentRepository(tenantDb);
 
-  const document = await documentRepo.update(documentId, req.body);
+  const existing = await assertDocumentInOrg(tenantDb, documentId);
+
+  // Build the update payload field-by-field. We only forward fields
+  // the caller actually sent (so an unrelated PUT can't accidentally
+  // clear stored data), and coerce date-strings to Date objects since
+  // the schema's setter doesn't run on $set with raw strings.
+  const body = req.body || {};
+  const update = {};
+  const stringFields = [
+    'document_type', 'registration_number', 'title', 'description',
+    'category', 'related_board_member_id', 'renewal_requirements',
+    'state_or_territory'
+  ];
+  for (const f of stringFields) {
+    if (Object.prototype.hasOwnProperty.call(body, f) && body[f] !== '') {
+      update[f] = body[f];
+    }
+  }
+  const dateFields = [
+    'date_adopted', 'date_last_amended', 'effective_date',
+    'review_date', 'expiry_date'
+  ];
+  for (const f of dateFields) {
+    if (Object.prototype.hasOwnProperty.call(body, f) && body[f]) {
+      const d = new Date(body[f]);
+      if (!Number.isNaN(d.getTime())) update[f] = d;
+    }
+  }
+
+  // Preserve a superseded expiry date. When the expiry actually changes
+  // and the document already had one, push the previous value onto
+  // `expiry_history` so the calendar can keep showing it struck-off
+  // instead of dropping the old expiry event entirely.
+  if (
+    Object.prototype.hasOwnProperty.call(update, 'expiry_date') &&
+    existing.expiry_date &&
+    new Date(update.expiry_date).getTime() !== new Date(existing.expiry_date).getTime()
+  ) {
+    const history = Array.isArray(existing.expiry_history)
+      ? existing.expiry_history.map((h) => ({
+          expiry_date: h.expiry_date,
+          superseded_at: h.superseded_at,
+          superseded_by: h.superseded_by
+        }))
+      : [];
+    history.push({
+      expiry_date: existing.expiry_date,
+      superseded_at: new Date(),
+      superseded_by: req.user?.userId || null
+    });
+    update.expiry_history = history;
+  }
+
+  // Optional file replacement. When the caller posted multipart/form-data
+  // with a new `file`, swap it on S3 + update the snapshot fields.
+  // The old S3 object is left in place if the new upload succeeds AND
+  // delete fails — better to have an orphan than to break the record.
+  if (req.file) {
+    const subfolder = update.category || existing.category || 'document';
+    const uploaded = await uploadToS3(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype,
+      orgId,
+      subfolder
+    );
+    update.file_name = req.file.originalname;
+    update.file_path = uploaded.key;
+    update.file_size = req.file.size;
+    update.mime_type = req.file.mimetype;
+    if (existing.file_path && existing.file_path !== uploaded.key) {
+      try { await deleteFromS3(existing.file_path); }
+      catch (err) { console.warn('[updateDocument] old S3 file delete failed:', err?.message || err); }
+    }
+  }
+
+  // Version-number bump.
+  //   File replaced via this endpoint  → major +1, minor → 0
+  //   Metadata-only edit               → minor +1 (when at least one
+  //                                      tracked field actually changed)
+  const trackedMetadataFields = [
+    'document_type', 'registration_number', 'title', 'description',
+    'date_adopted', 'date_last_amended', 'effective_date',
+    'review_date', 'expiry_date'
+  ];
+  const metadataChanged = trackedMetadataFields.some((f) => {
+    if (!Object.prototype.hasOwnProperty.call(update, f)) return false;
+    const before = existing[f];
+    const after = update[f];
+    if (before instanceof Date || after instanceof Date) {
+      const a = before ? new Date(before).getTime() : null;
+      const b = after ? new Date(after).getTime() : null;
+      return a !== b;
+    }
+    return (before ?? '') !== (after ?? '');
+  });
+  if (req.file) {
+    update.version = (existing.version || 1) + 1;
+    update.minor_version = 0;
+  } else if (metadataChanged) {
+    update.version = existing.version || 1;
+    update.minor_version = (existing.minor_version || 0) + 1;
+  }
+
+  const document = await documentRepo.update(documentId, update);
   if (!document) {
     throw new AppError('Document not found', 404, 'NOT_FOUND');
   }
@@ -356,10 +499,7 @@ export const reviewYearlyStatement = asyncHandler(async (req, res) => {
   const documentRepo = new DocumentRepository(tenantDb);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
-  const doc = await documentRepo.findById(documentId);
-  if (!doc) {
-    throw new AppError('Document not found', 404, 'NOT_FOUND');
-  }
+  const doc = await assertDocumentInOrg(tenantDb, documentId);
   if (doc.category !== 'financial_statement') {
     throw new AppError('Only yearly statements can be reviewed here', 400, 'INVALID_CATEGORY');
   }
@@ -550,17 +690,130 @@ export const replaceWorkflowDocumentFile = asyncHandler(async (req, res) => {
   );
 });
 
+/**
+ * GET /platform/documents/:documentId/versions
+ *
+ * Returns the version history for a document: the current "head"
+ * row + every row whose parent_document_id points at it OR at a
+ * shared parent. We also resolve the parent chain so an arbitrary
+ * mid-chain document still surfaces its full history.
+ */
+export const getDocumentVersions = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { documentId } = req.params;
+  const tenantDb = await getTenantConnection(orgId);
+  const documentRepo = new DocumentRepository(tenantDb);
+
+  const root = await documentRepo.findById(documentId);
+  if (!root) throw new AppError('Document not found', 404, 'NOT_FOUND');
+
+  // Walk up to the original parent (if any).
+  let head = root;
+  while (head.parent_document_id) {
+    // eslint-disable-next-line no-await-in-loop
+    const parent = await documentRepo.findById(head.parent_document_id);
+    if (!parent) break;
+    head = parent;
+  }
+
+  const children = await documentRepo.findVersions(head._id);
+  const all = [head, ...children]
+    .filter((d, idx, arr) => arr.findIndex((x) => String(x._id) === String(d._id)) === idx)
+    .sort((a, b) => (b.version || 1) - (a.version || 1));
+
+  // Attach a presigned file URL to each row so the UI can link straight
+  // to the underlying S3 object without a second round-trip.
+  const withUrls = await Promise.all(all.map(async (d) => {
+    let file_url = null;
+    try { file_url = await getFileUrl(d.file_path); } catch { /* leave null */ }
+    return { ...d.toObject(), file_url };
+  }));
+
+  res.json({ success: true, data: { head_id: String(head._id), versions: withUrls } });
+});
+
+/**
+ * POST /platform/documents/:documentId/versions
+ *
+ * Upload a new version of an existing document. The new row is
+ * linked to the original via parent_document_id and gets the next
+ * incremental version number. Metadata is copied from the parent
+ * and selectively overridden by anything in the request body.
+ */
+export const uploadDocumentVersion = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const { documentId } = req.params;
+  if (!req.file) {
+    throw new AppError('A file is required to create a new version.', 400, 'FILE_REQUIRED');
+  }
+
+  const tenantDb = await getTenantConnection(orgId);
+  const documentRepo = new DocumentRepository(tenantDb);
+  const parent = await documentRepo.findById(documentId);
+  if (!parent) throw new AppError('Parent document not found', 404, 'NOT_FOUND');
+
+  // Resolve the head of the chain so versions all hang off the same root.
+  let head = parent;
+  while (head.parent_document_id) {
+    // eslint-disable-next-line no-await-in-loop
+    const upstream = await documentRepo.findById(head.parent_document_id);
+    if (!upstream) break;
+    head = upstream;
+  }
+
+  const subfolder = parent.category || 'document';
+  const uploaded = await uploadToS3(
+    req.file.buffer,
+    req.file.originalname,
+    req.file.mimetype,
+    orgId,
+    subfolder
+  );
+
+  // Build the version doc — start from the parent's metadata, then
+  // overlay any fields the caller supplied (title / dates / type).
+  const body = req.body || {};
+  const data = {
+    org_id: head.org_id,
+    category: head.category,
+    document_type: body.document_type || parent.document_type,
+    registration_number: body.registration_number ?? parent.registration_number,
+    title: body.title || parent.title,
+    description: body.description ?? parent.description,
+    file_name: req.file.originalname,
+    file_path: uploaded.key,
+    file_size: req.file.size,
+    mime_type: req.file.mimetype,
+    // New file → major bump (createVersion does parent.version + 1) +
+    // minor reset to 0. Explicit so we don't inherit whatever minor
+    // the parent currently sits at.
+    minor_version: 0,
+    date_adopted: body.date_adopted ? new Date(body.date_adopted) : parent.date_adopted,
+    date_last_amended: body.date_last_amended ? new Date(body.date_last_amended) : new Date(),
+    effective_date: body.effective_date ? new Date(body.effective_date) : parent.effective_date,
+    review_date: body.review_date ? new Date(body.review_date) : parent.review_date,
+    expiry_date: body.expiry_date ? new Date(body.expiry_date) : parent.expiry_date,
+    uploaded_by: req.user?.userId || null
+  };
+
+  const created = await documentRepo.createVersion(head._id, data);
+  let file_url = null;
+  try { file_url = await getFileUrl(created.file_path); } catch { /* leave null */ }
+
+  res.status(201).json({
+    success: true,
+    data: { ...created.toObject(), file_url }
+  });
+});
+
 export const deleteDocument = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { documentId } = req.params;
   const tenantDb = await getTenantConnection(orgId);
   const documentRepo = new DocumentRepository(tenantDb);
 
-  // Get document to retrieve S3 key before deleting
-  const document = await documentRepo.findById(documentId);
-  if (!document) {
-    throw new AppError('Document not found', 404, 'NOT_FOUND');
-  }
+  // Get document to retrieve S3 key before deleting (ownership-checked).
+  const document = await assertDocumentInOrg(tenantDb, documentId);
 
   // Delete from S3
   try {

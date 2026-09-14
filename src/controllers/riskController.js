@@ -15,6 +15,7 @@ import { validationResult } from 'express-validator';
 import { uploadToS3, getFileStream } from '../services/s3Service.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
+import { setSafeDownloadHeaders } from '../utils/safeDownloadHeaders.js';
 
 /**
  * Check if user can add risk treatment: admin (org owner) or head of department of the risk's department
@@ -146,6 +147,23 @@ export const updateRisk = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * POST /platform/risks/:riskId/resubmit
+ *
+ * Resubmit a rejected risk. Optionally accept the same field updates
+ * the edit form sends so the user can fix issues in one step rather
+ * than editing and then clicking a separate resubmit button.
+ */
+export const resubmitRisk = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const userId = req.user?.userId;
+  const { riskId } = req.params;
+  const updates = (req.body && typeof req.body === 'object') ? req.body : {};
+  const riskService = new RiskService(orgId);
+  const risk = await riskService.resubmitRisk(riskId, userId, updates);
+  res.json({ success: true, data: risk });
+});
+
 export const deleteRisk = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
   const { riskId } = req.params;
@@ -257,6 +275,31 @@ export const exportRiskRegisterPdf = asyncHandler(async (req, res) => {
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', 'attachment; filename="risk-register.pdf"');
   res.send(buffer);
+});
+
+/** Audit-pack ZIP of the risk register: per-risk JSON + attachments + summary CSV. */
+export const exportRiskRegisterZip = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const filters = {
+    status: req.query.status,
+    category: req.query.category,
+    search: req.query.search
+  };
+
+  const riskService = new RiskService(orgId);
+  const risks = await riskService.getRisks(filters);
+
+  const tenantDb = await getTenantConnection(orgId);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  const logoUrl = org?.logo_url || process.env.LOGO || '';
+
+  const { streamRisksZip } = await import('../services/riskZipExportService.js');
+  const dateStr = new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="risk-register-${dateStr}.zip"`);
+  res.setHeader('Cache-Control', 'no-store');
+  await streamRisksZip(risks, res, { orgId, org, logoUrl });
 });
 
 /** Add a treatment to a risk - triggers approval workflow */
@@ -425,8 +468,7 @@ export const streamRiskAttachment = asyncHandler(async (req, res) => {
   }
   const rangeHeader = req.headers.range || null;
   const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await getFileStream(att.file_path, rangeHeader);
-  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(att.file_name || 'attachment')}"`);
+  setSafeDownloadHeaders(res, { contentType: ContentType, fileName: att.file_name || 'attachment' });
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.setHeader('Accept-Ranges', 'bytes');
   if (IsPartial && ContentRange) {
@@ -453,8 +495,7 @@ export const streamEvidence = asyncHandler(async (req, res) => {
   }
   const rangeHeader = req.headers.range || null;
   const { Body, ContentType, ContentLength, ContentRange, IsPartial } = await getFileStream(evidence.file_path, rangeHeader);
-  res.setHeader('Content-Type', ContentType || 'application/octet-stream');
-  res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(evidence.file_name || 'evidence')}"`);
+  setSafeDownloadHeaders(res, { contentType: ContentType, fileName: evidence.file_name || 'evidence' });
   res.setHeader('Cache-Control', 'private, max-age=300');
   res.setHeader('Accept-Ranges', 'bytes');
   if (IsPartial && ContentRange) {

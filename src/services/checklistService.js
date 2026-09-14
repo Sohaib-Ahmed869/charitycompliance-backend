@@ -9,7 +9,15 @@ import { UserRepository } from '../repositories/userRepository.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError, logInfo } from '../utils/logger.js';
 import { COMPLIANCE_CHECKLIST_CATALOG } from '../config/complianceChecklistCatalog.js';
-import { CHECKLIST_LIBRARY_V3 } from '../config/checklistLibraryV3.js';
+import { CHECKLIST_LIBRARY_V3, V3_LIBRARY_VERSION } from '../config/checklistLibraryV3.js';
+
+// Per-tenant in-memory guards so the lazy auto-bootstrap runs at most once per
+// process per tenant, and never concurrently (which could create duplicates).
+const _bootstrappedVersionByOrg = new Map();
+const _inflightBootstrapByOrg = new Map();
+import { MONTHLY_COMPLIANCE_CATALOG } from '../config/monthlyComplianceCatalog.js';
+import { MONTHLY_COMPLIANCE_RULES, evaluateMonthlyRule, monthWindow } from './monthlyComplianceRules.js';
+import mongoose from 'mongoose';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -37,6 +45,13 @@ function normalizeModuleName(value) {
     .replace(/[^a-z0-9]+/g, ' ')
     .replace(/\bpolicies\b/g, 'policy')
     .replace(/\bprocedures\b/g, 'procedure')
+    // Singular/plural module-label synonyms. The V3 library labels finance
+    // templates 'Finance' and the global complaints template 'Complaints',
+    // while the entity-target maps use 'Finances' / 'Complaint'. Without these
+    // the hard module filter in findBestTemplateForTarget rejects the correct
+    // template and the entity gets NO checklist (or the wrong one).
+    .replace(/\bfinances\b/g, 'finance')
+    .replace(/\bcomplaints\b/g, 'complaint')
     .trim();
 }
 
@@ -229,6 +244,9 @@ const ENTITY_MODULE_MAP = {
   partner: 'Grants & Donors',
   funding_partner: 'Grants & Donors',
   partner_vetting: 'Grants & Donors',
+  // Suppliers use the SAME checklist as delivery partners (Partner Vetting), so
+  // the supplier register shows the same due-diligence checklist.
+  supplier: 'Grants & Donors',
   project_register: 'Grants & Donors',
   project_monitoring: 'Grants & Donors',
   refund: 'Grants & Donors',
@@ -253,36 +271,66 @@ const ENTITY_MODULE_MAP = {
   financial_report: 'Reporting',
   fiscal_report: 'Reporting',
   complaint: 'Complaint',
-  authority_transfer: 'System & Legal',
+  // 'System & Legal' matches no checklist template — route to the real modules.
+  authority_transfer: 'BCP',
   social_media_campaign: 'Marketing',
   social_media_campaigns: 'Marketing',
-  emergency: 'System & Legal'
+  emergency: 'Finance',
+  // Inquiry register records are ad-hoc, user-defined governance registers.
+  inquiry_record: 'Governance'
 };
 
 const ENTITY_TEMPLATE_TARGETS = {
-  expense: { module: 'Finances', submodule: 'Expenses' },
-  purchase: { module: 'Finances', submodule: 'Expenses' },
+  // Expense creation resolves I01 (Invoice Intake & Validation). I02 (Payment
+  // Approval & Release) shares the same Finance/Expenses module+submodule, so
+  // pin the V3 id to break the tie deterministically — otherwise DB order
+  // decides and I02 can surface in I01's place.
+  expense: { module: 'Finances', submodule: 'Expenses', v3Id: 'I01' },
+  purchase: { module: 'Finances', submodule: 'Expenses', v3Id: 'I01' },
   policy: { module: 'Policies' },
   risk: { module: 'Risk', submodule: 'Risk Management' },
   donor: { module: 'Grants & Donors', submodule: 'Donor Register' },
-  project: { module: 'Grants & Donors', submodule: 'Programs' },
+  // Project delivery → I13 (Project Monitoring), not the Programs templates
+  // (I14/I35) which were tying and surfacing Community Sponsorship (#10).
+  project: { module: 'Grants & Donors', submodule: 'Project Monitoring' },
   project_register: { module: 'Grants & Donors', submodule: 'Project Register' },
   project_monitoring: { module: 'Grants & Donors', submodule: 'Project Monitoring' },
   partner_vetting: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
   partner: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
   funding_partner: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
+  // Suppliers use the SAME checklist as Partner Vetting (delivery partners) — the
+  // resolver picks the same Partner Vetting template for both.
+  supplier: { module: 'Grants & Donors', submodule: 'Partner Vetting' },
   funding_agreement: { module: 'Grants & Donors', submodule: 'Funding Agreements' },
-  refund: { module: 'Grants & Donors', submodule: 'Refunds' },
-  donor_refund: { module: 'Grants & Donors', submodule: 'Refunds' },
+  // Refunds use the Finance/Refunds checklist (I05). Previously targeted
+  // Grants & Donors/Refunds, which no template matches, so refunds showed no
+  // (or the wrong) checklist.
+  refund: { module: 'Finance', submodule: 'Refunds' },
+  donor_refund: { module: 'Finance', submodule: 'Refunds' },
+  project_refund: { module: 'Finance', submodule: 'Refunds' },
   registration_license: { module: 'Charity Administration', submodule: 'Registrations & Licenses' },
   governing_document: { module: 'Charity Administration', submodule: 'Governing Doc' },
   licence_document: { module: 'Charity Administration', submodule: 'Registrations & Licenses' },
   permit_document: { module: 'Charity Administration', submodule: 'Registrations & Licenses' },
   approval_thresholds: { module: 'Charity Administration', submodule: 'Approval Thresholds' },
   yearly_statements: { module: 'Charity Administration', submodule: 'Yearly Statements' },
-  financial_controls: { module: 'Finances', submodule: 'Financial Controls' },
+  // #12 — Financial Controls is the Expenses area in this app; repoint it to
+  // the Expenses checklist (I01) so the expense register drives it.
+  financial_controls: { module: 'Finances', submodule: 'Expenses' },
+  // Expense register-level Financial Record-Keeping checklist (I09, Sheet29) —
+  // opened from a button on the Expenses register (#12).
+  expense_register: { module: 'Finance', submodule: 'Records', useCase: 'expense_register' },
+  // Bank/expense cards → I04; bank & platform access authorisations → I53 (#14).
+  bank_card: { module: 'Finance', submodule: 'Financial Controls', useCase: 'bank_card' },
+  bank_platform_access: { module: 'Finance', submodule: 'Financial Controls', useCase: 'bank_platform_access' },
   responsible_person: { module: 'Charity Administration', submodule: 'Responsible People' },
-  volunteer_person: { module: 'Volunteers', submodule: 'Volunteer Register' },
+  // Volunteers carry three lifecycle checklists that share the same
+  // module/submodule, disambiguated by useCase: onboarding (add) → I19,
+  // register (ongoing) → I21, offboarding (inactivate) → I50.
+  volunteer_person: { module: 'Volunteers', submodule: 'Volunteer Register', useCase: 'volunteer_register' },
+  volunteer_register: { module: 'Volunteers', submodule: 'Volunteer Register', useCase: 'volunteer_register' },
+  volunteer_onboarding: { module: 'Volunteers', submodule: 'Volunteer Register', useCase: 'volunteer_onboarding' },
+  volunteer_offboarding: { module: 'Volunteers', submodule: 'Volunteer Register', useCase: 'volunteer_offboarding' },
   hr_employee: { module: 'People & HR', submodule: 'Employees' },
   hr_training: { module: 'People & HR', submodule: 'Trainings' },
   disciplinary_record: { module: 'People & HR', submodule: 'Disciplinary Records' },
@@ -291,36 +339,84 @@ const ENTITY_TEMPLATE_TARGETS = {
   bas_lodgement: { module: 'Finance', submodule: 'BAS' },
   financial_report: { module: 'Reporting', submodule: 'Financial Reports' },
   fiscal_report: { module: 'Reporting', submodule: 'Fiscal Reports' },
-  complaint: { module: 'Complaint', submodule: 'Complaint Register' }
+  complaint: { module: 'Complaint', submodule: 'Complaint Register' },
+  // Previously unmapped — these fell through to a module-only (wrong submodule)
+  // or empty target and so attached an arbitrary/irrelevant checklist. Each
+  // target below points at an existing V3 template's module + submodule.
+  donation: { module: 'Grants & Donors', submodule: 'Donor Register' },
+  donation_milestone: { module: 'Grants & Donors', submodule: 'Project Monitoring' },
+  grant: { module: 'Grants & Donors', submodule: 'Funding Agreements' },
+  // Business transfer / key-person continuity → Succession Plan (I54, Sheet81).
+  authority_transfer: { module: 'BCP', submodule: 'Succession', useCase: 'business_transfer' },
+  // Disaster Recovery & BCP plan → I55 (Sheet91).
+  bcp_plan: { module: 'BCP', submodule: 'Business Continuity', useCase: 'bcp_plan' },
+  emergency: { module: 'Finance', submodule: 'Emergency' },
+  social_media_campaign: { module: 'Marketing', submodule: 'Campaigns' },
+  social_media_campaigns: { module: 'Marketing', submodule: 'Campaigns' },
+  // Marketing overall register checklist (I52, from Sheet43). Per-campaign
+  // creation uses I27 (Marketing/Campaigns) instead.
+  marketing_register: { module: 'Marketing', submodule: 'Register', useCase: 'marketing_register' },
+  // Social media account access/credentials → I28 (Marketing/Social Media).
+  social_media_account: { module: 'Marketing', submodule: 'Social Media', useCase: 'social_media_access' },
+  // COI declarations → I25 (People & HR/Employees, useCase 'coi').
+  coi: { module: 'People & HR', submodule: 'Employees', useCase: 'coi' },
+  // External auditor onboarding/offboarding (#18) → I56 / I57.
+  auditor_invite: { module: 'Audit', submodule: 'Auditors', useCase: 'auditor_onboarding' },
+  auditor_offboarding: { module: 'Audit', submodule: 'Auditors', useCase: 'auditor_offboarding' },
+  // Inquiry register records → dedicated Governance / Inquiries checklist
+  // (I48 in checklistLibraryV3.js). Bootstrap the v3 library so it exists.
+  inquiry_record: { module: 'Governance', submodule: 'Inquiries' }
 };
 
 function findBestTemplateForTarget(moduleTemplates = [], target = {}) {
   const requestedModule = normalizeModuleName(target?.module || '');
   const requestedSubmodule = normalizeModuleName(target?.submodule || '');
   const requestedUseCase = String(target?.useCase || '').trim().toLowerCase();
+  // Optional explicit V3 checklist id (e.g. 'I01'). Used to disambiguate when
+  // two templates share the same module+submodule (e.g. I01 Invoice Intake and
+  // I02 Payment Approval both live in Finance/Expenses) — without it the tie is
+  // broken by DB order and the wrong checklist can surface.
+  const requestedV3Id = String(target?.v3Id || '').trim().toLowerCase();
+
+  // SAFEGUARD: with no usable target at all (an unmapped entity type — e.g. an
+  // inquiry_record that isn't in ENTITY_MODULE_MAP / ENTITY_TEMPLATE_TARGETS),
+  // never guess. Returning null means the workflow gets NO checklist rather
+  // than an arbitrary, unrelated one (the caller handles null gracefully).
+  if (!requestedModule && !requestedSubmodule && !requestedUseCase && !requestedV3Id) return null;
+
   let best = null;
-  let bestScore = -1;
+  let bestScore = 0;
   for (const tpl of moduleTemplates || []) {
-    let score = 0;
     const moduleName = normalizeModuleName(tpl?.metadata?.module);
     const submoduleName = normalizeModuleName(tpl?.metadata?.submodule);
     const useCase = String(tpl?.metadata?.useCase || '').trim().toLowerCase();
+    const v3Id = String(tpl?.metadata?.v3_checklist_id || '').trim().toLowerCase();
 
     // Prevent cross-submodule bleed (e.g. Programs checklist showing on Funding Agreements).
     // If caller asks for a specific module/submodule, enforce exact match.
     if (requestedModule && moduleName !== requestedModule) continue;
     if (requestedSubmodule && submoduleName !== requestedSubmodule) continue;
 
-    if (requestedUseCase && useCase === requestedUseCase) score += 6;
-    if (requestedModule && moduleName === requestedModule) score += 4;
-    if (requestedSubmodule && submoduleName === requestedSubmodule) score += 3;
-    if (tpl?.is_active !== false) score += 1;
-    if (score > bestScore) {
+    // Score ONLY real matches. is_active is a tie-break, never a qualifier —
+    // otherwise an under-specified target would clear the bar on activeness
+    // alone and return a confidently-wrong template.
+    let matchScore = 0;
+    // An exact V3 id match is the strongest signal — it outranks module/
+    // submodule/useCase so the intended checklist always wins its tie.
+    if (requestedV3Id && v3Id === requestedV3Id) matchScore += 10;
+    if (requestedUseCase && useCase === requestedUseCase) matchScore += 6;
+    if (requestedModule && moduleName === requestedModule) matchScore += 4;
+    if (requestedSubmodule && submoduleName === requestedSubmodule) matchScore += 3;
+    if (matchScore === 0) continue; // nothing actually matched this template
+
+    const total = matchScore + (tpl?.is_active !== false ? 1 : 0);
+    if (total > bestScore) {
       best = tpl;
-      bestScore = score;
+      bestScore = total;
     }
   }
-  return bestScore > 0 ? best : null;
+  // `best` is only ever set on a real module/submodule/useCase match.
+  return best;
 }
 
 function doesTemplateMatchTarget(template, target = {}) {
@@ -328,9 +424,12 @@ function doesTemplateMatchTarget(template, target = {}) {
   const requestedModule = normalizeModuleName(target?.module || '');
   const requestedSubmodule = normalizeModuleName(target?.submodule || '');
   const requestedUseCase = String(target?.useCase || '').trim().toLowerCase();
+  const requestedV3Id = String(target?.v3Id || '').trim().toLowerCase();
   const templateModule = normalizeModuleName(template?.metadata?.module);
   const templateSubmodule = normalizeModuleName(template?.metadata?.submodule);
   const templateUseCase = String(template?.metadata?.useCase || '').trim().toLowerCase();
+  const templateV3Id = String(template?.metadata?.v3_checklist_id || '').trim().toLowerCase();
+  if (requestedV3Id && templateV3Id !== requestedV3Id) return false;
   if (requestedUseCase && templateUseCase !== requestedUseCase) return false;
   if (requestedModule && templateModule !== requestedModule) return false;
   if (requestedSubmodule && templateSubmodule !== requestedSubmodule) return false;
@@ -464,6 +563,99 @@ export class ChecklistService {
 
     logInfo('Created default expense workflow checklist template', { orgId: this.orgId, templateId: template._id });
     return template;
+  }
+
+  /**
+   * Lazily ensure the dedicated inquiry-register checklist template (V3 I48)
+   * exists for this tenant. Inquiry workflows resolve a checklist on every
+   * approval view, but the v3 library is only bootstrapped on demand — so a
+   * tenant provisioned before I48 shipped would otherwise have no inquiry
+   * template and fall back to an unrelated checklist. Sourced from the V3
+   * definition so item text has a single source of truth.
+   */
+  async ensureDefaultInquiryWorkflowTemplate() {
+    const def = CHECKLIST_LIBRARY_V3.find((c) => c.v3Id === 'I48');
+    if (!def) return null;
+    const tenantDb = await this.getTenantDb();
+    const templateRepo = new ChecklistTemplateRepository(tenantDb);
+    const existing = (await templateRepo.list(this.orgId, {}))
+      .find((t) => t?.metadata?.v3_checklist_id === 'I48');
+    if (existing) return existing;
+
+    const created = await templateRepo.create({
+      org_id: this.orgId,
+      name: `[${def.v3Id}] ${def.name}`,
+      type: 'module',
+      description: def.description,
+      metadata: {
+        module: def.module,
+        submodule: def.submodule,
+        v3_checklist_id: def.v3Id,
+        v3Type: def.checklistType,
+        v3Category: def.category,
+        v3Version: '3.0',
+        entityTargets: def.entityTargets || [],
+        source: 'checklist_library_v3'
+      },
+      items: (def.items || []).map((it) => ({
+        title: it.title,
+        description: `${def.category} compliance check — ${def.name}.`,
+        category: def.category,
+        type: 'manual',
+        requiredEvidence: 'optional',
+        assigneeRole: 'Compliance Officer',
+        sortOrder: it.sortOrder
+      }))
+    });
+    logInfo('Created default inquiry workflow checklist template', { orgId: this.orgId, templateId: created._id });
+    return created;
+  }
+
+  /**
+   * Lazily ensure the dedicated supplier-vetting checklist template (V3 I49)
+   * exists for this tenant. Mirrors the inquiry case: supplier vetting workflows
+   * resolve a checklist on every approval view, but the v3 library is only
+   * bootstrapped on demand — so a tenant provisioned before I49 shipped would
+   * otherwise have no supplier template and fall back to an unrelated checklist
+   * (e.g. the inquiry-register checklist). Sourced from the V3 definition so item
+   * text has a single source of truth.
+   */
+  async ensureDefaultSupplierWorkflowTemplate() {
+    const def = CHECKLIST_LIBRARY_V3.find((c) => c.v3Id === 'I49');
+    if (!def) return null;
+    const tenantDb = await this.getTenantDb();
+    const templateRepo = new ChecklistTemplateRepository(tenantDb);
+    const existing = (await templateRepo.list(this.orgId, {}))
+      .find((t) => t?.metadata?.v3_checklist_id === 'I49');
+    if (existing) return existing;
+
+    const created = await templateRepo.create({
+      org_id: this.orgId,
+      name: `[${def.v3Id}] ${def.name}`,
+      type: 'module',
+      description: def.description,
+      metadata: {
+        module: def.module,
+        submodule: def.submodule,
+        v3_checklist_id: def.v3Id,
+        v3Type: def.checklistType,
+        v3Category: def.category,
+        v3Version: '3.0',
+        entityTargets: def.entityTargets || [],
+        source: 'checklist_library_v3'
+      },
+      items: (def.items || []).map((it) => ({
+        title: it.title,
+        description: `${def.category} compliance check — ${def.name}.`,
+        category: def.category,
+        type: 'manual',
+        requiredEvidence: 'optional',
+        assigneeRole: 'Compliance Officer',
+        sortOrder: it.sortOrder
+      }))
+    });
+    logInfo('Created default supplier workflow checklist template', { orgId: this.orgId, templateId: created._id });
+    return created;
   }
 
   async ensureDefaultRiskWorkflowTemplate() {
@@ -754,6 +946,47 @@ export class ChecklistService {
   }
 
   /**
+   * Lazily auto-bootstrap the V3 library for this tenant when the stored
+   * version differs from the current code version. Runs at most once per
+   * process per tenant, never concurrently. Best-effort — never throws into
+   * the caller (a bootstrap failure must not break a checklist request).
+   *
+   * This removes the need to ever click "Load default checklists" manually:
+   * a backend restart + the next checklist request applies all library edits.
+   */
+  async ensureV3Bootstrapped() {
+    const orgId = this.orgId;
+    if (_bootstrappedVersionByOrg.get(orgId) === V3_LIBRARY_VERSION) return;
+    if (_inflightBootstrapByOrg.has(orgId)) return _inflightBootstrapByOrg.get(orgId);
+
+    const run = (async () => {
+      try {
+        const tenantDb = await this.getTenantDb();
+        const metaCol = tenantDb.collection('checklist_meta');
+        const meta = await metaCol.findOne({ key: 'v3_library_version' });
+        if (meta?.value === V3_LIBRARY_VERSION) {
+          _bootstrappedVersionByOrg.set(orgId, V3_LIBRARY_VERSION);
+          return;
+        }
+        await this.bootstrapV3Library();
+        await metaCol.updateOne(
+          { key: 'v3_library_version' },
+          { $set: { key: 'v3_library_version', value: V3_LIBRARY_VERSION, updated_at: new Date() } },
+          { upsert: true }
+        );
+        _bootstrappedVersionByOrg.set(orgId, V3_LIBRARY_VERSION);
+        logInfo('Auto-bootstrapped v3 checklist library', { orgId, version: V3_LIBRARY_VERSION });
+      } catch (err) {
+        logError('Auto-bootstrap of v3 library failed', { orgId, error: err?.message });
+      } finally {
+        _inflightBootstrapByOrg.delete(orgId);
+      }
+    })();
+    _inflightBootstrapByOrg.set(orgId, run);
+    return run;
+  }
+
+  /**
    * Bootstrap v3 Optimised Checklist Library (50 checklists from xlsx).
    *
    * Idempotent: uses metadata.v3_checklist_id (G01–G10, I01–I40) as the
@@ -786,7 +1019,7 @@ export class ChecklistService {
       const templateItems = (cl.items || []).map((it) => ({
         title: it.title,
         description: `${cl.category} compliance check — ${cl.name}.`,
-        category: cl.category,
+        category: it.category || cl.category,
         type: 'manual',
         requiredEvidence: 'optional',
         assigneeRole: 'Compliance Officer',
@@ -799,6 +1032,7 @@ export class ChecklistService {
       const metadata = {
         module: cl.module,
         ...(cl.submodule ? { submodule: cl.submodule } : {}),
+        ...(cl.useCase ? { useCase: cl.useCase } : {}),
         v3_checklist_id: v3Id,
         v3Type: cl.checklistType,
         v3Category: cl.category,
@@ -858,6 +1092,7 @@ export class ChecklistService {
   }
 
   async ensureWorkflowChecklistForApproval({ entityType, entityId, approvalRequestId, createdBy }) {
+    await this.ensureV3Bootstrapped();
     const rawEntityType = String(entityType || '').trim().toLowerCase();
     let normalizedEntityType = canonicalizeEntityType(rawEntityType);
     let normalizedEntityId = String(entityId || '').trim();
@@ -912,11 +1147,35 @@ export class ChecklistService {
       throw new AppError('entityType and entityId are required', 400, 'INVALID_WORKFLOW_CONTEXT');
     }
 
+    // Inquiry workflows use a dedicated checklist (V3 I48). Ensure it exists for
+    // this tenant even if the v3 library bootstrap hasn't been re-run, so inquiry
+    // records get their own checklist instead of an unrelated fallback. Existing
+    // stale instances self-heal: once this template is found, the existing-
+    // instance branch below swaps its items to the correct ones.
+    if (normalizedEntityType === 'inquiry_record') {
+      await this.ensureDefaultInquiryWorkflowTemplate();
+    }
+    // Suppliers reuse the Partner Vetting checklist (V3 I15–I17, seeded by the V3
+    // bootstrap above). `supplier` targets Grants & Donors / Partner Vetting, so
+    // the resolver picks the same template delivery-partner vetting uses.
+
     const allModuleTemplates = await templateRepo.list(this.orgId, { type: 'module' });
     const target = ENTITY_TEMPLATE_TARGETS[normalizedEntityType] || {
       module: ENTITY_MODULE_MAP[normalizedEntityType]
     };
-    const selectedTemplate = findBestTemplateForTarget(allModuleTemplates, target);
+    let selectedTemplate = findBestTemplateForTarget(allModuleTemplates, target);
+
+    // Module-only fallback for expense/purchase. If the tenant's finance checklist
+    // exists but lacks the exact 'Expenses' submodule (e.g. it was seeded via the
+    // module-catalog bootstrap, which sets no submodule, or was renamed), the
+    // strict submodule filter above returns null and the detail page shows "No
+    // compliance checklist found" even though the checklist is visible in the
+    // catalog. The submit path (ensureExpenseWorkflowChecklist) already applies
+    // this fallback; mirror it here so both paths resolve to the same instance.
+    if (!selectedTemplate && (normalizedEntityType === 'expense' || normalizedEntityType === 'purchase')) {
+      selectedTemplate = findBestTemplateForTarget(allModuleTemplates, { module: 'Finances' })
+        || findBestTemplateForTarget(allModuleTemplates, { module: 'Finance' });
+    }
 
     let existing = await instanceRepo.findByContext(this.orgId, {
       type: 'module',
@@ -1027,8 +1286,27 @@ export class ChecklistService {
       if (!existingMatchesTarget) {
         // For expense/purchase workflows, template metadata can drift over time.
         // In that case we must not hide the checklist if an instance already exists.
-        if (!selectedTemplate) {
-          if (normalizedEntityType === 'expense' || normalizedEntityType === 'purchase') {
+        // An expense/purchase instance whose current template isn't I01 is the
+        // legacy mis-resolution this rebind exists to correct. But if work has
+        // already been done on it (checked items, notes, evidence, or it's been
+        // closed), swapping to I01 would silently discard that completed
+        // compliance record — I02's item titles don't line up with I01's, so
+        // nothing carries over. Only auto-correct untouched instances; leave
+        // worked-on ones on their original checklist.
+        const isExpenseLike = normalizedEntityType === 'expense' || normalizedEntityType === 'purchase';
+        const existingHasProgress =
+          existing.status === 'closed' ||
+          (existing.items || []).some(
+            (i) =>
+              i?.checked ||
+              i?.state === 'satisfied' ||
+              (typeof i?.notes === 'string' && i.notes.trim().length > 0) ||
+              (Array.isArray(i?.evidence) && i.evidence.length > 0)
+          );
+        if (isExpenseLike && existingHasProgress) {
+          // Keep the worked-on instance as-is (still attach approval below).
+        } else if (!selectedTemplate) {
+          if (isExpenseLike) {
             // Keep existing instance as-is (still attach approval_request_id below).
           } else {
             return null;
@@ -1096,12 +1374,19 @@ export class ChecklistService {
   }
 
   async listTemplates({ type, module } = {}) {
+    await this.ensureV3Bootstrapped();
     const tenantDb = await this.getTenantDb();
     const repo = new ChecklistTemplateRepository(tenantDb);
-    const primary = await repo.list(this.orgId, { type, module });
-    if (!module || primary.length > 0) return primary;
+    if (!module) return await repo.list(this.orgId, { type });
 
-    // Fallback for minor module-name variants, e.g. "Policies & Procedure" vs "Policies & Procedures".
+    // Always match on the NORMALIZED module name so singular/plural and
+    // punctuation variants ('Finance' vs 'Finances', 'Complaint' vs
+    // 'Complaints', 'Policies & Procedure' vs 'Policies & Procedures') all
+    // resolve to the same module. The previous exact-match-first short-circuit
+    // returned ONLY the exact variant when it matched anything: a 'Finances'
+    // query that hit the lone plural-labelled donation-box template would never
+    // surface the singular 'Finance' expense templates, so the expense page
+    // showed a cash/donation-box checklist instead of the invoice one.
     const normalizedRequested = normalizeModuleName(module);
     const allForType = await repo.list(this.orgId, { type });
     return allForType.filter((t) => normalizeModuleName(t?.metadata?.module) === normalizedRequested);
@@ -1301,7 +1586,7 @@ export class ChecklistService {
     return out;
   }
 
-  async patchItem({ instanceId, itemId }, { checked, notes, addEvidence, state }, userId) {
+  async patchItem({ instanceId, itemId }, { checked, notes, addNote, addEvidence, state }, userId) {
     const tenantDb = await this.getTenantDb();
     const repo = new ChecklistInstanceRepository(tenantDb);
     const inst = await repo.findById(instanceId);
@@ -1310,6 +1595,13 @@ export class ChecklistService {
 
     const item = (inst.items || []).find((it) => String(it._id) === String(itemId));
     if (!item) throw new AppError('Checklist item not found', 404, 'ITEM_NOT_FOUND');
+
+    // Auto items resolve from platform data via the evaluation engine — they
+    // must never be ticked (or un-ticked) by hand. Notes / evidence are still
+    // allowed; only a checked/state change is rejected.
+    if (item.type_snapshot === 'auto' && (typeof checked === 'boolean' || state)) {
+      throw new AppError('Auto items resolve automatically and cannot be set manually', 400, 'AUTO_ITEM_NOT_MANUAL');
+    }
 
     const updateEvidence = Array.isArray(addEvidence) ? addEvidence : (addEvidence ? [addEvidence] : []);
     if (updateEvidence.length > 0) {
@@ -1323,13 +1615,46 @@ export class ChecklistService {
       }))];
     }
 
-    if (typeof notes === 'string') item.notes = notes;
+    // Multi-note tracking — a note can arrive two ways, both APPEND (never
+    // overwrite) so a second person can add their own note to the same item:
+    //   1. `addNote: { text }` — the explicit multi-note payload.
+    //   2. `notes: '<text>'` — the legacy single-note field, which the shared
+    //      ChecklistEngine's note thread sends via the toggle handler on pages
+    //      that don't wire `addNote` directly. Treated as an appended entry too.
+    // Allowed on auto items (only checked/state are blocked above); blocked
+    // entirely once closed (the CHECKLIST_CLOSED guard at the top).
+    const notesToAppend = [];
+    if (typeof notes === 'string' && notes.trim()) notesToAppend.push(notes.trim());
+    if (addNote && typeof addNote === 'object' && String(addNote.text || '').trim()) {
+      notesToAppend.push(String(addNote.text).trim());
+    }
+    if (notesToAppend.length) {
+      item.note_entries = [
+        ...(item.note_entries || []),
+        ...notesToAppend.map((text) => ({ text, author: userId, created_at: new Date() }))
+      ];
+    }
 
     if (typeof checked === 'boolean') {
       // evidence enforcement for manual items
       if (checked && item.type_snapshot === 'manual' && item.required_evidence_snapshot === 'required') {
         if (!item.evidence || item.evidence.length === 0) {
           throw new AppError('Evidence is required to complete this item', 400, 'EVIDENCE_REQUIRED');
+        }
+      }
+      // CHKL-004 — dependency blocking. Cannot mark satisfied until every
+      // listed predecessor is itself satisfied/checked.
+      if (checked && Array.isArray(item.depends_on_item_ids) && item.depends_on_item_ids.length > 0) {
+        const byId = new Map((inst.items || []).map((it) => [String(it._id), it]));
+        const blockers = item.depends_on_item_ids
+          .map((id) => byId.get(String(id)))
+          .filter((dep) => dep && !(dep.state === 'satisfied' || dep.checked));
+        if (blockers.length > 0) {
+          throw new AppError(
+            `Complete the prerequisite item${blockers.length === 1 ? '' : 's'} first: ${blockers.map((b) => b.title_snapshot || 'item').join(', ')}`,
+            400,
+            'CHECKLIST_ITEM_BLOCKED'
+          );
         }
       }
       item.checked = checked;
@@ -1448,6 +1773,11 @@ export class ChecklistService {
 
   async _evaluateChecklistInstance(instanceDoc, tenantDb) {
     const inst = instanceDoc;
+    // Period-based monthly compliance instances have no bound entity — they
+    // evaluate their auto items against module data for the period instead.
+    if (inst?.type === 'monthly_compliance') {
+      return await this._evaluateMonthlyComplianceInstance(inst, tenantDb);
+    }
     const entityType = String(inst?.context?.entityType || '').toLowerCase();
     const entityId = inst?.context?.entityId;
     if (!inst || !entityType || !entityId) return inst;
@@ -1578,6 +1908,225 @@ export class ChecklistService {
 
       if (!matched) continue;
       applyAutoState(item, satisfied, detail);
+    }
+
+    if (changed) {
+      await inst.save();
+      return await (new ChecklistInstanceRepository(tenantDb)).findById(inst._id);
+    }
+    return inst;
+  }
+
+  // ── Monthly Compliance Register ─────────────────────────────────────────
+
+  /** Create (idempotently) the tenant's monthly_compliance template from the catalogue. */
+  async ensureMonthlyComplianceTemplate() {
+    const tenantDb = await this.getTenantDb();
+    const templateRepo = new ChecklistTemplateRepository(tenantDb);
+    const existing = await templateRepo.findActiveByType(this.orgId, 'monthly_compliance');
+    if (existing) return existing;
+
+    let sortOrder = 10;
+    const items = [];
+    for (const moduleGroup of MONTHLY_COMPLIANCE_CATALOG) {
+      for (const ci of moduleGroup.items) {
+        const tail = [ci.code, ci.frequency].filter(Boolean).join(' · ');
+        items.push({
+          title: ci.title,
+          description: tail ? `${ci.description} (${tail})` : ci.description,
+          category: moduleGroup.module,
+          type: ci.type === 'auto' ? 'auto' : 'manual',
+          requiredEvidence: 'optional',
+          assigneeRole: ci.responsible || 'Compliance Officer',
+          autoRuleKey: ci.type === 'auto' ? ci.autoRuleKey : undefined,
+          sortOrder
+        });
+        sortOrder += 10;
+      }
+    }
+
+    const template = await templateRepo.create({
+      org_id: this.orgId,
+      name: 'Monthly Charity Compliance Checklist',
+      type: 'monthly_compliance',
+      description: 'Module-by-module monthly compliance register. Auto items resolve from platform data; manual items are ticked each month.',
+      metadata: { source: 'monthly_compliance_catalog', version: 1, modules: MONTHLY_COMPLIANCE_CATALOG.map((m) => m.module) },
+      items
+    });
+    logInfo('Created monthly compliance checklist template', { orgId: this.orgId, templateId: template._id, items: items.length });
+    return template;
+  }
+
+  /** Create (idempotently) the monthly_compliance instance for a given year/month. */
+  async createMonthlyComplianceInstance({ year, month }, _createdBy) {
+    const tenantDb = await this.getTenantDb();
+    const instanceRepo = new ChecklistInstanceRepository(tenantDb);
+    const template = await this.ensureMonthlyComplianceTemplate();
+
+    const y = Number(year);
+    const m = Number(month);
+    if (!Number.isInteger(y) || !Number.isInteger(m) || m < 1 || m > 12) {
+      throw new AppError('Valid year and month (1-12) are required', 400, 'INVALID_PERIOD');
+    }
+    const period = { year: y, month: m };
+    const existing = await instanceRepo.findByPeriod(this.orgId, 'monthly_compliance', period);
+    if (existing) return await this._evaluateMonthlyComplianceInstance(existing, tenantDb);
+
+    const items = (template.items || [])
+      .slice()
+      .sort((a, b) => (a.sortOrder || 0) - (b.sortOrder || 0))
+      .map((ti) => ({
+        template_item_id: ti._id,
+        title_snapshot: ti.title,
+        description_snapshot: ti.description,
+        category_snapshot: ti.category,
+        type_snapshot: ti.type,
+        auto_rule_key_snapshot: ti.autoRuleKey,
+        required_evidence_snapshot: ti.requiredEvidence,
+        state: 'pending',
+        checked: false,
+        notes: ''
+      }));
+
+    const instance = await instanceRepo.create({
+      org_id: this.orgId,
+      template_id: template._id,
+      type: 'monthly_compliance',
+      period,
+      status: 'open',
+      items
+    });
+    logInfo('Created monthly compliance instance', { orgId: this.orgId, instanceId: instance._id, period });
+    return await this._evaluateMonthlyComplianceInstance(instance, tenantDb);
+  }
+
+  /** List the whole register (every month), newest first, with per-module compliance summaries. */
+  async listMonthlyComplianceRegister() {
+    const tenantDb = await this.getTenantDb();
+    const repo = new ChecklistInstanceRepository(tenantDb);
+    const list = await repo.list(this.orgId, { type: 'monthly_compliance' });
+    const out = [];
+    for (const inst of list) {
+      const evaluated = await this._evaluateMonthlyComplianceInstance(inst, tenantDb);
+      out.push(this._summarizeMonthlyInstance(evaluated));
+    }
+    // Newest period first.
+    out.sort((a, b) => (b.period.year - a.period.year) || (b.period.month - a.period.month));
+    return out;
+  }
+
+  _summarizeMonthlyInstance(inst) {
+    const obj = typeof inst?.toObject === 'function' ? inst.toObject() : inst;
+    const items = obj.items || [];
+    const isDone = (it) => it.state === 'satisfied' || it.checked;
+    const byModule = new Map();
+    for (const it of items) {
+      const mod = it.category_snapshot || 'General';
+      if (!byModule.has(mod)) byModule.set(mod, { module: mod, total: 0, satisfied: 0 });
+      const row = byModule.get(mod);
+      row.total += 1;
+      if (isDone(it)) row.satisfied += 1;
+    }
+    const modules = [...byModule.values()].map((r) => ({ ...r, pct: r.total ? Math.round((r.satisfied / r.total) * 100) : 0 }));
+    const satisfiedItems = items.filter(isDone).length;
+    return {
+      ...obj,
+      summary: {
+        totalItems: items.length,
+        satisfiedItems,
+        overallPct: items.length ? Math.round((satisfiedItems / items.length) * 100) : 0,
+        modules
+      }
+    };
+  }
+
+  /** Add a custom item to a month's register — either a manual tick or a criteria-driven auto item. */
+  async addMonthlyComplianceManualItem({ instanceId, title, description, module, mode, criteriaKey }, _userId) {
+    const tenantDb = await this.getTenantDb();
+    const repo = new ChecklistInstanceRepository(tenantDb);
+    const inst = await repo.findById(instanceId);
+    if (!inst) throw new AppError('Checklist instance not found', 404, 'INSTANCE_NOT_FOUND');
+    if (inst.type !== 'monthly_compliance') throw new AppError('Not a monthly compliance register', 400, 'WRONG_TYPE');
+    if (inst.status === 'closed') throw new AppError('Register is closed', 400, 'CHECKLIST_CLOSED');
+
+    const cleanTitle = String(title || '').trim();
+    if (!cleanTitle) throw new AppError('Item title is required', 400, 'TITLE_REQUIRED');
+
+    const isCriteria = String(mode || 'manual') === 'criteria';
+    if (isCriteria) {
+      const key = String(criteriaKey || '').trim().toUpperCase();
+      if (!MONTHLY_COMPLIANCE_RULES[key]) throw new AppError('Unknown criteria', 400, 'UNKNOWN_CRITERIA');
+    }
+
+    inst.items.push({
+      template_item_id: new mongoose.Types.ObjectId(),
+      title_snapshot: cleanTitle,
+      description_snapshot: String(description || '').trim(),
+      category_snapshot: String(module || 'Custom').trim() || 'Custom',
+      type_snapshot: isCriteria ? 'auto' : 'manual',
+      auto_rule_key_snapshot: isCriteria ? String(criteriaKey).trim().toUpperCase() : undefined,
+      required_evidence_snapshot: 'optional',
+      state: 'pending',
+      checked: false,
+      notes: ''
+    });
+    await inst.save();
+    const refreshed = await repo.findById(instanceId);
+    return this._summarizeMonthlyInstance(await this._evaluateMonthlyComplianceInstance(refreshed, tenantDb));
+  }
+
+  /**
+   * Month-end closure for a monthly compliance register. Locks the month as a
+   * point-in-time record: once closed, `patchItem` and
+   * `addMonthlyComplianceManualItem` reject all edits (CHECKLIST_CLOSED), so
+   * ticks, notes and items can no longer change. Unlike the finance period
+   * close, this does NOT require 100% completion — a month is signed off with
+   * whatever was (and wasn't) achieved.
+   */
+  async closeMonthlyComplianceInstance(instanceId, userId) {
+    const tenantDb = await this.getTenantDb();
+    const repo = new ChecklistInstanceRepository(tenantDb);
+    const inst = await repo.findById(instanceId);
+    if (!inst) throw new AppError('Checklist instance not found', 404, 'INSTANCE_NOT_FOUND');
+    if (inst.type !== 'monthly_compliance') throw new AppError('Not a monthly compliance register', 400, 'WRONG_TYPE');
+    if (inst.status === 'closed') throw new AppError('Register is already closed', 400, 'ALREADY_CLOSED');
+    await repo.close(instanceId, userId);
+    const refreshed = await repo.findById(instanceId);
+    logInfo('Closed monthly compliance register', { orgId: this.orgId, instanceId, period: inst.period });
+    return this._summarizeMonthlyInstance(refreshed);
+  }
+
+  /** Evaluate the auto/criteria items on a monthly register for its period. */
+  async _evaluateMonthlyComplianceInstance(instanceDoc, tenantDb) {
+    const inst = instanceDoc;
+    const year = inst?.period?.year;
+    const month = inst?.period?.month;
+    if (!year || !month) return inst;
+    const win = monthWindow(year, month);
+    const ctx = { tenantDb, win };
+    const now = new Date();
+    let changed = false;
+
+    for (const item of inst.items || []) {
+      if (item.type_snapshot !== 'auto') continue;
+      const ruleKey = item.auto_rule_key_snapshot;
+      if (!ruleKey || !MONTHLY_COMPLIANCE_RULES[String(ruleKey).trim().toUpperCase()]) continue;
+      const result = await evaluateMonthlyRule(ruleKey, ctx);
+      if (!result) continue;
+
+      // Never override an item a user explicitly checked; just refresh its detail.
+      if (item.checked_by) {
+        if (item.evaluation_detail !== result.detail) { item.evaluation_detail = result.detail; changed = true; }
+        item.last_evaluated_at = now;
+        continue;
+      }
+      const nextState = result.satisfied ? 'satisfied' : 'pending';
+      if (item.state !== nextState) { item.state = nextState; changed = true; }
+      if (item.checked !== result.satisfied) { item.checked = result.satisfied; changed = true; }
+      if (result.satisfied && !item.checked_at) { item.checked_at = now; changed = true; }
+      if (!result.satisfied && item.checked_at) { item.checked_at = null; changed = true; }
+      if (item.evaluation_detail !== result.detail) { item.evaluation_detail = result.detail; changed = true; }
+      item.last_evaluated_at = now;
     }
 
     if (changed) {

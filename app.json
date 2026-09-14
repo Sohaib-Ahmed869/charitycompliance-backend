@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "bdbcc829-8bc2-4099-9803-9d0159b32aa9"
+      }
+    },
+    "android": {
+      "package": "com.azka123.charitycompliancebackend"
+    }
+  }
+}

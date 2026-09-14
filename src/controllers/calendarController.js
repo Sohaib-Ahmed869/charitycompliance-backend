@@ -31,6 +31,14 @@ const hasModuleViewPermission = (permissions = [], moduleId) => {
   return permissions.includes('*:*') || permissions.includes(`module:${moduleId}:view`);
 };
 
+/** Convert a snake_case key (e.g. "board_member") to Title Case ("Board Member"). */
+const humanizeKey = (key) =>
+  String(key || '')
+    .split('_')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
+
 /**
  * Helper function to format an event for calendar display
  * System events (expiring items) are normalized to 9:00 AM on the due date
@@ -45,7 +53,9 @@ const formatCalendarEvent = (event, type, sourceId = null) => {
     title: event.title,
     date: toISODate(normalizedDate) || toISODate(date) || date,
     type,
-    description: event.description || `${type} event`,
+    // Fall back to a human-readable label instead of the raw snake_case
+    // type key (e.g. "Board Member event" rather than "board_member event").
+    description: event.description || `${humanizeKey(type)} event`,
     is_custom: false,
     source: type,
     source_id: event._id || sourceId
@@ -87,6 +97,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
   let boardMemberEvents = [];
   let fundingEvents = [];
   let documentEvents = [];
+  let supersededDocumentEvents = [];
   let governingReviewEvents = [];
   let legalReviewEvents = [];
   let meetingEvents = [];
@@ -194,6 +205,32 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
     }
 
     try {
+      // Superseded expiry dates — when a licence/registration expiry was
+      // changed, the previous date stays on the calendar struck-off
+      // (superseded: true) rather than disappearing.
+      const supersededExpiries = await calendarRepo.findSupersededDocumentExpiries(orgObjectId, dateOptions);
+      supersededDocumentEvents = supersededExpiries.map((d) => ({
+        ...formatCalendarEvent(
+          {
+            _id: d._id,
+            title: `${d.title || d.document_type} - Expires (superseded)`,
+            date: d.expiry_date,
+            description: d.current_expiry
+              ? `Previous expiry — replaced by ${new Date(d.current_expiry).toLocaleDateString('en-AU')}`
+              : 'Previous expiry date — superseded'
+          },
+          'governance_structure',
+          String(d._id)
+        ),
+        superseded: true,
+        source_id: d.source_doc_id
+      }));
+      logInfo('Superseded document expiry events retrieved', { orgId, count: supersededDocumentEvents.length });
+    } catch (error) {
+      logError('Error retrieving superseded document expiry events', { orgId, error: error.message, stack: error.stack });
+    }
+
+    try {
       // Governing document review events
       const governingReviews = await calendarRepo.findUpcomingGoverningDocumentReviews(orgObjectId, dateOptions);
       governingReviewEvents = governingReviews.map((d) => formatCalendarEvent(
@@ -249,6 +286,184 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
       logError('Error retrieving physical record review events', { orgId, error: error.message, stack: error.stack });
     }
   }
+
+  // Supplier vetting expiry events — every approved supplier with an
+  // `expires_at` within the dateOptions window becomes a calendar dot.
+  // Surfaced under the `compliance` event type so it shows up in the
+  // "Expiring Soon" filter automatically (compliance is already in the
+  // EXPIRING_TYPES whitelist on the frontend).
+  try {
+    const { SupplierRepository } = await import('../repositories/supplierRepository.js');
+    const supplierRepo = new SupplierRepository(tenantDb);
+    const supplierExpiries = await supplierRepo.findExpiringSoon(orgObjectId, 365);
+    const supplierEvents = supplierExpiries.map((s) => formatCalendarEvent(
+      {
+        ...s,
+        title: `${s.legal_name} - Re-vetting Due`,
+        date: s.expires_at,
+        description: `Supplier ${s.supplier_number || ''} re-vet required`.trim()
+      },
+      'compliance',
+      s._id?.toString()
+    ));
+    logInfo('Supplier expiry events retrieved', { orgId, count: supplierEvents.length });
+    // Push into a local var that gets spread into the events array below.
+    physicalRecordEvents = physicalRecordEvents.concat(supplierEvents);
+  } catch (error) {
+    logError('Error retrieving supplier expiry events', { orgId, error: error.message, stack: error.stack });
+  }
+
+  // ID-document expiry events — driver's licence / passport for every
+  // person tracked (directors, responsible people, volunteers,
+  // employees — all share the board_members collection). Emitted under
+  // the `compliance` event type so they ride the existing Expiring
+  // Soon filter; no new EXPIRING_TYPES entry needed.
+  //
+  // CRITICAL: board_members.org_id is an ObjectId, NOT the slug. Pass
+  // `orgObjectId` (resolved earlier in this handler) not the `orgId`
+  // string or the query silently returns zero rows.
+  try {
+    const { BoardMemberRepository } = await import('../repositories/boardMemberRepository.js');
+    const bmRepo = new BoardMemberRepository(tenantDb);
+    const horizon = new Date();
+    horizon.setDate(horizon.getDate() + 365);
+    const people = await bmRepo.BoardMember.find({
+      org_id: orgObjectId,
+      is_active: true,
+      $or: [
+        { 'identification.licence.expiry_date': { $exists: true, $ne: null, $lte: horizon } },
+        { 'identification.passport.expiry_date': { $exists: true, $ne: null, $lte: horizon } },
+        // Also include people who have superseded (historical) expiry dates,
+        // even if their current expiry is beyond the horizon, so the old
+        // struck-off entries still surface.
+        { 'identification.licence.expiry_history.0': { $exists: true } },
+        { 'identification.passport.expiry_history.0': { $exists: true } }
+      ]
+    })
+      .select(
+        'given_names family_name position ' +
+        'identification.licence.expiry_date identification.licence.expiry_history ' +
+        'identification.passport.expiry_date identification.passport.expiry_history'
+      )
+      .lean();
+
+    const idEvents = [];
+    for (const p of people) {
+      const name = `${p.given_names || ''} ${p.family_name || ''}`.trim() || 'Person';
+      const lic = p?.identification?.licence?.expiry_date;
+      const pas = p?.identification?.passport?.expiry_date;
+      // Explicit `route` so the calendar's "View details" handler
+      // takes the user to the person's detail page rather than the
+      // generic compliance → risk-management fallback. Without this,
+      // these events used the `compliance` mapping and landed on a
+      // non-existent risk id (the source_id is a board member id).
+      const personRoute = `/charity-administration/responsible-people/${p._id}`;
+      if (lic) {
+        idEvents.push({
+          ...formatCalendarEvent(
+            {
+              _id: p._id,
+              title: `${name} — Driver's licence expires`,
+              date: lic,
+              description: `ID renewal needed${p.position ? ` · ${p.position}` : ''}`
+            },
+            'compliance',
+            `${p._id}-licence`
+          ),
+          route: personRoute
+        });
+      }
+      if (pas) {
+        idEvents.push({
+          ...formatCalendarEvent(
+            {
+              _id: p._id,
+              title: `${name} — Passport expires`,
+              date: pas,
+              description: `ID renewal needed${p.position ? ` · ${p.position}` : ''}`
+            },
+            'compliance',
+            `${p._id}-passport`
+          ),
+          route: personRoute
+        });
+      }
+
+      // Superseded ID-document expiry dates — keep the old date on the
+      // calendar struck-off (superseded: true) rather than dropping it
+      // when the licence/passport is renewed to a new date.
+      const pushHistory = (history, label, key) => {
+        (history || []).forEach((h, idx) => {
+          if (!h?.expiry_date) return;
+          idEvents.push({
+            ...formatCalendarEvent(
+              {
+                _id: `${p._id}-${key}-hist-${idx}`,
+                title: `${name} — ${label} expires (superseded)`,
+                date: h.expiry_date,
+                description: 'Previous ID expiry — superseded by a new date'
+              },
+              'compliance',
+              `${p._id}-${key}-hist-${idx}`
+            ),
+            route: personRoute,
+            superseded: true
+          });
+        });
+      };
+      pushHistory(p?.identification?.licence?.expiry_history, "Driver's licence", 'licence');
+      pushHistory(p?.identification?.passport?.expiry_history, 'Passport', 'passport');
+    }
+    logInfo('ID expiry events retrieved', { orgId, count: idEvents.length });
+    physicalRecordEvents = physicalRecordEvents.concat(idEvents);
+  } catch (error) {
+    logError('Error retrieving ID expiry events', { orgId, error: error.message, stack: error.stack });
+  }
+
+  // Bank card expiries — only on assets categorised as "Banking
+  // Details". Surfaced as 'asset' type events so they ride the
+  // existing Expiring Soon filter (asset is already in EXPIRING_TYPES).
+  // Note: assets.org_id is a STRING slug, not an ObjectId — different
+  // convention from board_members. Don't normalise.
+  try {
+    const assetSchemaImport = (await import('../db/schemas/platform/assetSchema.js')).default;
+    const Asset = tenantDb.models.Asset || tenantDb.model('Asset', assetSchemaImport);
+    const cardHorizon = new Date();
+    cardHorizon.setDate(cardHorizon.getDate() + 365);
+    const bankAssets = await Asset.find({
+      org_id: orgId,
+      category: 'Banking Details',
+      'bank_cards.expiry_date': { $exists: true, $ne: null, $lte: cardHorizon }
+    })
+      .select('asset_name bank_cards')
+      .lean();
+
+    const cardEvents = [];
+    for (const a of bankAssets) {
+      for (const c of (a.bank_cards || [])) {
+        if (!c.expiry_date) continue;
+        if (new Date(c.expiry_date) > cardHorizon) continue;
+        // Cancelled / lost / stolen cards shouldn't keep nagging on the calendar.
+        if (['cancelled', 'lost', 'stolen'].includes(c.status)) continue;
+        const last4 = c.last4 ? ` ending ${c.last4}` : '';
+        const brand = c.brand ? `${c.brand} ` : '';
+        cardEvents.push(formatCalendarEvent(
+          {
+            _id: c._id,
+            title: `${a.asset_name} — ${brand}card${last4} expires`,
+            date: c.expiry_date,
+            description: `${c.label || 'Bank card'} expiry · renew before this date`
+          },
+          'asset',
+          `${a._id}-card-${c._id}`
+        ));
+      }
+    }
+    logInfo('Bank card expiry events retrieved', { orgId, count: cardEvents.length });
+    physicalRecordEvents = physicalRecordEvents.concat(cardEvents);
+  } catch (error) {
+    logError('Error retrieving bank card expiry events', { orgId, error: error.message, stack: error.stack });
+  }
   } // if (orgObjectId)
 
   try {
@@ -295,6 +510,7 @@ export const getCalendarEvents = asyncHandler(async (req, res) => {
     ...boardMemberEvents,
     ...fundingEvents,
     ...documentEvents,
+    ...supersededDocumentEvents,
     ...governingReviewEvents,
     ...legalReviewEvents,
     ...physicalRecordEvents,
@@ -383,16 +599,30 @@ export const updateCustomEvent = asyncHandler(async (req, res) => {
     throw new AppError('Cannot edit system-generated events', 403, 'FORBIDDEN');
   }
 
-  if (existingEvent.user_id.toString() !== userId) {
+  // Creator can always edit. Admins and org owners can edit/complete any
+  // custom event in their tenant. An ASSIGNEE (an attendee who isn't the
+  // creator) can close/complete the task assigned to them and add a note —
+  // previously they could only view it, which left them stuck.
+  const isAdmin = Array.isArray(req.user?.roles) && req.user.roles.includes('admin');
+  const isOwner = req.user?.is_org_owner === true;
+  const isCreator = existingEvent.user_id.toString() === userId;
+  const isAttendee = Array.isArray(existingEvent.attendees)
+    && existingEvent.attendees.map((a) => String(a)).includes(String(userId));
+  if (!isCreator && !isAdmin && !isOwner && !isAttendee) {
     throw new AppError('You do not have permission to edit this event', 403, 'FORBIDDEN');
   }
+  // Only the creator/admin/owner may rewrite the task's core fields; an
+  // assignee may only mark it complete or add a description/note.
+  const canFullyEdit = isCreator || isAdmin || isOwner;
 
   const updateData = { updated_by: userId };
-  if (title !== undefined) updateData.title = title;
-  if (date !== undefined) updateData.date = date;
-  if (type !== undefined) updateData.type = type;
+  if (canFullyEdit) {
+    if (title !== undefined) updateData.title = title;
+    if (date !== undefined) updateData.date = date;
+    if (type !== undefined) updateData.type = type;
+    if (color !== undefined) updateData.color = color;
+  }
   if (description !== undefined) updateData.description = description;
-  if (color !== undefined) updateData.color = color;
   if (typeof completed === 'boolean') updateData.completed = completed;
 
   const updatedEvent = await calendarRepo.update(id, updateData);
@@ -427,7 +657,14 @@ export const deleteCustomEvent = asyncHandler(async (req, res) => {
     throw new AppError('Cannot delete system-generated events', 403, 'FORBIDDEN');
   }
 
-  if (existingEvent.user_id.toString() !== userId) {
+  // Same authorisation model as updateCustomEvent: creator OR an
+  // admin / org owner can delete. Admins see every user's custom
+  // events in their calendar; they need to be able to clear stale
+  // entries too.
+  const isAdminDel = Array.isArray(req.user?.roles) && req.user.roles.includes('admin');
+  const isOwnerDel = req.user?.is_org_owner === true;
+  const isCreatorDel = existingEvent.user_id.toString() === userId;
+  if (!isCreatorDel && !isAdminDel && !isOwnerDel) {
     throw new AppError('You do not have permission to delete this event', 403, 'FORBIDDEN');
   }
 

@@ -58,14 +58,49 @@ const subscriptionPlanSchema = new mongoose.Schema({
   pricing: {
     monthlyAUD: { type: Number, default: 0, min: 0 },
     annualAUD: { type: Number, default: 0, min: 0 },
+    // Annual billing discount, as a percentage off 12× the monthly price.
+    // `annualAUD` is derived from this on save (monthly × 12 × (1 − pct/100)),
+    // so this is the single knob admins turn to change annual pricing.
+    annualDiscountPct: { type: Number, default: 10, min: 0, max: 100 },
     setupFeeMonthlyAUD: { type: Number, default: 0, min: 0 },
     setupFeeAnnualAUD: { type: Number, default: 0, min: 0 },
-    overagePerWorkflowAUD: { type: Number, default: null }, // null = no overage line
+    overagePerWorkflowAUD: { type: Number, default: null }, // legacy — kept for back-compat with existing tenants
     currency: { type: String, default: 'AUD' },
     stripeProductId: { type: String, default: '' },
     stripeMonthlyPriceId: { type: String, default: '' },
     stripeAnnualPriceId: { type: String, default: '' },
-    stripeOverageMeterId: { type: String, default: '' }
+    stripeOverageMeterId: { type: String, default: '' }, // legacy — workflow meter
+    // One-time setup fee Price IDs (created in Stripe as one-time prices).
+    // Appended as a line_item on Checkout when set.
+    stripeSetupMonthlyPriceId: { type: String, default: '' },
+    stripeSetupAnnualPriceId: { type: String, default: '' },
+    /**
+     * Per-metric overage rates. 0 / unset means "no overage available"
+     * for that metric — once the tenant hits the limit they're blocked
+     * with LIMIT_EXCEEDED. Any positive value means "charge this AUD
+     * per extra unit until the tenant's hard_cap_aud is reached, then
+     * block." Currently supported metrics:
+     *   workflowsPerMonth, apiCallsPerDay, staffSeats, boardSeats, storageGB
+     */
+    overageRatesAUD: {
+      workflowsPerMonth: { type: Number, default: 0, min: 0 },
+      apiCallsPerDay:    { type: Number, default: 0, min: 0 },
+      staffSeats:        { type: Number, default: 0, min: 0 },
+      boardSeats:        { type: Number, default: 0, min: 0 },
+      storageGB:         { type: Number, default: 0, min: 0 }
+    },
+    /**
+     * Stripe metered Price IDs, one per metric. Required for the
+     * middleware to report usage to Stripe at overage time — without
+     * this, exceeding the limit will block instead of charge.
+     */
+    stripeOverageMeters: {
+      workflowsPerMonth: { type: String, default: '' },
+      apiCallsPerDay:    { type: String, default: '' },
+      staffSeats:        { type: String, default: '' },
+      boardSeats:        { type: String, default: '' },
+      storageGB:         { type: String, default: '' }
+    }
   },
 
   // ── Limits block (handbook §5.1) ───────────────────────────────────────
@@ -82,14 +117,15 @@ const subscriptionPlanSchema = new mongoose.Schema({
     hardCapPct: { type: Number, default: 100, min: 0, max: 200 }
   },
 
-  // ── Feature flag inclusion (Map — flag code → boolean) ─────────────────
-  // Resolved against the FeatureFlag catalogue at runtime; missing keys are
-  // treated as `false`. Renamed from legacy `features` to avoid the Mixed
-  // shape and to surface explicit intent in the dashboard.
+  // ── Feature flag inclusion (object — flag code → boolean) ─────────────
+  // Plain object (not Map) because feature flag codes are namespaced with
+  // dots ("governance.organisation") and Mongoose Maps reject dotted keys.
+  // Resolved against the FeatureFlag catalogue at runtime; missing keys
+  // are treated as `false`. Renamed from legacy `features` to surface
+  // explicit intent in the dashboard.
   feature_flags: {
-    type: Map,
-    of: Boolean,
-    default: {}
+    type: mongoose.Schema.Types.Mixed,
+    default: () => ({})
   },
 
   // ── Support / SLA ──────────────────────────────────────────────────────
@@ -104,6 +140,17 @@ const subscriptionPlanSchema = new mongoose.Schema({
   },
 
   trial_days: { type: Number, default: 14, min: 0 },
+
+  /**
+   * Contact-sales (a.k.a. "talk to us") flag — when true, the public
+   * pricing page renders this plan with a "Contact support" CTA in
+   * place of the price + the usual Get-Started flow. Calcite admins
+   * toggle this on for the top tier (or any plan they want hand-
+   * crafted onboarding for). The plan can still carry a price in the
+   * DB if desired (useful for internal reference), but the customer-
+   * facing UI hides it.
+   */
+  is_contact_sales: { type: Boolean, default: false },
 
   // ── Metadata for the customer-facing pricing page ──────────────────────
   metadata: {

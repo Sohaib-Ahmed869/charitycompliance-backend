@@ -75,7 +75,7 @@ export function generateApprovalFlowchart(approvalRequest) {
     // APPROVED STEP
     if (step.status === 'approved') {
       html += `
-        <div style="background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+        <div style="background: #ecfdf5; border: 1px solid #a7f3d0; border-radius: 6px; padding: 12px; margin-bottom: 10px; break-inside: avoid; page-break-inside: avoid;">
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
             <!-- Approved icon removed -->
             <strong style="color: #047857;">Approved by ${escapeHtml(approverName)}</strong>
@@ -91,7 +91,7 @@ export function generateApprovalFlowchart(approvalRequest) {
     // REJECTED STEP
     if (step.status === 'rejected') {
       html += `
-        <div style="background: #fee2e2; border: 1px solid #fecaca; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+        <div style="background: #fee2e2; border: 1px solid #fecaca; border-radius: 6px; padding: 12px; margin-bottom: 10px; break-inside: avoid; page-break-inside: avoid;">
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
             <!-- Declined icon removed -->
             <strong style="color: #991b1b;">Declined by ${escapeHtml(approverName)}</strong>
@@ -128,7 +128,7 @@ export function generateApprovalFlowchart(approvalRequest) {
         : typeof esc.escalated_to === 'string' ? esc.escalated_to : 'Reviewer';
 
       html += `
-        <div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+        <div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 12px; margin-bottom: 10px; break-inside: avoid; page-break-inside: avoid;">
           <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px;">
             <!-- Escalation icon removed -->
             <strong style="color: #b45309;">Escalated for Further Review</strong>
@@ -148,7 +148,7 @@ export function generateApprovalFlowchart(approvalRequest) {
 
     // Show request-level rejection reviews
     if (rejectionReviews.length > 0) {
-      html += `<div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 12px; margin-bottom: 10px;">
+      html += `<div style="background: #fef3c7; border: 1px solid #fcd34d; border-radius: 6px; padding: 12px; margin-bottom: 10px; break-inside: avoid; page-break-inside: avoid;">
         <div style="color: #b45309; font-size: 11px; font-weight: bold; margin-bottom: 8px;">Rejection Review</div>`;
       
       rejectionReviews.forEach(rr => {

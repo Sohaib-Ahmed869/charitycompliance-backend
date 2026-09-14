@@ -7,7 +7,7 @@
  */
 
 import { getTenantConnection } from '../db/connectionManager.js';
-import { asyncHandler } from '../middleware/errorHandler.js';
+import { asyncHandler, AppError } from '../middleware/errorHandler.js';
 import { ProjectRefundRepository } from '../repositories/projectRefundRepository.js';
 import { ProjectDeliveryChangeRepository } from '../repositories/projectDeliveryChangeRepository.js';
 import { ApprovalRequestRepository } from '../repositories/approvalRequestRepository.js';
@@ -18,7 +18,7 @@ import { ExpenseRepository } from '../repositories/expenseRepository.js';
 import { ApprovalWorkflowService } from '../services/approvalWorkflowService.js';
 import emailService from '../services/emailService.js';
 import { uploadToS3 } from '../services/s3Service.js';
-import { AppError } from '../middleware/errorHandler.js';
+// AppError is already imported on line 10 alongside asyncHandler.
 import crypto from 'crypto';
 
 const parsePublicToken = (token, req) => {
@@ -31,6 +31,103 @@ const parsePublicToken = (token, req) => {
   if (!orgKey || !rest) return null;
   return { orgKey, token: rest };
 };
+
+/**
+ * Manually record a project refund — bookkeeping entry that skips the
+ * variance/partner-receipts step but DOES run through the refunds
+ * approval workflow so the refund has the right sign-offs on record.
+ */
+export const createManualProjectRefund = asyncHandler(async (req, res) => {
+  const tenantDb = await getTenantConnection(req.orgId);
+  const repo = new ProjectRefundRepository(tenantDb);
+  const orgRepo = new OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+  const payload = req.body || {};
+  const name = String(payload.manual_project_name || '').trim();
+  if (!name) {
+    throw new AppError('Project name is required for manual refunds', 400, 'VALIDATION_ERROR');
+  }
+  const amount = Number(payload.refund_amount || payload.manual_refund_amount || 0);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new AppError('Refund amount must be greater than 0', 400, 'VALIDATION_ERROR');
+  }
+
+  // Resolve the refunds approval matrix the same way the donor flow does.
+  const { ApprovalMatrixRepository } = await import('../repositories/approvalMatrixRepository.js');
+  const matrixRepo = new ApprovalMatrixRepository(tenantDb);
+  const matrices = await matrixRepo.findByOrgId(org._id);
+  const matrix = (matrices || []).find((m) => {
+    if (m.is_active === false) return false;
+    if (m.workflow_category === 'refunds_approval' || m.workflow_category === 'refunds') return true;
+    const rules = m.rules || m.approval_rules || [];
+    return rules.some((r) => r.action_type === 'refunds' && r.is_active !== false);
+  });
+  if (!matrix) {
+    throw new AppError(
+      'No active Refunds workflow is configured. Configure one in Role Permissions → Approval Workflows.',
+      400,
+      'WORKFLOW_NOT_CONFIGURED'
+    );
+  }
+
+  const { CoiWorkflowService } = await import('../services/coiWorkflowService.js');
+  const workflowService = new CoiWorkflowService(req.orgId);
+  const rule = matrix.rules?.[0] || matrix.approval_rules?.[0] || matrix;
+  const approvers = await workflowService.resolveApprovers(
+    matrix.rules ? { approval_rules: [rule] } : matrix,
+    org._id
+  );
+  if (!approvers || approvers.length === 0) {
+    throw new AppError('Refunds workflow has no approvers configured.', 400, 'NO_APPROVERS');
+  }
+
+  const now = new Date();
+  const refund = await repo.ProjectRefund.create({
+    org_key: req.orgId,
+    org_id: org._id,
+    source: 'manual',
+    refund_amount: amount,
+    status: 'awaiting_internal_approval',
+    initiated_at: now,
+    initiated_by: req.user?.userId || null,
+    manual_project_name:   name,
+    manual_funder_name:    String(payload.manual_funder_name || '').trim(),
+    manual_refund_date:    payload.manual_refund_date || '',
+    manual_payment_method: String(payload.manual_payment_method || '').trim(),
+    manual_reason:         String(payload.manual_reason || payload.admin_explanation || '').trim(),
+    manual_attachments:    Array.isArray(payload.manual_attachments) ? payload.manual_attachments : []
+  });
+
+  // Create ApprovalRequest pointing back at the refund row.
+  const approvalSteps = approvers.map((a) => ({
+    level: a.level,
+    approver_user_id: a.user_id,
+    approver_position_id: a.position_id,
+    approver_department_id: a.department_id,
+    status: 'pending'
+  }));
+  const approvalRepo = new ApprovalRequestRepository(tenantDb);
+  const created = await approvalRepo.create({
+    org_id: org._id,
+    request_type: 'refunds',
+    entity_id: refund._id,
+    entity_type: 'other',
+    amount,
+    workflow_category: 'refunds_approval',
+    approval_matrix_id: matrix._id,
+    approval_type: matrix.approval_type || 'sequential',
+    approval_steps: approvalSteps,
+    submitted_by: req.user?.userId || null,
+    status: 'pending',
+    title: `Project refund — ${name}`,
+    description: `Manual project refund · $${amount.toFixed(2)}${payload.manual_reason ? ` · ${payload.manual_reason}` : ''}`
+  });
+
+  await repo.updateById(refund._id, { internal_approval_request_id: created._id });
+  res.status(201).json({ success: true, data: { ...refund.toObject(), internal_approval_request_id: created._id } });
+});
 
 export const listProjectRefunds = asyncHandler(async (req, res) => {
   const { projectId } = req.query;

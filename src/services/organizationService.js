@@ -87,7 +87,15 @@ export class OrganizationService {
       const org = await this.orgRepo.update(updateData);
       return org;
     } catch (error) {
+      if (error instanceof AppError) throw error;
       logError('Failed to update organization', error);
+      // Surface Mongoose validation errors so the caller learns WHICH field was
+      // rejected, instead of a generic "nothing saved".
+      if (error?.name === 'ValidationError') {
+        const detail = Object.values(error.errors || {}).map((e) => e.message).join('; ')
+          || 'Some organisation fields are invalid';
+        throw new AppError(detail, 400, 'ORG_VALIDATION_ERROR');
+      }
       throw new AppError('Failed to update organization', 500, 'ORG_UPDATE_ERROR');
     }
   }

@@ -97,6 +97,17 @@ const expenseSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Reference to a record in the Supplier Register. Optional — pre-
+  // existing expenses + legacy flows keep working without it. When
+  // set, the supplier_name / supplier_abn / vendor_email above are
+  // SNAPSHOTTED from the supplier at submit time, so historical
+  // reports + AIS / BAS exports keep reading the same fields they
+  // always did.
+  supplier_id: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Supplier',
+    index: true
+  },
   status: {
     type: String,
     enum: ['draft', 'pending', 'approved', 'rejected', 'resubmission_required', 'paid', 'cancelled'],

@@ -182,7 +182,7 @@ const MODULES = [
     use: [
       'When a position is filled by a new person, the old user is auto-flagged for offboarding.',
       'Offboarding checklist: revoke logins, return assets, finalise pay, complete exit interview.',
-      'Optional integration with the IT System Register so each user\'s system access is shown alongside.'
+      'Optional integration with the Systems Register so each user\'s system access is shown alongside.'
     ],
     tips: 'Mark "no successor" if the role is being closed, not transferred — the workflow runs differently.'
   },
@@ -249,7 +249,7 @@ const MODULES = [
     tips: 'BAS frequency is set by the ATO based on your GST turnover — pick the right tab.'
   },
   {
-    id: 'legal-it', title: 'Legal Documents & IT System Register',
+    id: 'legal-it', title: 'Legal Documents & Systems Register',
     purpose: 'Catalogue every contract, agreement, insurance certificate, and IT system you depend on.',
     use: [
       'Legal: store insurance certs, contracts, leases — with renewal alerts.',
@@ -894,7 +894,7 @@ function buildHandbookHtml({ org, logoSrc }) {
     <div class="role-grid">
       <div class="role-card">
         <div class="name">Governance</div>
-        <div class="desc">Charity Administration, Organisation Chart, Policies, Approval Workflows, Conflict of Interest, Audit Trail, Legal Documents, IT System Register.</div>
+        <div class="desc">Charity Administration, Organisation Chart, Policies, Approval Workflows, Conflict of Interest, Audit Trail, Legal Documents, Systems Register.</div>
       </div>
       <div class="role-card">
         <div class="name">Operations</div>

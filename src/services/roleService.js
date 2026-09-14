@@ -8,6 +8,18 @@ import { RoleRepository } from '../repositories/roleRepository.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { logError } from '../utils/logger.js';
 
+// SECURITY (API-020 / ATZ-005): role create/update accept ONLY these fields from
+// the client. `is_system` / `is_readonly` are privilege flags set server-side,
+// never mass-assigned from req.body.
+const EDITABLE_ROLE_FIELDS = ['name', 'display_name', 'permissions', 'description'];
+const pickRoleFields = (data = {}) => {
+  const out = {};
+  for (const k of EDITABLE_ROLE_FIELDS) {
+    if (data && Object.prototype.hasOwnProperty.call(data, k)) out[k] = data[k];
+  }
+  return out;
+};
+
 export class RoleService {
   constructor(tenantDb) {
     this.roleRepo = new RoleRepository(tenantDb);
@@ -46,7 +58,7 @@ export class RoleService {
       }
 
       const role = await this.roleRepo.create({
-        ...roleData,
+        ...pickRoleFields(roleData),
         is_system: false
       });
 
@@ -71,7 +83,7 @@ export class RoleService {
         throw new AppError('Cannot modify permissions of system role', 403, 'SYSTEM_ROLE_PROTECTED');
       }
 
-      const updatedRole = await this.roleRepo.update(roleId, updateData);
+      const updatedRole = await this.roleRepo.update(roleId, pickRoleFields(updateData));
       return updatedRole;
     } catch (error) {
       if (error instanceof AppError) {

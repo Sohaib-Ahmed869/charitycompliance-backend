@@ -17,6 +17,12 @@ import superAdminSchema from '../schemas/router/superAdminSchema.js';
 import billingEventSchema from '../schemas/router/billingEventSchema.js';
 import couponSchema from '../schemas/router/couponSchema.js';
 import subscriptionOverrideSchema from '../schemas/router/subscriptionOverrideSchema.js';
+import marketplacePolicyGroupSchema from '../schemas/router/marketplacePolicyGroupSchema.js';
+import marketplacePolicySchema from '../schemas/router/marketplacePolicySchema.js';
+import marketplacePurchaseSchema from '../schemas/router/marketplacePurchaseSchema.js';
+import marketplacePublicPurchaseSchema from '../schemas/router/marketplacePublicPurchaseSchema.js';
+import planRequestSchema from '../schemas/router/planRequestSchema.js';
+import reminderConfigSchema from '../schemas/router/reminderConfigSchema.js';
 
 let routerConnection = null;
 
@@ -36,7 +42,13 @@ const getRouterModels = () => {
     SubscriptionOverride: routerConnection.model('SubscriptionOverride', subscriptionOverrideSchema),
     OrganizationSubscription: routerConnection.model('OrganizationSubscription', organizationSubscriptionSchema),
     Payment: routerConnection.model('Payment', paymentSchema),
-    WebsiteLead: routerConnection.model('WebsiteLead', websiteLeadSchema)
+    WebsiteLead: routerConnection.model('WebsiteLead', websiteLeadSchema),
+    MarketplacePolicyGroup: routerConnection.model('MarketplacePolicyGroup', marketplacePolicyGroupSchema),
+    MarketplacePolicy: routerConnection.model('MarketplacePolicy', marketplacePolicySchema),
+    MarketplacePurchase: routerConnection.model('MarketplacePurchase', marketplacePurchaseSchema),
+    MarketplacePublicPurchase: routerConnection.model('MarketplacePublicPurchase', marketplacePublicPurchaseSchema),
+    PlanRequest: routerConnection.model('PlanRequest', planRequestSchema),
+    ReminderConfig: routerConnection.model('ReminderConfig', reminderConfigSchema)
   };
 };
 

@@ -61,11 +61,34 @@ export const getExpenses = asyncHandler(async (req, res) => {
   const expenseService = new ExpenseService(orgId);
   const expenses = await expenseService.getExpenses(filters);
 
+  // EXP-023 — derive per-row compliance flags so the list UI can show a
+  // "missing invoice" chip even when historical/edge data slipped through
+  // the creation-time validation.
+  const data = (expenses || []).map((e) => {
+    const obj = typeof e?.toObject === 'function' ? e.toObject() : { ...(e || {}) };
+    obj.compliance_preview = computeExpenseComplianceFlags(obj);
+    return obj;
+  });
+
   res.json({
     success: true,
-    data: expenses
+    data
   });
 });
+
+function computeExpenseComplianceFlags(e) {
+  const flags = [];
+  if (!e?.invoice_file || (typeof e.invoice_file === 'string' && !e.invoice_file.trim())) {
+    flags.push({ key: 'missing_invoice', severity: 'warning', message: 'Invoice file is missing' });
+  }
+  if (typeof e?.amount === 'number' && e.amount <= 0) {
+    flags.push({ key: 'invalid_amount', severity: 'error', message: 'Amount must be greater than zero' });
+  }
+  if (!e?.supplier_name && !e?.supplier_information) {
+    flags.push({ key: 'no_supplier', severity: 'info', message: 'No supplier recorded' });
+  }
+  return flags;
+}
 
 export const getExpenseById = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -74,9 +97,14 @@ export const getExpenseById = asyncHandler(async (req, res) => {
   const expenseService = new ExpenseService(orgId);
   const expense = await expenseService.getExpenseById(expenseId);
 
+  const obj = expense && typeof expense.toObject === 'function' ? expense.toObject() : { ...(expense || {}) };
+  if (obj && Object.keys(obj).length) {
+    obj.compliance_preview = computeExpenseComplianceFlags(obj);
+  }
+
   res.json({
     success: true,
-    data: expense
+    data: obj
   });
 });
 

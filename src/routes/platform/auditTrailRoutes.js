@@ -32,4 +32,9 @@ router.get('/list', allowOrgOwnerOrPermission(['module:audit_trail:view', 'modul
 // Download audit trail PDF for a single request
 router.get('/download/:requestId', requirePermission('module:audit_trail:view'), auditTrailController.downloadAuditTrailPDF);
 
+// Bulk audit-trail PDF — every audit event (not just workflows) in
+// the current filter view. Body: { startDate?, endDate?, module?,
+// search?, userId? } — same filter shape as GET /list.
+router.post('/export-pdf', allowOrgOwnerOrPermission(['module:audit_trail:view', 'module:reporting:view']), auditTrailController.exportAuditTrailPDF);
+
 export default router;

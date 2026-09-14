@@ -45,6 +45,23 @@ const approvalStepSchema = new mongoose.Schema({
   rejected_at: {
     type: Date
   },
+  /**
+   * When this step became the CURRENT pending step (routed to its approver).
+   * Drives the approval reminder scheduler's cadence. Set at creation for the
+   * initially-active step(s) and when a later step is advanced to pending.
+   */
+  activated_at: {
+    type: Date,
+    default: null
+  },
+  /**
+   * Offset-hours (from reminder config) already reminded for this step, so the
+   * scheduler never sends the same reminder twice.
+   */
+  reminders_sent: {
+    type: [Number],
+    default: []
+  },
   comments: {
     type: String
   },
@@ -89,6 +106,7 @@ const approvalRequestSchema = new mongoose.Schema({
     // IMPORTANT: keep this aligned with ApprovalMatrix.rules.action_type (UI tags).
     // Keep legacy values for backwards compatibility.
     enum: [
+      'related_party_transaction',
       'expense',
       'purchase',
       'grant',
@@ -105,6 +123,7 @@ const approvalRequestSchema = new mongoose.Schema({
       'risk',
       'risk_treatment',
       'partner_vetting',
+      'supplier_vetting',
       'funding_agreement',
       'project',
       'emergency',
@@ -113,6 +132,13 @@ const approvalRequestSchema = new mongoose.Schema({
       'sweep_funds',
       'financial_reporting',
       'bas_lodgement',
+      'refunds',
+      'members',
+      // User-defined inquiry register (Inquiries Register feature).
+      // Each record submitted against an inquiry template spawns a
+      // workflow request of this type so it appears in the central
+      // /approval-workflows view.
+      'inquiry_record',
       // legacy
       'policy_approval',
       'document_approval',
@@ -133,6 +159,7 @@ const approvalRequestSchema = new mongoose.Schema({
     type: String,
     required: true,
     enum: [
+      'related_party_transaction',
       'expense',
       'purchase',
       'policy',
@@ -146,10 +173,15 @@ const approvalRequestSchema = new mongoose.Schema({
       'donation_milestone',
       'social_media_campaign',
       'partner',
+      'supplier',
       'funding_agreement',
       'project',
       'authority_transfer',
       'complaint',
+      'member',
+      // Records submitted against an Inquiry Template — the
+      // record's workflow runs as an ApprovalRequest of this type.
+      'inquiry_record',
       'other'
     ]
   },
@@ -244,6 +276,22 @@ const approvalRequestSchema = new mongoose.Schema({
   },
   coi_request_ids: [{
     type: mongoose.Schema.Types.ObjectId
+  }],
+  // True when a COI raised against this workflow spawned an RPT that was left
+  // UNRESOLVED (declined). The workflow stays `paused_for_coi`, but this flag
+  // surfaces it as "halted — unresolved RPT" instead of plain "on hold — COI".
+  // Cleared if the RPT is later resolved (approved).
+  rpt_unresolved: {
+    type: Boolean,
+    default: false
+  },
+  // Risks attached to this approval during its lifetime. Mirror of
+  // coi_request_ids — but unlike COI, attaching a risk does NOT change
+  // approval.status. The approval keeps progressing while the risk runs
+  // its own treatment lifecycle in the Risk Register.
+  attached_risk_ids: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Risk'
   }],
   // Rejection Review Tracking
   rejection_reviews: [{

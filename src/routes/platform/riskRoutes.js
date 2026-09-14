@@ -9,11 +9,13 @@ import * as riskController from '../../controllers/riskController.js';
 import { body, param, query } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { uploadPolicySingle, handlePolicyUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
 
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.risk_register'));
 
 router.get('/counts', riskController.getRiskCounts);
 
@@ -53,6 +55,17 @@ router.get(
 );
 
 router.get(
+  '/export/zip',
+  [
+    query('status').optional().isIn(['draft', 'pending', 'under_treatment', 'approved', 'resolved', 'rejected', 'closed']),
+    query('category').optional().trim(),
+    query('search').optional().trim()
+  ],
+  validate,
+  riskController.exportRiskRegisterZip
+);
+
+router.get(
   '/:riskId',
   [param('riskId').isMongoId().withMessage('Invalid risk ID')],
   validate,
@@ -85,6 +98,17 @@ router.delete(
   [param('riskId').isMongoId().withMessage('Invalid risk ID')],
   validate,
   riskController.deleteRisk
+);
+
+// Resubmit a rejected / returned-for-resubmission risk. Optional body
+// fields apply field updates in the same request (same shape as the
+// PUT /:riskId endpoint) so the user can fix issues and resubmit at
+// once. The service then re-triggers the HoD assessment workflow.
+router.post(
+  '/:riskId/resubmit',
+  [param('riskId').isMongoId().withMessage('Invalid risk ID')],
+  validate,
+  riskController.resubmitRisk
 );
 
 router.post(

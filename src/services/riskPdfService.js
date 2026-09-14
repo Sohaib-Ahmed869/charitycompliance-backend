@@ -64,10 +64,13 @@ const heatMapCellTokens = (score) => {
   return { bg: '#FCA5A5', fg: '#7F1D1D', border: '#F87171' };
 };
 
-export const generateRiskDetailPDF = async (payload, logoUrl) => {
+export const generateRiskDetailPDF = async (payload, logoUrl, options = {}) => {
   const logoSrc = await resolveLogoSrcForPdf(logoUrl);
 
-  const browser = await puppeteer.launch({
+  // Allow a caller (e.g. the ZIP export) to pass a shared browser so we don't
+  // launch one puppeteer instance per risk.
+  const externalBrowser = options.browser || null;
+  const browser = externalBrowser || await puppeteer.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
@@ -231,6 +234,7 @@ export const generateRiskDetailPDF = async (payload, logoUrl) => {
     .info-table td:first-child {
       background-color: #F7FAFC;
       font-weight: 600;
+      
       width: 28%;
     }
     .info-table { background: rgba(255,255,255,0.95); }
@@ -314,10 +318,11 @@ export const generateRiskDetailPDF = async (payload, logoUrl) => {
       printBackground: true,
       margin: { top: '20px', right: '20px', bottom: '20px', left: '20px' }
     });
-    await browser.close();
+    await page.close().catch(() => {});
+    if (!externalBrowser) await browser.close();
     return pdfBuffer;
   } catch (error) {
-    await browser.close();
+    if (!externalBrowser) await browser.close();
     throw error;
   }
 };

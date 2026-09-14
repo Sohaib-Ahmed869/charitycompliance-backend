@@ -3,6 +3,7 @@ import * as meetingController from '../../controllers/meetingController.js';
 import { body, param } from 'express-validator';
 import { validate } from '../../middleware/validation.js';
 import { authAndResolveTenant } from '../../middleware/tenantResolver.js';
+import { requireFeatureFlag } from '../../middleware/requireFeatureFlag.js';
 import { uploadSingle, handleUploadError } from '../../middleware/upload.js';
 
 const router = express.Router();
@@ -19,8 +20,10 @@ router.get(
   meetingController.rsvpByToken
 );
 
-// All other meeting routes require authentication and tenant resolution
+// All other meeting routes require authentication and tenant resolution.
+// (The public RSVP route above runs without auth and without the feature gate.)
 router.use(authAndResolveTenant);
+router.use(requireFeatureFlag('governance.board_portal'));
 
 // Create meeting
 router.post(

@@ -1,4 +1,5 @@
 import socialMediaCampaignSchema from '../db/schemas/platform/socialMediaCampaignSchema.js';
+import { escapeRegex } from '../utils/escapeRegex.js';
 
 export class SocialMediaCampaignRepository {
   constructor(tenantDb) {
@@ -34,7 +35,7 @@ export class SocialMediaCampaignRepository {
       ];
     }
     if (filters.search) {
-      const regex = new RegExp(filters.search, 'i');
+      const regex = new RegExp(escapeRegex(filters.search), 'i');
       const searchOr = [{ title: regex }, { objective: regex }, { post_url: regex }, { 'post_urls.url': regex }];
       if (query.$or) {
         // Combine existing $or (platform filter) with search by AND-ing them.

@@ -34,6 +34,7 @@ import {
   emitNewMessage, emitUpdatedMessage, emitDeletedMessage,
   emitChannelListChanged, emitMention, emitMessagesRead
 } from '../services/chatSocketService.js';
+import { sendPushToUsers, sendToUsers, isPushConfigured } from '../services/pushService.js';
 
 /**
  * Modules surfaced in the #-mention picker. Each entry is a stable mention
@@ -60,7 +61,7 @@ export const COMPLIANCE_MODULE_TARGETS = [
   { id: 'donation-boxes',     label: 'Donation Boxes',         href: '/donation-boxes',                    moduleId: 'donation_boxes' },
   { id: 'social-campaigns',   label: 'Marketing Campaigns',    href: '/social-media-campaigns',            moduleId: 'social_media_campaigns' },
   { id: 'volunteers',         label: 'Volunteers',             href: '/volunteers',                        moduleId: 'human_resources' },
-  { id: 'assets',             label: 'IT Asset Register',      href: '/assets',                            moduleId: 'asset_mgmt' },
+  { id: 'assets',             label: 'Systems Register',       href: '/assets',                            moduleId: 'asset_mgmt' },
   { id: 'bcp',                label: 'Business Continuity',    href: '/bcp',                               moduleId: 'bcp' },
   { id: 'legal-docs',         label: 'Legal Documents',        href: '/legal-documents',                   moduleId: 'legal_docs' },
   { id: 'reporting',          label: 'Reporting & Compliance', href: '/reporting',                         moduleId: 'reporting' },
@@ -89,7 +90,7 @@ const COMPLIANCE_ENTITY_TARGETS = [
   { type: 'funding-agreement',label: 'Funding Agreement', modelName: 'FundingAgreement',    schema: fundingAgreementSchema,    titleField: 'agreement_title',  statusField: 'status',          moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/funding-agreements/${id}` },
   { type: 'project',          label: 'Project',           modelName: 'ProjectRegister',     schema: projectRegisterSchema,     titleField: 'project_name',     statusField: 'status',          moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/project-monitoring/${id}` },
   { type: 'social-campaign',  label: 'Marketing Campaign',modelName: 'SocialMediaCampaign', schema: socialMediaCampaignSchema, titleField: 'title',            statusField: 'status',          moduleId: 'social_media_campaigns',  hrefBuilder: (id) => `/social-media-campaigns/${id}` },
-  { type: 'asset',            label: 'IT Asset',          modelName: 'Asset',               schema: assetSchema,               titleField: 'asset_name',       statusField: 'status',          moduleId: 'asset_mgmt',              hrefBuilder: (id) => `/assets/${id}` },
+  { type: 'asset',            label: 'System Asset',      modelName: 'Asset',               schema: assetSchema,               titleField: 'asset_name',       statusField: 'status',          moduleId: 'asset_mgmt',              hrefBuilder: (id) => `/assets/${id}` },
   { type: 'legal-doc',        label: 'Legal Document',    modelName: 'LegalDocument',       schema: legalDocumentSchema,       titleField: 'document_name',    statusField: null,              moduleId: 'legal_docs',              hrefBuilder: () => `/legal-documents` },
   { type: 'donor',            label: 'Donor',             modelName: 'Donor',               schema: donorSchema,               titleField: 'name',             statusField: null,              moduleId: 'grants_donors',           hrefBuilder: (id) => `/grants-donors/donors/${id}` }
 ];
@@ -550,7 +551,94 @@ export class ChatRepository {
       if (id) emitMention(this._orgIdSlug, id, { channelId: String(channel._id), messageId: String(doc._id) });
     }
 
+    // Web Push — notify channel members of the new message. The browser
+    // Service Worker suppresses the notification when the app window is
+    // focused, so an active user isn't double-notified. Fire-and-forget
+    // so it never delays the API response.
+    this._notifyChannelMembers(channel, populated, senderUserId).catch(() => {});
+
     return populated;
+  }
+
+  /**
+   * Notify channel members of a new message — Web Push (browser) plus Expo
+   * mobile push. Honours each member's per-channel `notify` preference. The
+   * browser Service Worker skips the notification when a Stewardex window is
+   * focused; the mobile app suppresses foreground chat pushes the same way
+   * (its socket-driven local notifications cover the foreground). Best-effort
+   * — wrapped so it can never disturb message creation.
+   */
+  async _notifyChannelMembers(channel, message, senderUserId) {
+    try {
+      const senderId = String(senderUserId);
+      const mentioned = new Set(
+        (message?.mentioned_user_ids || []).map((u) => String(u?._id || u))
+      );
+
+      const memberRows = await this.Membership
+        .find({ channel_id: channel._id })
+        .select('user_id notify')
+        .lean();
+
+      const recipientIds = [];
+      for (const row of memberRows) {
+        const uid = String(row.user_id);
+        if (uid === senderId) continue;                                 // the author
+        if (row.notify === 'muted') continue;                           // channel muted
+        if (row.notify === 'mentions' && !mentioned.has(uid)) continue;  // mentions-only
+        recipientIds.push(row.user_id);
+      }
+      if (recipientIds.length === 0) return;
+
+      const sender = message?.sender_user_id || {};
+      const senderName = `${sender.first_name || ''} ${sender.last_name || ''}`.trim()
+        || sender.email || 'Someone';
+      const channelLabel = channel?.name ? `#${channel.name}` : '';
+      // Plain text for the push preview: compliance tokens → their label,
+      // markdown markers stripped (matches the clients' messageToPlain).
+      const text = String(message?.body || '')
+        .replace(/<#[a-z-]+:[a-zA-Z0-9_-]+\|([^>]+)>/g, '$1')
+        .replace(/\[([^\]\n]+)\]\(([^)\s]+)\)/g, '$1')
+        .replace(/`([^`\n]+?)`/g, '$1')
+        .replace(/\*\*([^*\n]+?)\*\*/g, '$1')
+        .replace(/~~([^~\n]+?)~~/g, '$1')
+        .replace(/\*([^*\n]+?)\*/g, '$1')
+        .replace(/_([^_\n]+?)_/g, '$1')
+        .replace(/^#{1,6}\s+/gm, '')
+        .replace(/^>\s?/gm, '')
+        .replace(/^[-*]\s+/gm, '')
+        .replace(/\s+/g, ' ').trim();
+      const preview = text
+        ? (text.length > 140 ? `${text.slice(0, 139)}…` : text)
+        : 'Sent an attachment';
+
+      const channelId = String(channel._id);
+      const title = channelLabel ? `${senderName} · ${channelLabel}` : senderName;
+
+      if (isPushConfigured()) {
+        await sendPushToUsers(this.tenantDb, recipientIds, {
+          title,
+          body: preview,
+          url: '/chat',
+          tag: `chat-${channelId}`
+        });
+      }
+
+      // Expo mobile push — reaches the app even when it's closed. Deep-links
+      // straight into the channel (spec §6).
+      await sendToUsers(this.tenantDb, recipientIds, {
+        title,
+        body: preview,
+        data: {
+          type: 'chat',
+          id: channelId,
+          screen: 'ChatThread',
+          params: { channelId, name: channel?.name || '' }
+        }
+      });
+    } catch {
+      /* push is best-effort — never disturb the message flow */
+    }
   }
 
   async editMessage({ messageId, userId, body }) {

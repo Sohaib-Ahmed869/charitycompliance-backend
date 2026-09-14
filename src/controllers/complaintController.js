@@ -548,7 +548,20 @@ export const updateComplaint = asyncHandler(async (req, res) => {
     throw new AppError('Complaint not found', 404, 'NOT_FOUND');
   }
 
-  const updatedComplaint = await complaintRepo.update(complaintId, req.body);
+  // SECURITY (API-020): strip governance/workflow/tenant fields that must NEVER
+  // be mass-assigned via a generic edit — board sign-off, the resolution record,
+  // and the risk/training links are set only by their dedicated workflow steps;
+  // org_id binds the tenant. (Detail fields, priority, status, assignee remain
+  // editable.)
+  const COMPLAINT_PROTECTED_FIELDS = [
+    'org_id', '_id', 'complaint_number', 'created_by', 'submitted_at',
+    'resolution_details', 'linked_risk_id', 'linked_training_id',
+    'board_signoff', 'board_signoff_board_member_id', 'board_signoff_user_id',
+  ];
+  const safeUpdate = { ...(req.body || {}) };
+  for (const f of COMPLAINT_PROTECTED_FIELDS) delete safeUpdate[f];
+
+  const updatedComplaint = await complaintRepo.update(complaintId, safeUpdate);
 
   logInfo('Complaint updated', { complaintId, orgId, updatedData: req.body });
 

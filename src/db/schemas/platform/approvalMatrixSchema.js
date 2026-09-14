@@ -13,6 +13,7 @@ const approvalRuleSchema = new mongoose.Schema({
     // IMPORTANT: keep this aligned with UI "tags" so workflows apply correctly.
     // We keep legacy values for backwards compatibility.
     enum: [
+      'related_party_transaction',
       'expense',
       'purchase',
       'grant',
@@ -30,6 +31,7 @@ const approvalRuleSchema = new mongoose.Schema({
       'risk_treatment',
       'coi',
       'partner_vetting',
+      'supplier_vetting',
       'funding_agreement',
       'project',
       'emergency',
@@ -39,6 +41,7 @@ const approvalRuleSchema = new mongoose.Schema({
       'project_delivery',
       'project_delivery_changes',
       'refunds',
+      'members',
       // legacy
       'policy_approval',
       'document_approval',
@@ -107,6 +110,7 @@ const approvalMatrixSchema = new mongoose.Schema({
       'complaint_resolution',
       'coi',
       'partner_vetting',
+      'supplier_vetting',
       'policy_approval',
       'hr_approval',
       'funding_agreement',
@@ -125,6 +129,8 @@ const approvalMatrixSchema = new mongoose.Schema({
       'project_delivery_approval',
       'project_delivery_changes_approval',
       'refunds_approval',
+      'members_approval',
+      'related_party_transaction',
       'other'
     ],
     description: 'Categorizes workflow by module/purpose for validation'
@@ -220,6 +226,7 @@ const getCategoryDisplayName = (category) => {
     complaint_resolution: 'Complaint Resolution',
     coi: 'Conflict of Interest',
     partner_vetting: 'Partner Vetting',
+    supplier_vetting: 'Supplier Vetting',
     funding_agreement: 'Funding Agreement',
     project_approval: 'Project Approval',
     expense_approval: 'Expense Approval',
@@ -237,7 +244,9 @@ const getCategoryDisplayName = (category) => {
     financial_reporting_approval: 'Fiscal Reports',
     project_delivery_approval: 'Project Delivery',
     project_delivery_changes_approval: 'Project Delivery Changes',
-    refunds_approval: 'Refunds'
+    refunds_approval: 'Refunds',
+    members_approval: 'Member Approvals',
+    related_party_transaction: 'Related Party Transaction'
   };
   return categoryNames[category] || category;
 };
@@ -280,7 +289,7 @@ approvalMatrixSchema.pre('save', async function(next) {
   }
   
   // Single-workflow categories: no workflow_type allowed
-  const singleWorkflowCategories = ['coi', 'partner_vetting', 'policy_approval', 'hr_approval', 'risk_treatment', 'complaint_resolution'];
+  const singleWorkflowCategories = ['coi', 'partner_vetting', 'supplier_vetting', 'policy_approval', 'hr_approval', 'risk_treatment', 'complaint_resolution', 'members_approval', 'related_party_transaction'];
   if (singleWorkflowCategories.includes(doc.workflow_category)) {
     if (doc.workflow_type) {
       return next(new Error(`${getCategoryDisplayName(doc.workflow_category)} workflows cannot have a workflow type`));

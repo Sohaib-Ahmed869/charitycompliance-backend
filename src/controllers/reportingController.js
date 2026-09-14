@@ -8,6 +8,10 @@ import { buildAisPrefill } from '../services/aisReportingService.js';
 import { buildAcncFinancialPrefill } from '../services/acncFinancialReportService.js';
 import { generateAisPdf, generateAcncFinancialPdf } from '../services/acncPdfService.js';
 import { generateAisDocx, generateAcncFinancialDocx } from '../services/aisDocxService.js';
+import {
+  buildExpensesBySupplierReport,
+  buildExpensesByProjectReport
+} from '../services/expensesByEntityReportService.js';
 
 export const getAisPrefill = asyncHandler(async (req, res) => {
   const orgId = req.orgId;
@@ -68,5 +72,42 @@ export const downloadAcncFinancialDocx = asyncHandler(async (req, res) => {
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
   res.setHeader('Content-Disposition', `attachment; filename="acnc-annual-financial-report-fy-${String(fyEnd)}.docx"`);
   res.end(docx);
+});
+
+/* -------------------------------------------------------------------- */
+/* Spend analysis — by supplier / by project                            */
+/* -------------------------------------------------------------------- */
+/*
+ * Pivots the expense ledger by supplier_id and project_id respectively.
+ * Both endpoints accept the same optional filters via query string:
+ *   - startDate, endDate (ISO 8601)
+ *   - status (single expense status)
+ *
+ * No PDF/DOCX path for these reports — they're meant to be viewed and
+ * exported as CSV from the frontend.
+ */
+
+export const getExpensesBySupplierReport = asyncHandler(async (req, res) => {
+  const tenantDb = await getTenantConnection(req.orgId);
+  const data = await buildExpensesBySupplierReport({
+    tenantDb,
+    orgId: req.orgId,
+    startDate: req.query.startDate,
+    endDate: req.query.endDate,
+    status: req.query.status
+  });
+  res.json({ success: true, data });
+});
+
+export const getExpensesByProjectReport = asyncHandler(async (req, res) => {
+  const tenantDb = await getTenantConnection(req.orgId);
+  const data = await buildExpensesByProjectReport({
+    tenantDb,
+    orgId: req.orgId,
+    startDate: req.query.startDate,
+    endDate: req.query.endDate,
+    status: req.query.status
+  });
+  res.json({ success: true, data });
 });
 

@@ -419,3 +419,230 @@ export const generateAuditTrailPDF = async (allEvents, uniqueActors, entityInfo,
     throw error;
   }
 };
+
+// ────────────────────────────────────────────────────────────────────
+// generateAuditTrailReportPdf
+// ────────────────────────────────────────────────────────────────────
+// Bulk audit-trail report — one PDF covering EVERY audit event the
+// caller passed in (workflows, COI declarations, document uploads,
+// board changes, financial-threshold edits, complaint events, etc.).
+// Used by POST /platform/audit-trail/export-pdf. The caller has
+// already applied filters; we just render what's handed to us.
+// ────────────────────────────────────────────────────────────────────
+
+const REPORT_MODULE_LABELS = {
+  approval_workflow:    'Approval Workflows',
+  coi:                  'Conflict of Interest',
+  complaint:            'Complaints',
+  governing_document:   'Governing Documents',
+  legal_document:       'Legal Documents',
+  board_member:         'Board Members',
+  financial_thresholds: 'Financial Thresholds',
+  policy:               'Policies & Procedures',
+  risk:                 'Risk Register',
+  training:             'Training',
+  hr:                   'Human Resources',
+  expense:              'Financial Management',
+  finance:              'Financial Management',
+  donor:                'Donors',
+  funding_agreement:    'Funding Agreements',
+  project:              'Projects',
+  asset:                'Assets',
+  responsible_people:   'Responsible People',
+  users:                'Users',
+  support_ticket:       'Support Tickets',
+  grant:                'Grants & Funders'
+};
+
+const reportModuleLabel = (m) => REPORT_MODULE_LABELS[m] || toTitleCase(m || 'Other');
+
+function reportFormatTs(value) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleString('en-AU', {
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit'
+  });
+}
+
+// Render event.details into readable HTML — skip internal id fields,
+// turn file arrays into link lists, format primitives cleanly.
+function renderReportDetails(details) {
+  if (!details || typeof details !== 'object') return '';
+  const SKIP = new Set([
+    'parent_approval_request_id', 'parent_request_id', 'request_id',
+    'entity_id', 'coi_request_id'
+  ]);
+  const pairs = [];
+  for (const [key, raw] of Object.entries(details)) {
+    if (SKIP.has(key)) continue;
+    if (raw === null || raw === undefined || raw === '') continue;
+    const label = toTitleCase(key);
+    let value;
+    if (Array.isArray(raw)) {
+      if (!raw.length) continue;
+      if (raw.every((v) => v && typeof v === 'object' && (v.url || v.name))) {
+        value = raw.map((f) => f.url
+          ? `<a href="${esc(f.url)}" target="_blank" rel="noopener noreferrer" style="color:#1D4ED8;text-decoration:underline;">${esc(f.name || 'file')}</a>`
+          : esc(f.name || 'file')).join(', ');
+      } else {
+        value = raw.map((v) => esc(typeof v === 'object' ? JSON.stringify(v) : String(v))).join(', ');
+      }
+    } else if (typeof raw === 'object') {
+      value = `<code style="font-size:9px;color:#475569;">${esc(JSON.stringify(raw))}</code>`;
+    } else if (typeof raw === 'boolean') {
+      value = raw ? 'Yes' : 'No';
+    } else {
+      value = esc(String(raw));
+    }
+    pairs.push(`<div style="margin-top:2px;"><span style="color:#475569;font-weight:600;">${esc(label)}:</span> ${value}</div>`);
+  }
+  return pairs.join('');
+}
+
+function renderReportActor(actor) {
+  if (!actor || typeof actor !== 'object') return '—';
+  const name = esc(actor.name || '—');
+  const role = actor.role ? `<div style="color:#64748b;font-size:9px;">${esc(toTitleCase(actor.role))}</div>` : '';
+  return `${name}${role}`;
+}
+
+export async function generateAuditTrailReportPdf({ events = [], filters = {}, org, orgLogoUrl = '' }) {
+  const logoSrc = await resolveLogoSrcForPdf(orgLogoUrl);
+
+  // ── Aggregates ─────────────────────────────────────────────────
+  const total = events.length;
+  const perModule = new Map();
+  let earliest = null;
+  let latest = null;
+  for (const e of events) {
+    const m = e.module || 'other';
+    perModule.set(m, (perModule.get(m) || 0) + 1);
+    const t = new Date(e.timestamp);
+    if (!Number.isNaN(t.getTime())) {
+      if (!earliest || t < earliest) earliest = t;
+      if (!latest || t > latest) latest = t;
+    }
+  }
+  const moduleRows = Array.from(perModule.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([m, n]) => `<tr><td>${esc(reportModuleLabel(m))}</td><td style="text-align:right;font-weight:600;">${n}</td></tr>`)
+    .join('');
+
+  // ── Event rows ────────────────────────────────────────────────
+  const eventRows = events.map((e) => {
+    const detailsHTML = renderReportDetails(e.details);
+    const entityTitle = e.details?.entity_title
+      ? `<div style="font-weight:600;margin-bottom:2px;">${esc(e.details.entity_title)}</div>`
+      : '';
+    return `
+      <tr>
+        <td style="vertical-align:top;font-size:9.5px;white-space:nowrap;">${esc(reportFormatTs(e.timestamp))}</td>
+        <td style="vertical-align:top;font-size:9.5px;">${renderReportActor(e.actor)}</td>
+        <td style="vertical-align:top;font-size:9.5px;">
+          <span class="rpt-mod-chip">${esc(reportModuleLabel(e.module))}</span>
+        </td>
+        <td style="vertical-align:top;font-size:10px;">
+          <div style="font-weight:600;color:#0a2540;">${esc(e.action || '—')}</div>
+        </td>
+        <td style="vertical-align:top;font-size:9.5px;color:#1f2937;">
+          ${entityTitle}${detailsHTML || '<span style="color:#94a3b8;">—</span>'}
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  const filterSummary = Object.entries(filters)
+    .filter(([, v]) => v != null && v !== '' && v !== 'all')
+    .map(([k, v]) => `<span class="rpt-filter-pill"><strong>${esc(toTitleCase(k))}:</strong> ${esc(String(v))}</span>`)
+    .join(' ');
+
+  const html = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap');
+  body { font-family: Poppins, sans-serif; margin: 0; color: #0a2540; }
+  .rpt-container { padding: 22px; }
+  .rpt-header { display: flex; gap: 14px; align-items: center; border: 1px solid #111; padding: 14px 18px; }
+  .rpt-header img { height: 42px; }
+  .rpt-header h1 { margin: 0; font-size: 18px; }
+  .rpt-header .sub { color: #64748b; font-size: 11px; margin-top: 2px; }
+  .rpt-filter-pill { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: #334155; font-size: 10.5px; margin-right: 4px; }
+  .rpt-mod-chip { display: inline-block; padding: 1px 7px; border-radius: 999px; background: #eff6ff; color: #1d4ed8; font-size: 9.5px; font-weight: 600; white-space: nowrap; }
+  h2 { margin: 18px 0 8px; font-size: 13px; color: #111; border-bottom: 1px solid #111; padding-bottom: 3px; break-after: avoid; page-break-after: avoid; }
+  table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; }
+  th, td { border: 1px solid #e5e7eb; padding: 6px 8px; text-align: left; }
+  th { background: #f8fafc; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: #475569; }
+  tr { break-inside: avoid; page-break-inside: avoid; }
+  .rpt-info-table td:first-child { width: 32%; color: #475569; font-weight: 600; }
+  .rpt-footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid #e5e7eb; color: #64748b; font-size: 9.5px; text-align: center; }
+</style>
+</head>
+<body>
+  <div class="rpt-container">
+
+    <div class="rpt-header">
+      ${logoSrc ? `<img src="${esc(logoSrc)}" alt="" />` : ''}
+      <div>
+        <h1>Audit Trail Report</h1>
+        <div class="sub">${esc(org?.name || org?.legal_name || 'Organisation')}</div>
+      </div>
+    </div>
+
+    <h2>Report Summary</h2>
+    <table class="rpt-info-table">
+      <tr><td>Generated</td><td>${esc(reportFormatTs(new Date()))}</td></tr>
+      <tr><td>Total audit entries</td><td><strong>${total}</strong></td></tr>
+      <tr><td>Date range covered</td><td>${earliest ? esc(reportFormatTs(earliest)) : '—'} &rarr; ${latest ? esc(reportFormatTs(latest)) : '—'}</td></tr>
+      <tr><td>Filters applied</td><td>${filterSummary || '<span style="color:#94a3b8;">None &mdash; full register</span>'}</td></tr>
+    </table>
+
+    <h2>Entries by Module</h2>
+    <table>
+      <thead><tr><th>Module</th><th style="text-align:right;">Entries</th></tr></thead>
+      <tbody>${moduleRows || '<tr><td colspan="2" style="text-align:center;color:#94a3b8;">No events.</td></tr>'}</tbody>
+    </table>
+
+    <h2>Audit Log (${total} ${total === 1 ? 'entry' : 'entries'})</h2>
+    <table>
+      <thead>
+        <tr>
+          <th style="width:14%;">Timestamp</th>
+          <th style="width:16%;">Actor</th>
+          <th style="width:14%;">Module</th>
+          <th style="width:20%;">Action</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody>${eventRows || '<tr><td colspan="5" style="text-align:center;color:#94a3b8;">No audit entries match the current filters.</td></tr>'}</tbody>
+    </table>
+
+    <div class="rpt-footer">
+      Generated by Stewardex on ${esc(reportFormatTs(new Date()))}. Confidential &mdash; for internal audit use.
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'load', timeout: 30000 });
+    const pdf = await page.pdf({
+      format: 'A4',
+      landscape: true, // wide layout — five columns need the room
+      printBackground: true,
+      margin: { top: '14mm', right: '12mm', bottom: '14mm', left: '12mm' }
+    });
+    await page.close().catch(() => {});
+    return Buffer.isBuffer(pdf) ? pdf : Buffer.from(pdf);
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}

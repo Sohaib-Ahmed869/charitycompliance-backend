@@ -1,5 +1,5 @@
 /**
- * Default plan templates — Foundation, Professional, Enterprise.
+ * Default plan templates — Foundation, Professional, Enterprise, Bespoke.
  *
  * These are the canonical plans from the Pricing Strategy Handbook (§2.1).
  * They are NOT seeded into the DB; instead the admin catalogue endpoints
@@ -12,54 +12,65 @@
  * DB-backed overrides.
  */
 
-// Feature flag catalogue — the 30+ gateable capabilities. Tier letters
-// say which default plan(s) include the flag by default.
-//   F = Foundation, P = Professional, E = Enterprise
+// Feature flag catalogue — single source of truth for every gateable
+// capability. Tuple: [code, category, name, tiers, description, sidebar]
+//
+// Naming rules (read like the Calcite ops AND the customer will both see
+// these strings — anywhere a feature shows up, this is the wording):
+//   - Names in plain English, no acronyms unless spelled out in brackets.
+//   - Descriptions explain in one short sentence what the user gets, no
+//     jargon (no "lifecycle", "RBAC", "SLA" without expansion).
+//   - Spell out abbreviations the first time: MFA → "Two-Step Login",
+//     SSO → "Single Sign-On", KYC/AML → "Identity & Anti-Money-Laundering",
+//     SLA → "Uptime Guarantee", CSM → "Customer Success Manager".
+//   - tiers   — F/P/E (Foundation/Professional/Enterprise) defaults
+//   - sidebar — array of sidebar nav labels this flag controls; empty = no
+//               direct sidebar item (e.g. background capability)
 export const DEFAULT_FEATURE_FLAGS = [
   // Governance — every tier
-  ['governance.organisation',          'governance', 'Organisation & Responsible Persons register', ['F','P','E']],
-  ['governance.board_portal',          'governance', 'Agendas, packs, minutes, decision register', ['F','P','E']],
-  ['governance.policy_management',     'governance', 'Policy lifecycle, acknowledge, version', ['F','P','E']],
-  ['governance.risk_register',         'governance', 'Risk register & matrix', ['F','P','E']],
-  ['governance.complaints',            'governance', 'Complaints register', ['F','P','E']],
-  ['governance.incidents',             'governance', 'Incidents register', ['F','P','E']],
-  ['governance.compliance_checklist',  'governance', 'ACNC GS 1–6 checklists', ['F','P','E']],
-  ['governance.ais_workflow',          'governance', 'Annual Information Statement workflow', ['F','P','E']],
+  ['governance.organisation',          'governance', 'Charity Administration',                       ['F','P','E'], 'Responsible-people register, organisation chart, registrations and licences, and your governing documents.', ['Charity Administration', 'Conflict of Interest', 'Legal Documents', 'Grants & Donors', 'Project Delivery', 'Marketing']],
+  ['governance.board_portal',          'governance', 'Meetings & Board Pack',                        ['F','P','E'], 'Schedule meetings, build agendas and board packs, capture minutes and decisions.', ['Meetings']],
+  ['governance.policy_management',     'governance', 'Policies & Procedures',                        ['F','P','E'], 'Draft, publish, version, distribute and track who has acknowledged each policy.', ['Policies & Procedures']],
+  ['governance.risk_register',         'governance', 'Risk Management',                              ['F','P','E'], 'Risk register, risk matrix, controls and treatment plans.', ['Risk Management']],
+  ['governance.complaints',            'governance', 'Complaints Register',                          ['F','P','E'], 'Receive complaints from any channel, assign an owner, and track them through to resolution.', ['Complaint']],
+  ['governance.incidents',             'governance', 'Incidents Register',                           ['F','P','E'], 'Log safeguarding and operational incidents and track follow-up actions.', []],
+  ['governance.compliance_checklist',  'governance', 'Reporting & Compliance Checklists',            ['F','P','E'], 'Built-in checklists for ACNC Governance Standards 1–6 plus weekly compliance reports.', ['Reporting & Compliance', 'Weekly Reports']],
+  ['governance.ais_workflow',          'governance', 'Annual Information Statement (AIS) Lodgement', ['F','P','E'], 'Prepare your AIS, get board approval, and submit it to the ACNC — all in one place.', []],
   // Security — every tier
-  ['security.audit_log',               'security',   'Immutable audit log', ['F','P','E']],
-  ['security.mfa',                     'security',   'Multi-factor authentication', ['F','P','E']],
-  ['security.rbac',                    'security',   'Role-based permissions', ['F','P','E']],
+  ['security.audit_log',               'security',   'Audit Trail',                                  ['F','P','E'], 'A tamper-proof record of every change made in the system — who did what and when.', ['Audit Trail']],
+  ['security.mfa',                     'security',   'Two-Step Login (MFA)',                         ['F','P','E'], 'A 6-digit code from an authenticator app is required at every login. Required for owners.', []],
+  ['security.rbac',                    'security',   'Position-Based Permissions',                   ['F','P','E'], 'Staff only see and edit what their position is allowed to. Permissions follow the role, not the person.', []],
   // Finance — Professional + Enterprise
-  ['finance.expense_workflow',         'finance',    'Expense workflow with dual approval', ['P','E']],
-  ['finance.invoice_workflow',         'finance',    'Invoice approval with compliance check', ['P','E']],
-  ['finance.budget',                   'finance',    'Budget entry & variance reporting', ['P','E']],
-  ['finance.cash_handling',            'finance',    'Cash handling & donation-box tracking', ['P','E']],
-  ['finance.statements',               'finance',    'Financial statements + board approval', ['P','E']],
-  ['finance.bas_lodgement',            'finance',    'BAS / GST / PAYG quarterly workflow', ['P','E']],
-  ['finance.month_end_checklist',      'finance',    'Month-end & year-end checklists', ['P','E']],
-  ['finance.insurance_register',       'finance',    'Insurance tracking integration', ['P','E']],
+  ['finance.expense_workflow',         'finance',    'Expense Claim Approvals',                      ['P','E'],     'Staff submit expenses, two-person approval, receipt attachments, full audit trail.', ['Expenses']],
+  ['finance.invoice_workflow',         'finance',    'Supplier Invoice Approvals',                   ['P','E'],     'Capture supplier invoices, run compliance checks, and route through multi-step approval.', []],
+  ['finance.budget',                   'finance',    'Budgets & Variance Tracking',                  ['P','E'],     'Enter budgets, roll them up by period, and report variance against actual spend.', []],
+  ['finance.cash_handling',            'finance',    'Cash Handling & Sweep Funds',                  ['P','E'],     'Count donation boxes, sweep cash to the bank, reconcile the deposit — with proper dual-control.', ['Sweep Funds', 'Cash Handling', 'Refunds']],
+  ['finance.statements',               'finance',    'Financial Controls & Statements',              ['P','E'],     'Financial controls register, generated statements, and board-approval workflow for finance documents.', ['Financial Controls', 'Fiscal Reports']],
+  ['finance.bas_lodgement',            'finance',    'BAS, GST & PAYG Lodgement',                    ['P','E'],     'Prepare your quarterly Business Activity Statement (GST + PAYG) and lodge it with the ATO.', ['BAS Lodgement Report']],
+  ['finance.month_end_checklist',      'finance',    'Month-End Closing Checklists',                 ['P','E'],     'Auto-generated month-end and year-end closing checklists tied to your fiscal calendar.', []],
+  ['finance.insurance_register',       'finance',    'Insurance Register',                           ['P','E'],     'Track policy renewals, premiums, and certificates of currency in one place.', ['Legal Documents → Insurance']],
   // Partner / People / AI — Professional + Enterprise
-  ['partner.kyc_aml',                  'partner',    'KYC / AML / GDPR partner & donor vetting', ['P','E']],
-  ['meeting.esignature',               'governance', 'Meeting minutes with e-signature', ['P','E']],
-  ['auditor.read_only_access',         'governance', 'External auditor scoped read-only role', ['P','E']],
-  ['ai.compliance_assistant',          'ai',         'OpenAI-backed AI compliance chatbot', ['P','E']],
-  ['people.hr',                        'hr',         'Induction, offboarding, access revocation', ['P','E']],
-  ['it.register',                      'operations', 'IT subscriptions & web admin register', ['P','E']],
+  ['partner.kyc_aml',                  'partner',    'Partner & Donor Vetting',                      ['P','E'],     'Identity and anti-money-laundering checks on partners and donors, with conflict-of-interest declarations captured.', ['Project Delivery → Partner Vetting']],
+  ['meeting.esignature',               'governance', 'Electronic Signing for Minutes',               ['P','E'],     'Board and sub-committee members can sign meeting minutes electronically.', []],
+  ['auditor.read_only_access',         'governance', 'External Auditor Access',                      ['P','E'],     'Give an external auditor a time-limited, view-only seat that spans every module.', []],
+  ['ai.compliance_assistant',          'ai',         'AI Compliance Assistant',                      ['P','E'],     'A chat assistant that answers compliance questions using your organisation\'s own data.', ['AI Chatbot widget']],
+  ['people.hr',                        'hr',         'People & HR',                                  ['P','E'],     'Employees, training register, inductions, disciplinary records, volunteers, and offboarding in one module.', ['People & HR', 'Volunteers', 'Access Control & Offboarding']],
+  ['it.register',                      'operations', 'Systems Register',                             ['P','E'],     'Track every IT subscription, admin account, two-step status, and access log.', ['Systems Register']],
   // Enterprise-only
-  ['group.multi_entity',               'enterprise', 'Parent / subsidiary multi-entity management', ['E']],
-  ['workflow.custom_builder',          'enterprise', 'No-code custom workflow builder', ['E']],
-  ['governance.bcp_vault',             'enterprise', 'Business Continuity Plan vault', ['E']],
-  ['security.credential_vault',        'enterprise', 'Secure Credential Vault', ['E']],
-  ['governance.regulatory_radar',      'enterprise', 'AU + intl regulator change monitoring', ['E']],
-  ['sso.saml_oidc',                    'security',   'SAML / OIDC single sign-on', ['E']],
-  ['sso.scim',                         'security',   'SCIM user provisioning', ['E']],
-  ['api.rest',                         'integration','Public REST API', ['E']],
-  ['api.webhooks',                     'integration','Outbound webhooks', ['E']],
-  ['branding.white_label',             'branding',   'Organisation branding on reports & portal', ['E']],
-  ['data.residency_choice',            'compliance', 'AU primary / EU on request', ['E']],
-  ['compliance.iso_soc2_pack',         'compliance', 'Compliance evidence pack', ['E']],
-  ['support.dedicated_csm',            'support',    'Dedicated Customer Success Manager', ['E']],
-  ['support.sla_99_9',                 'support',    'Contractual 99.9% uptime SLA', ['E']]
+  ['group.multi_entity',               'enterprise', 'Multi-Entity Management',                      ['E'],         'Manage a parent organisation and its subsidiaries together, with consolidated reporting.', []],
+  ['workflow.custom_builder',          'enterprise', 'Custom Approval Workflow Builder',             ['E'],         'A no-code builder for approval flows beyond the ones that ship with the platform.', []],
+  ['governance.bcp_vault',             'enterprise', 'Business Continuity Plan (BCP)',               ['E'],         'A vault for your continuity plan: emergency teams, recovery procedures, and an asset inventory.', ['Business Continuity']],
+  ['security.credential_vault',        'enterprise', 'Shared Credential Vault',                      ['E'],         'Secure storage for organisation credentials, with "break-glass" emergency access controls.', []],
+  ['governance.regulatory_radar',      'enterprise', 'Regulatory Change Monitoring',                 ['E'],         'Automatic alerts when Australian or international regulators publish changes that affect you.', []],
+  ['sso.saml_oidc',                    'security',   'Single Sign-On (SAML / OIDC)',                 ['E'],         'Log in via your identity provider — Okta, Microsoft Entra ID, Google Workspace, or any SAML/OIDC vendor.', []],
+  ['sso.scim',                         'security',   'Automatic User Provisioning (SCIM)',           ['E'],         'When you add or remove a user in your identity provider, their Stewardex access is created or revoked automatically.', []],
+  ['api.rest',                         'integration','Developer API',                                ['E'],         'A secure REST API so your other tools can read and write Stewardex data.', []],
+  ['api.webhooks',                     'integration','Webhook Notifications',                        ['E'],         'Subscribe to platform events — we POST them to your endpoint as they happen.', []],
+  ['branding.white_label',             'branding',   'White-Label Branding',                         ['E'],         'Your logo and colours on the portal, exports, and outbound emails to staff and donors.', []],
+  ['data.residency_choice',            'compliance', 'Choose Your Data Region',                      ['E'],         'Data lives in Australia by default; opt in to Europe (EU) hosting for international compliance.', []],
+  ['compliance.iso_soc2_pack',         'compliance', 'ISO 27001 & SOC 2 Evidence Pack',              ['E'],         'A pre-built evidence pack covering ISO 27001 and SOC 2 audit responses — saves weeks of prep.', []],
+  ['support.dedicated_csm',            'support',    'Dedicated Customer Success Manager',           ['E'],         'A named Customer Success Manager (CSM) with regular check-ins and a direct line for support.', []],
+  ['support.sla_99_9',                 'support',    '99.9% Uptime Guarantee',                       ['E'],         'A contractual uptime promise of 99.9% — if we miss it, you get service credits back automatically.', []]
 ];
 
 const flagsForTier = (tier) => {
@@ -75,7 +86,7 @@ export const DEFAULT_PLANS = [
     visibility: 'public',
     status: 'active',
     pricing: {
-      monthlyAUD: 299, annualAUD: 2990,
+      monthlyAUD: 299, annualAUD: 3229, annualDiscountPct: 10,
       setupFeeMonthlyAUD: 500, setupFeeAnnualAUD: 0,
       overagePerWorkflowAUD: 2.00, currency: 'AUD',
       stripeProductId: '', stripeMonthlyPriceId: '',
@@ -90,8 +101,8 @@ export const DEFAULT_PLANS = [
     support: { channel: 'email', responseSLAHours: 48, uptimeSLAPct: null },
     trial_days: 14,
     metadata: {
-      description: 'Small charities ($50K–$500K)',
-      targetCustomer: 'Small charities ($50K–$500K)',
+      description: 'Small charities ($50K–$1M)',
+      targetCustomer: 'Small charities ($50K–$1M)',
       sortOrder: 10
     }
   },
@@ -101,7 +112,7 @@ export const DEFAULT_PLANS = [
     visibility: 'public',
     status: 'active',
     pricing: {
-      monthlyAUD: 1299, annualAUD: 12990,
+      monthlyAUD: 1299, annualAUD: 14029, annualDiscountPct: 10,
       setupFeeMonthlyAUD: 2500, setupFeeAnnualAUD: 0,
       overagePerWorkflowAUD: 0.50, currency: 'AUD',
       stripeProductId: '', stripeMonthlyPriceId: '',
@@ -116,8 +127,8 @@ export const DEFAULT_PLANS = [
     support: { channel: 'priority', responseSLAHours: 24, uptimeSLAPct: null },
     trial_days: 14,
     metadata: {
-      description: 'Medium charities ($500K–$3M)',
-      targetCustomer: 'Medium charities ($500K–$3M)',
+      description: 'Medium charities ($1M–$5M)',
+      targetCustomer: 'Medium charities ($1M–$5M)',
       sortOrder: 20
     }
   },
@@ -127,7 +138,7 @@ export const DEFAULT_PLANS = [
     visibility: 'public',
     status: 'active',
     pricing: {
-      monthlyAUD: 4999, annualAUD: 49990,
+      monthlyAUD: 4999, annualAUD: 53989, annualDiscountPct: 10,
       setupFeeMonthlyAUD: 10000, setupFeeAnnualAUD: 10000,
       overagePerWorkflowAUD: null, currency: 'AUD',
       stripeProductId: '', stripeMonthlyPriceId: '',
@@ -142,9 +153,41 @@ export const DEFAULT_PLANS = [
     support: { channel: 'dedicated-csm', responseSLAHours: 4, uptimeSLAPct: 99.9 },
     trial_days: 0,
     metadata: {
-      description: 'Large charities ($3M+) / groups',
-      targetCustomer: 'Large charities ($3M+) / groups',
+      description: 'Large charities ($5M–$10M) / groups',
+      targetCustomer: 'Large charities ($5M–$10M) / groups',
       sortOrder: 30
+    }
+  },
+  // ── Bespoke / Contact-Sales tier ───────────────────────────────────────
+  // No public pricing. Pricing page renders this as the fourth horizontal
+  // card with a "Contact support" CTA. Internally still gets every flag
+  // (matches Enterprise) so a sales-closed deal flows through the same
+  // entitlement engine as the priced tiers.
+  {
+    code: 'bespoke',
+    name: 'Bespoke',
+    visibility: 'public',
+    status: 'active',
+    pricing: {
+      monthlyAUD: 0, annualAUD: 0, annualDiscountPct: 10,
+      setupFeeMonthlyAUD: 0, setupFeeAnnualAUD: 0,
+      overagePerWorkflowAUD: null, currency: 'AUD',
+      stripeProductId: '', stripeMonthlyPriceId: '',
+      stripeAnnualPriceId: '', stripeOverageMeterId: ''
+    },
+    limits: {
+      staffSeats: -1, boardSeats: -1, workflowsPerMonth: -1,
+      storageGB: -1, apiCallsPerDay: -1, customWorkflows: -1,
+      childEntities: -1, softCapPct: 80, hardCapPct: 100
+    },
+    feature_flags: flagsForTier('E'),
+    support: { channel: 'dedicated-csm', responseSLAHours: 1, uptimeSLAPct: 99.95 },
+    trial_days: 0,
+    is_contact_sales: true,
+    metadata: {
+      description: 'Networks, federations and complex group structures — built to fit.',
+      targetCustomer: 'Federations, peak bodies, groups ($10M+)',
+      sortOrder: 40
     }
   }
 ];

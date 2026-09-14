@@ -20,13 +20,29 @@ import { logInfo, logError } from '../utils/logger.js';
 import { decryptBoardMemberFields, decryptBoardMemberList } from '../utils/decryptBoardMember.js';
 import { createVolunteerActionToken } from '../services/volunteerActionTokenService.js';
 import { notifyVolunteerOfActivePolicies } from '../services/volunteerPolicyNotifier.js';
+import { getFrontendBaseUrl } from '../utils/frontendUrl.js';
+import { runBulkVolunteerImport } from '../services/bulkVolunteerImportService.js';
+import { runBulkImport } from '../services/bulkImportService.js';
+import { employeeImporter } from '../services/importers/employeeImporter.js';
 
 const NORMALIZED_SUITABILITY_TYPES = new Set([
   'criminal_history_declaration',
   'bankruptcy_check',
   'disqualification_status',
   'conflict_of_interest',
-  'fit_and_proper_check'
+  'fit_and_proper_check',
+  // Added from spreadsheet "Sheet6" — Suitability of Responsible Persons (#6).
+  'age_eligibility',
+  'working_with_children_check',
+  'mission_values_understanding',
+  'ethical_conduct',
+  'best_interests_commitment',
+  'skills_experience',
+  'board_experience',
+  'time_commitment',
+  'meeting_attendance',
+  'good_reputation',
+  'disciplinary_legal_check'
 ]);
 
 const computeSuitabilityStatus = (suitability = {}) => {
@@ -57,6 +73,38 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
   if (!keyHex) {
     throw new AppError('Encryption key not available', 500, 'ENCRYPTION_ERROR');
   }
+
+  // ── Aggregate volunteer submission counts per board member ──────────
+  // Public volunteer-link submissions stamp `volunteer_submission.
+  // board_member_id` on the resulting complaint / risk / COI row. Sum
+  // counts across the three collections so the volunteers register can
+  // show a per-row total without each card making three extra round-trips.
+  const volunteerIds = boardMembers
+    .filter((bm) => bm?.is_volunteer === true)
+    .map((bm) => bm._id);
+  const submissionCountByVolunteer = new Map();
+  if (volunteerIds.length > 0) {
+    const collections = ['complaints', 'risks', 'coi_requests'];
+    await Promise.all(collections.map(async (collName) => {
+      try {
+        const col = tenantDb.collection(collName);
+        const rows = await col.aggregate([
+          { $match: {
+              'volunteer_submission.source': 'volunteer_link',
+              'volunteer_submission.board_member_id': { $in: volunteerIds }
+          } },
+          { $group: { _id: '$volunteer_submission.board_member_id', count: { $sum: 1 } } }
+        ]).toArray();
+        for (const r of rows) {
+          const k = String(r._id);
+          submissionCountByVolunteer.set(k, (submissionCountByVolunteer.get(k) || 0) + Number(r.count || 0));
+        }
+      } catch (err) {
+        logError(`Failed to aggregate volunteer submissions from ${collName}`, err);
+      }
+    }));
+  }
+
   const list = await Promise.all(
     boardMembers.map(async (bm) => {
       const obj = bm.toObject ? bm.toObject() : { ...bm };
@@ -81,6 +129,8 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
           logError('Failed to resolve contract URL for list', err, { boardMemberId: bm._id });
         }
       }
+      // Inject the rolled-up submissions count (0 if none / not a volunteer).
+      obj.volunteer_submissions_count = submissionCountByVolunteer.get(String(bm._id)) || 0;
       return obj;
     })
   );
@@ -89,6 +139,80 @@ export const getBoardMembers = asyncHandler(async (req, res) => {
     success: true,
     data: list
   });
+});
+
+/**
+ * GET /platform/board-members/expired-ids?within=90
+ *
+ * Returns people whose driver's licence OR passport has already expired
+ * OR will expire within the next `within` days (default 90). Used by:
+ *   - The Expired IDs register page (the headline list)
+ *   - The dashboard's expiring-soon strip
+ *   - The calendar feed
+ *
+ * Response shape (lean, projection-trimmed):
+ *   {
+ *     people: [{
+ *       _id, given_names, family_name, position, department,
+ *       is_board_member, is_volunteer, is_head_of_department,
+ *       identification: { licence: { expiry_date }, passport: { expiry_date } }
+ *     }],
+ *     summary: { expired, expiring_30d, expiring_90d, total_tracked }
+ *   }
+ */
+export const getExpiredIdsList = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const within = Math.max(1, Math.min(365, Number(req.query.within) || 90));
+  const tenantDb = await getTenantConnection(orgId);
+  const boardMemberRepo = new BoardMemberRepository(tenantDb);
+
+  // Resolve the org's ObjectId — board_members.org_id is an ObjectId,
+  // not the slug. Passing req.orgId (a slug like "organization_5")
+  // would silently return zero rows.
+  const orgRepo = new (await import('../repositories/organizationRepository.js')).OrganizationRepository(tenantDb);
+  const org = await orgRepo.findOne();
+  if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
+
+  const now = new Date();
+  const horizon = new Date();
+  horizon.setDate(now.getDate() + within);
+
+  // Match rows where EITHER licence.expiry_date or passport.expiry_date
+  // is set AND falls anywhere from the start of time up to the horizon.
+  // Includes already-expired rows (expiry < now) which is what the
+  // Expired IDs page primarily surfaces.
+  const records = await boardMemberRepo.BoardMember.find({
+    org_id: org._id,
+    is_active: true,
+    $or: [
+      { 'identification.licence.expiry_date': { $lte: horizon } },
+      { 'identification.passport.expiry_date': { $lte: horizon } }
+    ]
+  })
+    .select(
+      'given_names family_name position department position_id ' +
+      'is_board_member is_volunteer is_head_of_department ' +
+      'identification.licence.expiry_date identification.passport.expiry_date'
+    )
+    .lean();
+
+  // Categorise so the frontend doesn't have to recompute.
+  const summary = { expired: 0, expiring_30d: 0, expiring_90d: 0, total_tracked: records.length };
+  const day = 24 * 60 * 60 * 1000;
+  const in30 = new Date(now.getTime() + 30 * day);
+  for (const r of records) {
+    const dates = [
+      r?.identification?.licence?.expiry_date,
+      r?.identification?.passport?.expiry_date
+    ].filter(Boolean).map((d) => new Date(d).getTime());
+    const earliest = dates.length ? Math.min(...dates) : null;
+    if (earliest == null) continue;
+    if (earliest < now.getTime()) summary.expired++;
+    else if (earliest <= in30.getTime()) summary.expiring_30d++;
+    else summary.expiring_90d++;
+  }
+
+  res.json({ success: true, data: { people: records, summary } });
 });
 
 export const getBoardMemberById = asyncHandler(async (req, res) => {
@@ -137,6 +261,34 @@ export const getBoardMemberById = asyncHandler(async (req, res) => {
   });
 });
 
+// SECURITY (API-020): board-member create/update accept ONLY these fields from
+// the request body. Everything else is server-controlled and set through its
+// own vetted flow, and must NEVER be mass-assigned from the client:
+//   • org_id          — tenant binding (set from the resolved org)
+//   • user_id         — account linkage (set on invite-accept / manual create)
+//   • has_system_access, is_active, status, offboarded_at — auth / lifecycle
+//   • invitation_token, invitation_status, invitation_*    — the invite flow
+// Taking any of those from req.body is a privilege-escalation / auth-bypass /
+// invite-bypass vector, so they are stripped here regardless of role.
+export const EDITABLE_BOARD_MEMBER_FIELDS = [
+  'title', 'given_names', 'family_name', 'date_of_birth',
+  'position', 'department', 'custom_position_title', 'position_id',
+  'is_head_of_department', 'is_board_member',
+  'appointment_date', 'term_end_date',
+  'email', 'phone', 'residential_address', 'residential_address_changed_date',
+  'identification', 'profile_picture_key',
+  'wwcc', 'police_check', 'contract',
+  'induction_form_filled', 'induction_form_comments', 'suitability_check',
+];
+
+export const pickEditableBoardMemberFields = (body = {}) => {
+  const out = {};
+  for (const key of EDITABLE_BOARD_MEMBER_FIELDS) {
+    if (body && Object.prototype.hasOwnProperty.call(body, key)) out[key] = body[key];
+  }
+  return out;
+};
+
 export const createBoardMember = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -177,8 +329,10 @@ export const createBoardMember = asyncHandler(async (req, res) => {
   }
 
   const boardMember = await boardMemberRepo.create({
+    // Only client-editable fields; org_id / invitation state / system access are
+    // set server-side below — never mass-assigned from the body (API-020).
+    ...pickEditableBoardMemberFields(boardMemberData),
     org_id: org._id,
-    ...boardMemberData,
     is_volunteer: is_volunteer || false,
     ...invitationData
   });
@@ -190,7 +344,7 @@ export const createBoardMember = asyncHandler(async (req, res) => {
       const position = boardMemberData.custom_position_title || boardMemberData.position;
       let volunteerActionLinks = null;
       if (is_volunteer) {
-        const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+        const frontendUrl = getFrontendBaseUrl();
         const [complaintDoc, riskDoc, coiDoc] = await Promise.all([
           createVolunteerActionToken({
             orgId,
@@ -346,6 +500,55 @@ export const createBoardMember = asyncHandler(async (req, res) => {
   });
 });
 
+/**
+ * Bulk volunteer import — POST /platform/board-members/volunteers/bulk-import
+ *
+ * Body: `{ rows: [{ given_names, family_name, email, phone, position,
+ *                   licence_number, licence_issue_date, licence_expiry_date,
+ *                   passport_number, passport_issue_date, passport_expiry_date }] }`
+ *
+ * Per-row creation triggers the same invitation email + volunteer
+ * action tokens + policy backfill that the single-volunteer panel does.
+ * Returns a per-row summary so the import modal can show which rows
+ * succeeded and which failed.
+ */
+export const bulkImportVolunteers = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+  const rows = Array.isArray(req.body?.rows) ? req.body.rows : [];
+
+  const result = await runBulkVolunteerImport({
+    tenantDb,
+    orgId,
+    inviter: {
+      firstName: req.user?.firstName || null,
+      lastName: req.user?.lastName || null
+    },
+    rows
+  });
+
+  res.status(207).json({ success: true, data: result });
+});
+
+/**
+ * Bulk-import staff/employees from a spreadsheet. Each row becomes a
+ * board_member record with no discriminator flags (regular staff), with
+ * email-based deduplication. Returns 207 (multi-status) with
+ * created/failed/duplicates/summary.
+ */
+export const bulkImportEmployees = asyncHandler(async (req, res) => {
+  const orgId = req.orgId;
+  const tenantDb = await getTenantConnection(orgId);
+  const result = await runBulkImport({
+    tenantDb,
+    orgId,
+    actor: { userId: req.user?.userId },
+    rows: Array.isArray(req.body?.rows) ? req.body.rows : [],
+    importer: employeeImporter
+  });
+  res.status(207).json({ success: true, data: result });
+});
+
 export const updateBoardMember = asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -364,7 +567,42 @@ export const updateBoardMember = asyncHandler(async (req, res) => {
   const tenantDb = await getTenantConnection(orgId);
   const boardMemberRepo = new BoardMemberRepository(tenantDb);
 
-  const boardMember = await boardMemberRepo.update(boardMemberId, req.body);
+  // Preserve a superseded ID-document expiry. When a licence/passport
+  // expiry date is changed (e.g. renewed to a later date), retain the
+  // prior value in `identification.<doc>.expiry_history` so the calendar
+  // can keep showing the old expiry struck-off instead of dropping it.
+  // Only runs when the caller sends an `identification` object — and
+  // because the repo `$set`s `identification` wholesale, we also carry
+  // forward any existing history so it isn't wiped on unrelated edits.
+  if (req.body && req.body.identification && typeof req.body.identification === 'object') {
+    const existingBm = await boardMemberRepo.findById(boardMemberId);
+    if (existingBm) {
+      for (const docType of ['licence', 'passport']) {
+        const incoming = req.body.identification[docType];
+        if (!incoming || typeof incoming !== 'object') continue;
+        const prevHistory = Array.isArray(existingBm?.identification?.[docType]?.expiry_history)
+          ? existingBm.identification[docType].expiry_history.map((h) => ({
+              expiry_date: h.expiry_date,
+              superseded_at: h.superseded_at
+            }))
+          : [];
+        if (Object.prototype.hasOwnProperty.call(incoming, 'expiry_date')) {
+          const oldDate = existingBm?.identification?.[docType]?.expiry_date;
+          const newDate = incoming.expiry_date ? new Date(incoming.expiry_date) : null;
+          const changed = oldDate && (!newDate || new Date(oldDate).getTime() !== newDate.getTime());
+          if (changed) {
+            prevHistory.push({ expiry_date: oldDate, superseded_at: new Date() });
+          }
+        }
+        incoming.expiry_history = prevHistory;
+      }
+    }
+  }
+
+  // SECURITY (API-020): only whitelisted fields — never the raw body — so
+  // org_id / user_id / has_system_access / status / invitation_* can't be
+  // mass-assigned to escalate privilege or bypass the invite/offboard flows.
+  const boardMember = await boardMemberRepo.update(boardMemberId, pickEditableBoardMemberFields(req.body));
   if (!boardMember) {
     throw new AppError('Board member not found', 404, 'NOT_FOUND');
   }
@@ -723,6 +961,14 @@ export const updatePosition = asyncHandler(async (req, res) => {
     : position.granted_permissions || [];
 
   const updated = await positionRepo.update(positionId, { granted_permissions });
+
+  // Position permissions changed — drop the runtime-permission cache so affected
+  // users pick up the change on their next request instead of waiting out the
+  // 20s TTL. Best-effort; a miss just means the change lands within the TTL.
+  try {
+    const { clearPermsCacheForUser } = await import('../middleware/auth.js');
+    clearPermsCacheForUser();
+  } catch { /* cache-clear is best-effort */ }
 
   res.json({
     success: true,
@@ -1133,14 +1379,19 @@ export const viewDirectorsHandbook = asyncHandler(async (req, res) => {
   const org = await orgRepo.findOne();
   if (!org) throw new AppError('Organization not found', 404, 'ORG_NOT_FOUND');
 
+  // Admins/owners can view (they manage & upload it); board members can view.
+  const roles = Array.isArray(req.user?.roles) ? req.user.roles : [];
+  const perms = Array.isArray(req.user?.permissions) ? req.user.permissions : [];
+  const isAdmin = roles.includes('admin') || perms.includes('*:*');
+
   const boardMemberRecords = await boardMemberRepo.findAllActiveByUserId(req.user?.userId, org._id);
   const boardRoleRegex = /(board|director|trustee|committee)/i;
-  const canViewHandbook = Array.isArray(boardMemberRecords) && boardMemberRecords.some((bm) => {
+  const isBoardMember = Array.isArray(boardMemberRecords) && boardMemberRecords.some((bm) => {
     if (bm?.is_board_member) return true;
     const title = `${bm?.custom_position_title || ''} ${bm?.position || ''}`.trim();
     return boardRoleRegex.test(title);
   });
-  if (!canViewHandbook) {
+  if (!isAdmin && !isBoardMember) {
     throw new AppError('Only board members can view directors handbook', 403, 'FORBIDDEN');
   }
 
