@@ -64,7 +64,10 @@ router.use(requireCalciteStaff);
 // ── Plans ─────────────────────────────────────────────────────────────
 
 /** GET /admin/plans — DB plans + templates, sorted by sortOrder. */
-router.get('/plans', asyncHandler(async (req, res) => {
+router.get('/plans', asyncHandler(listPlansAction));
+
+/** GET /plans handler. Exported so /integration can mount the same logic. */
+export async function listPlansAction(req, res) {
   const { SubscriptionPlan } = getRouterModels();
   const dbPlans = await SubscriptionPlan
     .find({})
@@ -84,14 +87,18 @@ router.get('/plans', asyncHandler(async (req, res) => {
       public_active_cap: MAX_PUBLIC_ACTIVE_PLANS
     }
   });
-}));
+}
 
 /** GET /admin/plans/:code — DB plan + revisions, or template if not yet saved. */
 router.get(
   '/plans/:code',
   [param('code').isString().trim().notEmpty()],
   validate,
-  asyncHandler(async (req, res) => {
+  asyncHandler(getPlanAction)
+);
+
+/** GET /plans/:code handler. Exported so /integration can mount the same logic. */
+export async function getPlanAction(req, res) {
     const { SubscriptionPlan, PlanRevision } = getRouterModels();
     const code = String(req.params.code).toLowerCase();
     const plan = await SubscriptionPlan.findOne({ plan_code: code }).lean();
@@ -118,8 +125,7 @@ router.get(
       success: false,
       error: { code: 'PLAN_NOT_FOUND', message: 'No such plan.' }
     });
-  })
-);
+  }
 
 /**
  * PATCH /admin/plans/:code — apply a structured patch.
@@ -140,7 +146,11 @@ router.patch(
     body('reason').isString().trim().isLength({ min: 1, max: 500 }).withMessage('Reason is required.')
   ],
   validate,
-  asyncHandler(async (req, res) => {
+  asyncHandler(patchPlanAction)
+);
+
+/** PATCH /plans/:code handler (public-plan cap + two-person approval gate). Exported so /integration can mount the same logic. */
+export async function patchPlanAction(req, res) {
     const code = String(req.params.code).toLowerCase();
     const patch = req.body || {};
     const reason = String(patch.reason || '').trim();
@@ -243,8 +253,7 @@ router.patch(
     const result = await applyPlanPatch({ req, code, patch, reason });
     if (result.error) return res.status(result.statusCode).json({ success: false, error: result.error });
     return res.json({ success: true, data: result.data });
-  })
-);
+  }
 
 /**
  * Compute what the plan snapshot WOULD look like after the patch is
@@ -401,7 +410,11 @@ router.post(
     body('name').isString().trim().isLength({ min: 1, max: 80 })
   ],
   validate,
-  asyncHandler(async (req, res) => {
+  asyncHandler(createPlanAction)
+);
+
+/** POST /plans handler (auto-syncs to Stripe). Exported so /integration can mount the same logic. */
+export async function createPlanAction(req, res) {
     const { SubscriptionPlan, PlanRevision } = getRouterModels();
     const code = String(req.body.code).toLowerCase().trim();
     const name = String(req.body.name).trim();
@@ -498,8 +511,7 @@ router.post(
       success: true,
       data: { ...snapshot, is_template: false, revisions: [], stripe_sync: summarizeSync(stripeSync) }
     });
-  })
-);
+  }
 
 /** POST /admin/plans/:code/archive — flip status to archived. */
 router.post(
@@ -512,7 +524,11 @@ router.post(
     body('reason').isString().trim().isLength({ min: 1, max: 500 }).withMessage('Reason is required.')
   ],
   validate,
-  asyncHandler(async (req, res) => {
+  asyncHandler(archivePlanAction)
+);
+
+/** POST /plans/:code/archive handler (two-person approval gate). Exported so /integration can mount the same logic. */
+export async function archivePlanAction(req, res) {
     const { SubscriptionPlan: SP } = getRouterModels();
     const code = String(req.params.code).toLowerCase();
     const reason = String(req.body?.reason || 'Archived.').trim();
@@ -577,8 +593,7 @@ router.post(
     const result = await applyPlanArchive({ req, code, reason });
     if (result.error) return res.status(result.statusCode).json({ success: false, error: result.error });
     return res.json({ success: true, data: result.data });
-  })
-);
+  }
 
 /**
  * Apply the actual archive — extracted so the approve handler can call
@@ -668,7 +683,10 @@ router.post(
  * defaults filling in anything not yet persisted. Same template-merge
  * pattern as plans, so a fresh DB just shows the canonical 40 flags.
  */
-router.get('/feature-flags', asyncHandler(async (req, res) => {
+router.get('/feature-flags', asyncHandler(listFeatureFlagsAction));
+
+/** GET /feature-flags handler. Exported so /integration can mount the same logic. */
+export async function listFeatureFlagsAction(req, res) {
   const { FeatureFlag } = getRouterModels();
   const dbFlags = await FeatureFlag.find({}).sort({ category: 1, code: 1 }).lean();
   const byCode = new Map(dbFlags.map((f) => [f.code, f]));
@@ -685,7 +703,7 @@ router.get('/feature-flags', asyncHandler(async (req, res) => {
     }
   }
   res.json({ success: true, data: merged });
-}));
+}
 
 /**
  * GET /admin/feature-matrix
@@ -842,7 +860,7 @@ function serializePlan(p) {
   };
 }
 
-function serializeRevision(r) {
+export function serializeRevision(r) {
   return {
     _id: r._id,
     revision_number: r.revision_number,
@@ -854,7 +872,7 @@ function serializeRevision(r) {
 }
 
 /** Convert a template (or another plan) into the SubscriptionPlan document shape. */
-function templateToDocument(t) {
+export function templateToDocument(t) {
   return {
     plan_code: t.code,
     plan_name: t.name,
@@ -874,7 +892,7 @@ function templateToDocument(t) {
 }
 
 /** Skeleton for a brand-new custom plan (POST /admin/plans without fork). */
-function blankPlanDocument() {
+export function blankPlanDocument() {
   return {
     plan_code: '',
     plan_name: '',
@@ -898,7 +916,7 @@ function blankPlanDocument() {
  * snapshots. Recursive on nested objects (pricing/limits/etc.); short-
  * circuits on equal scalars and equal JSON-stringified subtrees.
  */
-function computeDiff(prev, next, prefix = '') {
+export function computeDiff(prev, next, prefix = '') {
   if (!prev) return [];
   const out = [];
   const keys = new Set([...Object.keys(prev || {}), ...Object.keys(next || {})]);

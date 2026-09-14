@@ -307,6 +307,7 @@ import { auditLogMutationMiddleware } from './middleware/auditLogger.js';
 // per-route auth+tenant middleware and read inside the hook after finish).
 app.use('/api/v1/platform', auditLogMutationMiddleware);
 
+import integrationRoutes from './routes/integration/index.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -385,6 +386,10 @@ app.use('/api/v1/admin', adminMarketplacePoliciesRoutes);
 app.use('/api/v1/admin/plan-requests', adminPlanRequestRoutes);
 app.use('/api/v1/platform/billing', billingRoutes);
 if (isModuleEnabled('weekly-reports')) app.use('/api/v1/platform/weekly-reports', weeklyReportRoutes);
+
+// Server-to-server integration API (Calcite Hyper) — API-key auth, see
+// middleware/requireApiKey.js.
+app.use('/api/v1/integration', integrationRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

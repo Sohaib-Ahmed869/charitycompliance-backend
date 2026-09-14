@@ -48,7 +48,10 @@ router.use(requireCalciteStaff);
 // ════════════════════════════════════════════════════════════════════
 
 /** GET /admin/tenants — list every registered tenant + their plan + override summary. */
-router.get('/tenants', asyncHandler(async (req, res) => {
+router.get('/tenants', asyncHandler(listTenantsAction));
+
+/** GET /tenants handler. Exported so /integration can mount the same logic. */
+export async function listTenantsAction(req, res) {
   const { Tenant, OrganizationSubscription, SubscriptionPlan, SubscriptionOverride } = getRouterModels();
   const tenants = await Tenant.find({}).sort({ createdAt: -1 }).lean();
 
@@ -103,14 +106,18 @@ router.get('/tenants', asyncHandler(async (req, res) => {
     };
   });
   res.json({ success: true, data });
-}));
+}
 
 /** GET /admin/tenants/:orgId — tenant detail (subscription + override + recent events). */
 router.get(
   '/tenants/:orgId',
   [param('orgId').isString().trim().notEmpty()],
   validate,
-  asyncHandler(async (req, res) => {
+  asyncHandler(getTenantAction)
+);
+
+/** GET /tenants/:orgId handler. Exported so /integration can mount the same logic. */
+export async function getTenantAction(req, res) {
     const { Tenant, OrganizationSubscription, SubscriptionPlan, SubscriptionOverride, BillingEvent } = getRouterModels();
     const orgId = String(req.params.orgId).toLowerCase();
 
@@ -193,8 +200,7 @@ router.get(
         effective: effectiveEntitlements
       }
     });
-  })
-);
+  }
 
 // ════════════════════════════════════════════════════════════════════
 // SUPPORT IMPERSONATION ("Act as support")
@@ -362,7 +368,11 @@ router.post(
     body('mode').optional().isIn(['at_renewal', 'immediately_prorated', 'no_migrate'])
   ],
   validate,
-  asyncHandler(async (req, res) => {
+  asyncHandler(assignPlanAction)
+);
+
+/** POST /tenants/:orgId/assign-plan handler. Exported so /integration can mount the same logic. */
+export async function assignPlanAction(req, res) {
     const { Tenant, OrganizationSubscription, SubscriptionPlan, PlanRevision } = getRouterModels();
     const orgId = String(req.params.orgId).toLowerCase();
     const planCode = String(req.body.plan_code).toLowerCase();
@@ -485,8 +495,7 @@ router.post(
     }
 
     res.json({ success: true });
-  })
-);
+  }
 
 // ════════════════════════════════════════════════════════════════════
 // PLAN REVISION MIGRATION (Phase 9 — done early so SuperAdmin has
@@ -685,7 +694,11 @@ router.put(
   requireSuperAdmin,
   [param('orgId').isString().trim().notEmpty()],
   validate,
-  asyncHandler(async (req, res) => {
+  asyncHandler(saveOverrideAction)
+);
+
+/** PUT /tenants/:orgId/override handler. Exported so /integration can mount the same logic. */
+export async function saveOverrideAction(req, res) {
     const { Tenant, SubscriptionOverride } = getRouterModels();
     const orgId = String(req.params.orgId).toLowerCase();
 
@@ -898,8 +911,7 @@ router.put(
         auto_apply_error: autoApplyError
       }
     });
-  })
-);
+  }
 
 /**
  * POST /admin/tenants/:orgId/override/apply-to-stripe
@@ -982,7 +994,11 @@ router.delete(
   requireSuperAdmin,
   [param('orgId').isString().trim().notEmpty()],
   validate,
-  asyncHandler(async (req, res) => {
+  asyncHandler(clearOverrideAction)
+);
+
+/** DELETE /tenants/:orgId/override handler. Exported so /integration can mount the same logic. */
+export async function clearOverrideAction(req, res) {
     const { SubscriptionOverride } = getRouterModels();
     const orgId = String(req.params.orgId).toLowerCase();
     const result = await SubscriptionOverride.findOneAndDelete({ tenant_id: orgId });
@@ -998,8 +1014,7 @@ router.delete(
       });
     }
     res.json({ success: true });
-  })
-);
+  }
 
 // ════════════════════════════════════════════════════════════════════
 // COUPONS
@@ -2203,7 +2218,7 @@ function serializeCoupon(c) {
   };
 }
 
-function serializeEvent(e) {
+export function serializeEvent(e) {
   return {
     _id: e._id,
     action: e.action,
