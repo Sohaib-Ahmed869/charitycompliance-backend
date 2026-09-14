@@ -2203,7 +2203,7 @@ function serializeCoupon(c) {
   };
 }
 
-function serializeEvent(e) {
+export function serializeEvent(e) {
   return {
     _id: e._id,
     action: e.action,

@@ -842,7 +842,7 @@ function serializePlan(p) {
   };
 }
 
-function serializeRevision(r) {
+export function serializeRevision(r) {
   return {
     _id: r._id,
     revision_number: r.revision_number,
@@ -854,7 +854,7 @@ function serializeRevision(r) {
 }
 
 /** Convert a template (or another plan) into the SubscriptionPlan document shape. */
-function templateToDocument(t) {
+export function templateToDocument(t) {
   return {
     plan_code: t.code,
     plan_name: t.name,
@@ -874,7 +874,7 @@ function templateToDocument(t) {
 }
 
 /** Skeleton for a brand-new custom plan (POST /admin/plans without fork). */
-function blankPlanDocument() {
+export function blankPlanDocument() {
   return {
     plan_code: '',
     plan_name: '',
@@ -898,7 +898,7 @@ function blankPlanDocument() {
  * snapshots. Recursive on nested objects (pricing/limits/etc.); short-
  * circuits on equal scalars and equal JSON-stringified subtrees.
  */
-function computeDiff(prev, next, prefix = '') {
+export function computeDiff(prev, next, prefix = '') {
   if (!prev) return [];
   const out = [];
   const keys = new Set([...Object.keys(prev || {}), ...Object.keys(next || {})]);

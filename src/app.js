@@ -289,6 +289,7 @@ import adminPlanRoutes from './routes/admin/planRoutes.js';
 import adminReminderConfigRoutes from './routes/admin/reminderConfigRoutes.js';
 import adminAuthRoutes from './routes/admin/authRoutes.js';
 import adminOpsRoutes from './routes/admin/opsRoutes.js';
+import integrationRoutes from './routes/integration/index.js';
 import adminStaffRoutes from './routes/admin/staffRoutes.js';
 import adminTicketsRoutes from './routes/admin/ticketsRoutes.js';
 import adminApprovalsRoutes from './routes/admin/approvalsRoutes.js';
@@ -385,6 +386,10 @@ app.use('/api/v1/admin', adminMarketplacePoliciesRoutes);
 app.use('/api/v1/admin/plan-requests', adminPlanRequestRoutes);
 app.use('/api/v1/platform/billing', billingRoutes);
 if (isModuleEnabled('weekly-reports')) app.use('/api/v1/platform/weekly-reports', weeklyReportRoutes);
+
+// Server-to-server integration API (Calcite Hyper) — API-key auth, see
+// middleware/requireApiKey.js.
+app.use('/api/v1/integration', integrationRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {
