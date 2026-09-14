@@ -27,6 +27,11 @@ const ACTION_CODES = [
   'feature_flag.deprecated',
   'system.kill_switch_engaged',
   'system.kill_switch_released',
+  'tenant.created',
+  'tenant.updated',
+  'tenant.suspended',
+  'tenant.reactivated',
+  'tenant.deleted',
   'super_admin.created',
   'super_admin.password_rotated'
 ];
