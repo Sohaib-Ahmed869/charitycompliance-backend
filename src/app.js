@@ -169,6 +169,7 @@ import chatRoutes from './routes/platform/chatRoutes.js';
 import adminPlanRoutes from './routes/admin/planRoutes.js';
 import adminAuthRoutes from './routes/admin/authRoutes.js';
 import adminOpsRoutes from './routes/admin/opsRoutes.js';
+import integrationRoutes from './routes/integration/index.js';
 app.use('/api/v1/platform/organization', organizationRoutes);
 app.use('/api/v1/platform/roles', roleRoutes);
 app.use('/api/v1/platform/onboarding', onboardingRoutes);
@@ -223,6 +224,10 @@ if (isModuleEnabled('chat')) app.use('/api/v1/platform/chat', chatRoutes);
 app.use('/api/v1/admin/auth', adminAuthRoutes);
 app.use('/api/v1/admin', adminPlanRoutes);
 app.use('/api/v1/admin', adminOpsRoutes);
+
+// Server-to-server integration API (Calcite Hyper) — API-key auth, see
+// middleware/requireApiKey.js.
+app.use('/api/v1/integration', integrationRoutes);
 
 // API info route
 app.get('/api/v1', (req, res) => {

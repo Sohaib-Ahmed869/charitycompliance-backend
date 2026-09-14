@@ -166,10 +166,11 @@ export class SupportTicketService {
       updated_at: new Date()
     };
 
-    if (status === 'solved' && userId) {
+    // userId is null for integration (API-key) callers — still record the resolution.
+    if (status === 'solved') {
       updateData.resolution = {
         notes: resolutionNotes,
-        resolved_by: userId,
+        resolved_by: userId || null,
         resolved_at: new Date()
       };
     }
@@ -182,7 +183,7 @@ export class SupportTicketService {
   /**
    * Add comment to ticket
    */
-  async addComment(ticketId, message, userId, isInternal = false) {
+  async addComment(ticketId, message, userId, isInternal = false, authorName = null) {
     const tenantDb = await this.getTenantDb();
     const ticketRepo = new SupportTicketRepository(tenantDb);
     const userRepo = new UserRepository(tenantDb);
@@ -192,8 +193,9 @@ export class SupportTicketService {
       throw new AppError('Ticket not found', 404, 'TICKET_NOT_FOUND');
     }
 
-    const user = await userRepo.findById(userId);
-    const userName = user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() : 'Unknown';
+    // authorName is supplied by integration callers, which have no tenant user.
+    const user = userId ? await userRepo.findById(userId) : null;
+    const userName = authorName || (user ? `${user.first_name || ''} ${user.last_name || ''}`.trim() : 'Unknown');
 
     const comments = ticket.comments || [];
     comments.push({
